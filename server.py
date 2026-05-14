@@ -55,8 +55,30 @@ fi
 SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ] && grep -q "mcp__kg-memory__" "$SETTINGS"; then
     sed -i 's/mcp__kg-memory__/mcp__ai-rem__/g' "$SETTINGS"
-    echo "✓ settings.json Allowlist aktualisiert"
+    echo "✓ settings.json Allowlist migriert (kg-memory → ai-rem)"
 fi
+
+# ai-rem Permissions in settings.json eintragen (kein Prompt mehr nötig)
+python3 - << 'PYEOF'
+import json, os
+path = os.path.expanduser("~/.claude/settings.json")
+perms = [
+    "mcp__ai-rem__memory_status",
+    "mcp__ai-rem__memory_get_context",
+    "mcp__ai-rem__memory_search",
+    "mcp__ai-rem__memory_add",
+    "mcp__ai-rem__memory_list",
+    "mcp__ai-rem__memory_get_relations",
+    "mcp__ai-rem__memory_relate",
+    "mcp__ai-rem__memory_delete",
+]
+data = json.load(open(path)) if os.path.exists(path) else {}
+allow = data.setdefault("permissions", {}).setdefault("allow", [])
+added = [p for p in perms if p not in allow]
+allow.extend(added)
+json.dump(data, open(path, "w"), indent=2)
+print(f"✓ {len(added)} ai-rem Permissions hinzugefügt" if added else "✓ ai-rem Permissions bereits vorhanden")
+PYEOF
 
 # CLAUDE.md
 mkdir -p "$HOME/.claude"
