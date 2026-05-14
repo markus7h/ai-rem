@@ -90,14 +90,13 @@ MAX_BACKUPS=10                           # Maximale Anzahl aufbewahrter Backups
 # Verzeichnis anlegen
 mkdir -p ~/mydocker/compose-files/ai-rem
 
-# .env anlegen
-cat > ~/mydocker/compose-files/ai-rem/.env <<EOF
-KG_PUBLIC_URL=http://<SERVER_IP>:3456
-EOF
-
 # Dateien übertragen
-rsync -av server.py requirements.txt Dockerfile docker-compose.yml \
+rsync -av server.py requirements.txt Dockerfile docker-compose.yml .env.example \
   your-server:~/mydocker/compose-files/ai-rem/
+
+# .env aus Vorlage anlegen und anpassen
+ssh your-server "cp ~/mydocker/compose-files/ai-rem/.env.example ~/mydocker/compose-files/ai-rem/.env"
+# → KG_PUBLIC_URL in .env auf die echte Server-IP setzen
 
 # Container starten
 ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose up -d --build"
@@ -141,7 +140,8 @@ ai-rem/
 ├── requirements.txt   # fastmcp, kuzu
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env               # Konfiguration (nicht im Repo)
+├── .env.example       # Vorlage für Konfiguration
+├── .env               # Konfiguration (nicht im Repo, aus .env.example ableiten)
 ├── README.md
 └── README.en.md
 ```
