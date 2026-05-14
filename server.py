@@ -3,23 +3,28 @@ Knowledge Graph Memory MCP Server
 Langzeit-Gedächtnis für Claude via Kuzu embedded graph database.
 """
 
+import glob
 import json
 import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
 import kuzu
 from fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
+BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
+MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
+_BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 
 # ─── Setup-Endpunkt Inhalte ──────────────────────────────────────────────────
 
@@ -50,8 +55,30 @@ fi
 SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ] && grep -q "mcp__kg-memory__" "$SETTINGS"; then
     sed -i 's/mcp__kg-memory__/mcp__ai-rem__/g' "$SETTINGS"
-    echo "✓ settings.json Allowlist aktualisiert"
+    echo "✓ settings.json Allowlist migriert (kg-memory → ai-rem)"
 fi
+
+# ai-rem Permissions in settings.json eintragen (kein Prompt mehr nötig)
+python3 - << 'PYEOF'
+import json, os
+path = os.path.expanduser("~/.claude/settings.json")
+perms = [
+    "mcp__ai-rem__memory_status",
+    "mcp__ai-rem__memory_get_context",
+    "mcp__ai-rem__memory_search",
+    "mcp__ai-rem__memory_add",
+    "mcp__ai-rem__memory_list",
+    "mcp__ai-rem__memory_get_relations",
+    "mcp__ai-rem__memory_relate",
+    "mcp__ai-rem__memory_delete",
+]
+data = json.load(open(path)) if os.path.exists(path) else {}
+allow = data.setdefault("permissions", {}).setdefault("allow", [])
+added = [p for p in perms if p not in allow]
+allow.extend(added)
+json.dump(data, open(path, "w"), indent=2)
+print(f"✓ {len(added)} ai-rem Permissions hinzugefügt" if added else "✓ ai-rem Permissions bereits vorhanden")
+PYEOF
 
 # CLAUDE.md
 mkdir -p "$HOME/.claude"
@@ -60,10 +87,13 @@ if grep -q "Knowledge Graph Memory" "$CLAUDE_MD" 2>/dev/null; then
 else
     cat >> "$CLAUDE_MD" << 'CMEOF'
 
-## Knowledge Graph Memory
-Beim Sitzungsstart memory_get_context() aufrufen und den Kontext nutzen.
-Beim Speichern: context="private". Globale Entities ohne Tag.
-Proaktiv speichern: Tasks, Entscheidungen, Probleme, Projekte.
+## Knowledge Graph Memory (ai-rem)
+PFLICHT beim Start jeder Sitzung – vor der ersten inhaltlichen Antwort:
+1. `memory_status()` aufrufen → Ergebnis einzeilig ausgeben, z.B. "ai-rem: 42 Entities, 18 Relationen"
+2. `memory_get_context()` aufrufen → Kontext laden und als Arbeitsgrundlage nutzen
+
+Beim Speichern: context="private". Globale Entities ohne context-Tag.
+Proaktiv speichern: Tasks, Entscheidungen, Probleme, Projekte, Tools.
 CMEOF
     echo "✓ CLAUDE.md aktualisiert"
 fi
@@ -134,6 +164,268 @@ def init_schema() -> None:
 
 
 init_schema()
+
+
+# ─── Backup ─────────────────────────────────────────────────────────────────
+
+
+def _ensure_backup_dir() -> None:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
+def _load_backup_cfg() -> dict:
+    _ensure_backup_dir()
+    try:
+        with open(_BACKUP_CONFIG) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"enabled": False, "interval": "daily", "last_backup": None}
+
+
+def _save_backup_cfg(cfg: dict) -> None:
+    _ensure_backup_dir()
+    with open(_BACKUP_CONFIG, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def _do_backup() -> str:
+    _ensure_backup_dir()
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"backup_{ts}.json"
+    filepath = os.path.join(BACKUP_DIR, filename)
+
+    entities = _rows(db_exec(
+        "MATCH (e:Entity) RETURN e.id, e.name, e.type, e.descr, e.extra, e.created_at, e.updated_at"
+    ))
+    relations = _rows(db_exec(
+        "MATCH (a:Entity)-[r:Rel]->(b:Entity) RETURN a.id, r.name, b.id, r.extra, r.created_at"
+    ))
+    data = {
+        "version": 1,
+        "exported_at": _now(),
+        "entities": [
+            {"id": r[0], "name": r[1], "type": r[2], "description": r[3],
+             "extra": json.loads(r[4] or "{}"), "created_at": r[5], "updated_at": r[6]}
+            for r in entities
+        ],
+        "relations": [
+            {"from_id": r[0], "relation": r[1], "to_id": r[2],
+             "extra": json.loads(r[3] or "{}"), "created_at": r[4]}
+            for r in relations
+        ],
+    }
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    cfg = _load_backup_cfg()
+    cfg["last_backup"] = _now()
+    cfg["last_backup_file"] = filename
+    _save_backup_cfg(cfg)
+
+    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "backup_*.json")), reverse=True)
+    for old in files[MAX_BACKUPS:]:
+        os.remove(old)
+
+    log.info("Backup created: %s", filename)
+    return filename
+
+
+def _scheduler_loop() -> None:
+    thresholds = {"hourly": 3600, "daily": 86400, "weekly": 604800}
+    while True:
+        time.sleep(60)
+        cfg = _load_backup_cfg()
+        if not cfg.get("enabled"):
+            continue
+        last = cfg.get("last_backup")
+        if last:
+            try:
+                delta = (datetime.now() - datetime.fromisoformat(last)).total_seconds()
+                if delta < thresholds.get(cfg.get("interval", "daily"), 86400):
+                    continue
+            except ValueError:
+                pass
+        try:
+            _do_backup()
+        except Exception as e:
+            log.error("Scheduled backup failed: %s", e)
+
+
+threading.Thread(target=_scheduler_loop, daemon=True, name="backup-scheduler").start()
+
+
+# ─── Web UI ──────────────────────────────────────────────────────────────────
+
+_UI_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3e;--accent:#6366f1;--ah:#818cf8;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--err:#ef4444}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;padding:28px;max-width:820px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:32px}
+.grid{display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:22px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+select,input[type=file]{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px}
+button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
+button:hover{background:var(--ah)}
+button.sec{background:transparent;border:1px solid var(--border);color:var(--text)}
+button.sec:hover{border-color:var(--muted)}
+button.del{background:transparent;border:1px solid var(--err);color:var(--err)}
+button.del:hover{background:var(--err);color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+.toggle{display:flex;align-items:center;gap:10px}
+.toggle input{width:36px;height:20px;appearance:none;background:var(--border);border-radius:10px;cursor:pointer;position:relative;transition:background .2s}
+.toggle input:checked{background:var(--accent)}
+.toggle input::after{content:'';position:absolute;width:16px;height:16px;background:#fff;border-radius:50%;top:2px;left:2px;transition:left .2s}
+.toggle input:checked::after{left:18px}
+.files{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.fi{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:7px}
+.fn{flex:1;font-family:monospace;font-size:12px;color:var(--muted)}
+.fsz{font-size:12px;color:var(--muted);min-width:64px;text-align:right}
+.empty{color:var(--muted);font-size:13px;padding:8px 0}
+.hint{font-size:12px;color:var(--muted);margin-top:8px}
+.sep{width:1px;height:18px;background:var(--border)}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 18px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;max-width:340px}
+.toast.show{opacity:1}
+.toast.ok{border-color:var(--ok);color:var(--ok)}
+.toast.err{border-color:var(--err);color:var(--err)}
+</style>
+</head>
+<body>
+<h1>ai-rem</h1>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations</p>
+<div class="grid">
+
+  <div class="card">
+    <h2>Manual Backup</h2>
+    <div class="row">
+      <button id="bb" onclick="backupNow()">Backup now</button>
+      <span style="font-size:12px;color:var(--muted)" id="lb">Last backup: —</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Automatic Backup</h2>
+    <div class="row">
+      <div class="toggle"><input type="checkbox" id="se"><label for="se">Enable schedule</label></div>
+      <div class="sep"></div>
+      <label for="si" style="color:var(--muted);font-size:13px">Interval</label>
+      <select id="si">
+        <option value="hourly">Hourly</option>
+        <option value="daily" selected>Daily</option>
+        <option value="weekly">Weekly</option>
+      </select>
+      <button onclick="saveSchedule()">Save</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Backup Files</h2>
+    <div id="fl" class="files"><p class="empty">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Restore</h2>
+    <div class="row">
+      <input type="file" id="rf" accept=".json">
+      <select id="rm">
+        <option value="merge">Merge</option>
+        <option value="replace">Replace (wipe first)</option>
+      </select>
+      <button onclick="doRestore()">Restore</button>
+    </div>
+    <p class="hint">Merge adds missing entries. Replace deletes the entire graph before importing.</p>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+<script>
+async function j(url,o){const r=await fetch(url,o);return r.json();}
+
+async function loadStatus(){
+  const r=await j('/api/status').catch(()=>({}));
+  document.getElementById('ec').textContent=r.entities??'—';
+  document.getElementById('rc').textContent=r.relations??'—';
+  if(r.last_backup){
+    document.getElementById('lb').textContent='Last backup: '+new Date(r.last_backup).toLocaleString();
+  }
+}
+
+async function loadSchedule(){
+  const r=await j('/api/backup/config').catch(()=>({}));
+  document.getElementById('se').checked=r.enabled??false;
+  document.getElementById('si').value=r.interval??'daily';
+}
+
+async function loadFiles(){
+  const files=await j('/api/backup/files').catch(()=>[]);
+  const el=document.getElementById('fl');
+  if(!files.length){el.innerHTML='<p class="empty">No backups yet.</p>';return;}
+  el.innerHTML=files.map(f=>`
+    <div class="fi">
+      <span class="fn">${f.name}</span>
+      <span class="fsz">${(f.size/1024).toFixed(1)} KB</span>
+      <a href="/api/backup/download?file=${encodeURIComponent(f.name)}">
+        <button class="sec">Download</button></a>
+      <button class="del" onclick="delFile('${f.name}')">Delete</button>
+    </div>`).join('');
+}
+
+async function backupNow(){
+  const b=document.getElementById('bb');
+  b.disabled=true;b.textContent='Running…';
+  const r=await j('/api/backup/now',{method:'POST'}).catch(e=>({error:e.message}));
+  b.disabled=false;b.textContent='Backup now';
+  if(r.error){toast(r.error,'err');return;}
+  toast('Created: '+r.file,'ok');
+  loadStatus();loadFiles();
+}
+
+async function saveSchedule(){
+  const r=await j('/api/backup/config',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enabled:document.getElementById('se').checked,interval:document.getElementById('si').value})
+  }).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):toast('Schedule saved','ok');
+}
+
+async function delFile(name){
+  if(!confirm('Delete '+name+'?'))return;
+  const r=await j('/api/backup/delete',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:name})
+  }).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):(toast('Deleted','ok'),loadFiles());
+}
+
+async function doRestore(){
+  const fi=document.getElementById('rf');
+  if(!fi.files.length){toast('Select a file first','err');return;}
+  const fd=new FormData();
+  fd.append('file',fi.files[0]);
+  fd.append('mode',document.getElementById('rm').value);
+  const r=await fetch('/api/restore',{method:'POST',body:fd}).then(r=>r.json()).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):toast(`Restored: ${r.entities_created} entities, ${r.relations_created} relations`,'ok');
+  loadStatus();
+}
+
+function toast(msg,type){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className='toast show '+type;
+  setTimeout(()=>el.className='toast',3500);
+}
+
+loadStatus();loadSchedule();loadFiles();
+</script>
+</body>
+</html>"""
+
 
 mcp = FastMCP(
     "ai-rem",
@@ -215,6 +507,145 @@ async def import_route(request: Request) -> JSONResponse:
                 "descr": entity.get("description", ""), "extra": extra_json,
                 "ts": entity.get("created_at", ts),
             },
+        )
+        entities_created += 1
+
+    for rel in body.get("relations", []):
+        from_id, to_id, relation = rel["from_id"], rel["to_id"], rel["relation"]
+        extra_json = json.dumps(rel.get("extra", {}), ensure_ascii=False)
+        if not _rows(db_exec(
+            "MATCH (a:Entity {id: $fid})-[r:Rel {name: $rel}]->(b:Entity {id: $tid}) RETURN r.name",
+            {"fid": from_id, "tid": to_id, "rel": relation},
+        )):
+            db_exec(
+                """MATCH (a:Entity {id: $fid}), (b:Entity {id: $tid})
+                   CREATE (a)-[:Rel {name: $rel, extra: $extra, created_at: $ts}]->(b)""",
+                {"fid": from_id, "tid": to_id, "rel": relation, "extra": extra_json,
+                 "ts": rel.get("created_at", ts)},
+            )
+            relations_created += 1
+
+    return JSONResponse({
+        "status": "ok", "mode": mode,
+        "entities_created": entities_created, "entities_skipped": entities_skipped,
+        "relations_created": relations_created,
+    })
+
+
+@mcp.custom_route("/ui", methods=["GET"])
+async def ui_route(request: Request) -> Response:
+    return Response(content=_UI_HTML, media_type="text/html")
+
+
+@mcp.custom_route("/api/status", methods=["GET"])
+async def api_status(request: Request) -> JSONResponse:
+    e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
+    r_count = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
+    cfg = _load_backup_cfg()
+    return JSONResponse({"entities": e_count, "relations": r_count, "last_backup": cfg.get("last_backup")})
+
+
+@mcp.custom_route("/api/backup/config", methods=["GET"])
+async def api_backup_config_get(request: Request) -> JSONResponse:
+    return JSONResponse(_load_backup_cfg())
+
+
+@mcp.custom_route("/api/backup/config", methods=["POST"])
+async def api_backup_config_post(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    cfg = _load_backup_cfg()
+    cfg["enabled"] = bool(body.get("enabled", cfg.get("enabled")))
+    cfg["interval"] = body.get("interval", cfg.get("interval", "daily"))
+    if cfg["interval"] not in ("hourly", "daily", "weekly"):
+        return JSONResponse({"error": "interval must be hourly, daily or weekly"}, status_code=400)
+    _save_backup_cfg(cfg)
+    return JSONResponse({"status": "ok", **cfg})
+
+
+@mcp.custom_route("/api/backup/now", methods=["POST"])
+async def api_backup_now(request: Request) -> JSONResponse:
+    try:
+        filename = _do_backup()
+        return JSONResponse({"status": "ok", "file": filename})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/api/backup/files", methods=["GET"])
+async def api_backup_files(request: Request) -> JSONResponse:
+    _ensure_backup_dir()
+    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "backup_*.json")), reverse=True)
+    result = [{"name": os.path.basename(f), "size": os.path.getsize(f)} for f in files]
+    return JSONResponse(result)
+
+
+@mcp.custom_route("/api/backup/download", methods=["GET"])
+async def api_backup_download(request: Request) -> Response:
+    name = request.query_params.get("file", "")
+    if not name or "/" in name or ".." in name or not name.endswith(".json"):
+        return JSONResponse({"error": "invalid filename"}, status_code=400)
+    path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(path):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path, filename=name, media_type="application/json")
+
+
+@mcp.custom_route("/api/backup/delete", methods=["POST"])
+async def api_backup_delete(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    name = body.get("file", "")
+    if not name or "/" in name or ".." in name or not name.endswith(".json"):
+        return JSONResponse({"error": "invalid filename"}, status_code=400)
+    path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(path):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    os.remove(path)
+    return JSONResponse({"status": "ok"})
+
+
+@mcp.custom_route("/api/restore", methods=["POST"])
+async def api_restore(request: Request) -> JSONResponse:
+    try:
+        form = await request.form()
+    except Exception:
+        return JSONResponse({"error": "invalid form data"}, status_code=400)
+    file = form.get("file")
+    if not file:
+        return JSONResponse({"error": "no file uploaded"}, status_code=400)
+    mode = form.get("mode", "merge")
+    if mode not in ("merge", "replace"):
+        return JSONResponse({"error": "mode must be merge or replace"}, status_code=400)
+    try:
+        content = await file.read()
+        body = json.loads(content)
+    except Exception:
+        return JSONResponse({"error": "invalid JSON in file"}, status_code=400)
+
+    if mode == "replace":
+        db_exec("MATCH (e:Entity) DETACH DELETE e")
+
+    ts = _now()
+    entities_created = entities_skipped = relations_created = 0
+
+    for entity in body.get("entities", []):
+        eid = entity.get("id") or _id(entity["name"])
+        extra_json = json.dumps(entity.get("extra", {}), ensure_ascii=False)
+        if _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})):
+            entities_skipped += 1
+            continue
+        db_exec(
+            """CREATE (:Entity {id: $id, name: $name, type: $type,
+                                descr: $descr, extra: $extra,
+                                created_at: $ts, updated_at: $ts})""",
+            {"id": eid, "name": entity["name"], "type": entity.get("type", "Unknown"),
+             "descr": entity.get("description", ""), "extra": extra_json,
+             "ts": entity.get("created_at", ts)},
         )
         entities_created += 1
 
@@ -565,6 +996,14 @@ def memory_get_relations(name: str) -> str:
         lines.append("**Eingehend:**")
         lines.extend(f"  ← [{r[1]}] {r[2]}  via [{r[0]}]" for r in in_rows)
     return "\n".join(lines)
+
+
+@mcp.tool()
+def memory_status() -> str:
+    """Kurzstatus: Anzahl Entities und Relationen im Knowledge Graph."""
+    e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
+    r_count = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
+    return f"ai-rem: {e_count} Entities, {r_count} Relationen"
 
 
 @mcp.tool()
