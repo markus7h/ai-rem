@@ -65,10 +65,13 @@ if grep -q "Knowledge Graph Memory" "$CLAUDE_MD" 2>/dev/null; then
 else
     cat >> "$CLAUDE_MD" << 'CMEOF'
 
-## Knowledge Graph Memory
-Beim Sitzungsstart memory_get_context() aufrufen und den Kontext nutzen.
-Beim Speichern: context="private". Globale Entities ohne Tag.
-Proaktiv speichern: Tasks, Entscheidungen, Probleme, Projekte.
+## Knowledge Graph Memory (ai-rem)
+PFLICHT beim Start jeder Sitzung – vor der ersten inhaltlichen Antwort:
+1. `memory_status()` aufrufen → Ergebnis einzeilig ausgeben, z.B. "ai-rem: 42 Entities, 18 Relationen"
+2. `memory_get_context()` aufrufen → Kontext laden und als Arbeitsgrundlage nutzen
+
+Beim Speichern: context="private". Globale Entities ohne context-Tag.
+Proaktiv speichern: Tasks, Entscheidungen, Probleme, Projekte, Tools.
 CMEOF
     echo "✓ CLAUDE.md aktualisiert"
 fi
@@ -971,6 +974,14 @@ def memory_get_relations(name: str) -> str:
         lines.append("**Eingehend:**")
         lines.extend(f"  ← [{r[1]}] {r[2]}  via [{r[0]}]" for r in in_rows)
     return "\n".join(lines)
+
+
+@mcp.tool()
+def memory_status() -> str:
+    """Kurzstatus: Anzahl Entities und Relationen im Knowledge Graph."""
+    e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
+    r_count = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
+    return f"ai-rem: {e_count} Entities, {r_count} Relationen"
 
 
 @mcp.tool()
