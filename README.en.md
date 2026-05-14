@@ -7,12 +7,13 @@ Claude has no memory across sessions by default. This project solves that: relev
 
 ## What is ai-rem?
 
-**ai-rem** is the MCP server that provides the knowledge graph. It runs as a Docker container on your server (`<SERVER_IP>`, port 3456) and is always available as long as your home server is running.
+**ai-rem** is the MCP server that provides the knowledge graph. It runs as a Docker container on your home server (`<SERVER_IP>`, configurable port, default `3456`) and is always available as long as the server is running.
 
 Technically:
 - **[FastMCP](https://gofastmcp.com)** — Python MCP server framework, HTTP transport (Streamable HTTP)
 - **[Kuzu](https://kuzudb.com)** — embedded graph database (no separate DB container needed)
-- Data is stored persistently in `./data/kg.db` (relative to the Compose directory, configurable via `KG_DATA_PATH`)
+- Data is stored persistently in `./data/kg.db` (configurable via `KG_DATA_PATH`)
+- Backups are saved to `./backups/` (configurable via `KG_BACKUP_PATH`)
 
 ---
 
@@ -47,11 +48,37 @@ The context can be set per CLAUDE.md: e.g. `context="work"` for work repositorie
 
 ---
 
+## Web UI
+
+The built-in web interface is available at `http://<SERVER_IP>:3456/ui`.
+
+Features:
+- **Manual backup** — create a DB snapshot with one click
+- **Automatic backup schedule** — hourly / daily / weekly, configurable in the UI
+- **Backup management** — list of all backups with download and delete
+- **Restore** — upload a JSON backup, mode `merge` or `replace`
+
+---
+
 ## Requirements
 
 - Docker on the target server
 - Claude Code CLI on the client machine
-- Network access to `<SERVER_IP>:3456`
+- Network access to `<SERVER_IP>:<PORT>`
+
+---
+
+## Configuration
+
+Environment variables are loaded from a `.env` file in the Compose directory:
+
+```env
+KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Public URL of the server
+PORT=3456                                # TCP port (default: 3456)
+KG_DATA_PATH=./data                      # Path to the database
+KG_BACKUP_PATH=./backups                 # Path for backup files
+MAX_BACKUPS=10                           # Maximum number of backups to keep
+```
 
 ---
 
@@ -60,15 +87,20 @@ The context can be set per CLAUDE.md: e.g. `context="work"` for work repositorie
 ### Server (one-time setup)
 
 ```bash
-# On your-server: create directory
+# Create directory
 mkdir -p ~/mydocker/compose-files/ai-rem
+
+# Create .env
+cat > ~/mydocker/compose-files/ai-rem/.env <<EOF
+KG_PUBLIC_URL=http://<SERVER_IP>:3456
+EOF
 
 # Transfer files
 rsync -av server.py requirements.txt Dockerfile docker-compose.yml \
   your-server:~/mydocker/compose-files/ai-rem/
 
 # Start the container
-ssh your-server "cd ~/mydocker/compose-files/ai-rem && KG_PUBLIC_URL=http://<SERVER_IP>:3456 docker compose up -d --build"
+ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose up -d --build"
 ```
 
 ### Client — setting up a new machine
@@ -91,7 +123,8 @@ The slash command `/setup-ai-rem` is a **local shortcut** — it only exists on 
 ### Updating after code changes
 
 ```bash
-rsync -q server.py your-server:~/mydocker/compose-files/ai-rem/
+rsync -av server.py requirements.txt Dockerfile docker-compose.yml \
+  your-server:~/mydocker/compose-files/ai-rem/
 ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose up -d --build"
 ```
 
@@ -101,11 +134,13 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose up -d --bu
 
 ```
 ai-rem/
-├── server.py          # MCP server (FastMCP + Kuzu + custom routes)
+├── server.py          # MCP server (FastMCP + Kuzu + web UI + backup)
 ├── requirements.txt   # fastmcp, kuzu
 ├── Dockerfile
 ├── docker-compose.yml
-└── README.md
+├── .env               # Configuration (not in repo)
+├── README.md
+└── README.en.md
 ```
 
 ---
