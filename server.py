@@ -95,7 +95,7 @@ else
 ## Knowledge Graph Memory (ai-rem)
 PFLICHT beim Start jeder Sitzung – vor der ersten inhaltlichen Antwort:
 1. `memory_status()` aufrufen → Ergebnis einzeilig ausgeben, z.B. "ai-rem: 42 Entities, 18 Relationen"
-2. `memory_get_context()` aufrufen → Kontext laden und als Arbeitsgrundlage nutzen
+2. `memory_get_context()` aufrufen → Kontext laden, dort aufgeführte Routinen & Anweisungen befolgen, Kontext als Arbeitsgrundlage nutzen.
 
 Beim Speichern: context="private". Globale Entities ohne context-Tag.
 Proaktiv speichern: Tasks, Entscheidungen, Probleme, Projekte, Tools.
@@ -1026,6 +1026,22 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
         if rel_rows:
             lines = [f"{r[0]} -[{r[1]}]-> {r[2]}" for r in rel_rows]
             sections.append("### Relationen\n" + "\n".join(lines))
+
+    # Routinen & Anweisungen (Preferences) — surface near the top so they are
+    # acted on, not just read. Topic-specific block above still wins when set.
+    pref_rows = _rows(
+        db_exec(
+            f"""MATCH (e:Entity {{type: 'Preference'}})
+               {_ctx_clause('e', context, where=True)}
+               RETURN e.name, e.descr, e.updated_at
+               ORDER BY e.updated_at DESC
+               LIMIT 8""",
+            ctx_param,
+        )
+    )
+    if pref_rows:
+        lines = [f"- **{r[0]}**: {r[1][:120]}" for r in pref_rows]
+        sections.append(f"## Routinen & Anweisungen{ctx_label}\n" + "\n".join(lines))
 
     # Offene Tasks
     task_rows = _rows(
