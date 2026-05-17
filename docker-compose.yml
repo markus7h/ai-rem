@@ -16,6 +16,7 @@ services:
       - KG_PUBLIC_URL=${KG_PUBLIC_URL:-http://localhost:${PORT:-3456}}
       - BACKUP_DIR=/backups
       - MAX_BACKUPS=${MAX_BACKUPS:-10}
+      - KUZU_POOL_SIZE=${KUZU_POOL_SIZE:-4}
     mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,json,os; p=os.getenv('PORT','3456'); r=urllib.request.Request(f'http://localhost:{p}/mcp',data=json.dumps({'jsonrpc':'2.0','method':'initialize','params':{'protocolVersion':'2024-11-05','capabilities':{},'clientInfo':{'name':'hc','version':'1'}},'id':1}).encode(),headers={'Content-Type':'application/json','Accept':'application/json, text/event-stream'}); urllib.request.urlopen(r,timeout=3)\""]
