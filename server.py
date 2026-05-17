@@ -156,6 +156,26 @@ async def db_exec_async(query: str, params: dict | None = None) -> kuzu.QueryRes
     return await asyncio.to_thread(db_exec, query, params)
 
 
+# Tiny helpers that are needed at module-import time (init_schema → migration).
+# Other helpers (_id, _ctx_match, _ctx_clause, _apply_import) live further down
+# in the "helpers" section because they're only invoked from tool/route bodies.
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _rows(result: kuzu.QueryResult) -> list[list]:
+    rows = []
+    while result.has_next():
+        rows.append(result.get_next())
+    return rows
+
+
+def _ensure_backup_dir() -> None:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
 def init_schema() -> None:
     stmts = [
         """CREATE NODE TABLE IF NOT EXISTS Entity(
@@ -276,10 +296,6 @@ init_schema()
 
 
 # ─── Backup ─────────────────────────────────────────────────────────────────
-
-
-def _ensure_backup_dir() -> None:
-    os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
 def _safe_backup_path(name: str) -> Optional[str]:
@@ -733,17 +749,6 @@ def _id(name: str) -> str:
     # to avoid silent collisions when two distinct names share a 64-char prefix.
     suffix = hashlib.blake2b(name.encode("utf-8"), digest_size=4).hexdigest()
     return f"{slug[:55]}_{suffix}"
-
-
-def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def _rows(result: kuzu.QueryResult) -> list[list]:
-    rows = []
-    while result.has_next():
-        rows.append(result.get_next())
-    return rows
 
 
 def _ctx_match(extra_json: str, context: str) -> bool:
