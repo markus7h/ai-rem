@@ -3,13 +3,17 @@ Knowledge Graph Memory MCP Server
 Langzeit-Gedächtnis für Claude via Kuzu embedded graph database.
 """
 
+import asyncio
+import atexit
+import fcntl
 import glob
+import hashlib
 import json
 import logging
 import os
+import queue
 import re
 import threading
-import time
 from datetime import datetime
 from typing import Optional
 
@@ -24,6 +28,7 @@ log = logging.getLogger(__name__)
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
+KUZU_POOL_SIZE = max(1, int(os.getenv("KUZU_POOL_SIZE", "4")))
 _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 
 # ─── Setup-Endpunkt Inhalte ──────────────────────────────────────────────────
@@ -128,13 +133,27 @@ Auf jeder neuen Maschine: `bash <(curl -s __KG_URL__/setup)`
 """.replace("__KG_URL__", _KG_URL)
 
 db = kuzu.Database(DB_PATH)
-conn = kuzu.Connection(db)
-_lock = threading.Lock()
+
+# Kuzu Connection objects are not thread-safe, but a Database can host many.
+# A small pool lets independent requests run truly concurrently — under the
+# previous single-conn + global lock, every request serialized on the same lock,
+# blocking the event loop for the duration of each query.
+_pool: queue.Queue = queue.Queue(maxsize=KUZU_POOL_SIZE)
+for _ in range(KUZU_POOL_SIZE):
+    _pool.put(kuzu.Connection(db))
 
 
 def db_exec(query: str, params: dict | None = None) -> kuzu.QueryResult:
-    with _lock:
-        return conn.execute(query, params or {})
+    c = _pool.get()
+    try:
+        return c.execute(query, params or {})
+    finally:
+        _pool.put(c)
+
+
+async def db_exec_async(query: str, params: dict | None = None) -> kuzu.QueryResult:
+    """Run db_exec off the event loop. Use from `async def` route handlers."""
+    return await asyncio.to_thread(db_exec, query, params)
 
 
 def init_schema() -> None:
@@ -145,6 +164,7 @@ def init_schema() -> None:
                type   STRING,
                descr  STRING,
                extra  STRING,
+               context STRING DEFAULT '',
                created_at STRING,
                updated_at STRING
            )""",
@@ -160,7 +180,96 @@ def init_schema() -> None:
             db_exec(stmt)
         except Exception as e:
             log.warning("Schema stmt skipped: %s", e)
+    _migrate_context_column()
     log.info("Schema ready — DB at %s", DB_PATH)
+
+
+def _entity_has_context_column() -> bool:
+    """Probe whether Entity already has the `context` column.
+
+    TABLE_INFO column layout varies across Kuzu releases, so we scan every
+    string cell rather than relying on a fixed position. False positives only
+    happen if another column literally is named "context", which is the column
+    we're checking for anyway.
+    """
+    try:
+        result = db_exec("CALL TABLE_INFO('Entity') RETURN *")
+    except Exception as e:
+        log.warning("TABLE_INFO probe failed: %s", e)
+        return True  # be conservative: skip migration if probe fails
+    for row in _rows(result):
+        for cell in row:
+            if isinstance(cell, str) and cell == "context":
+                return True
+    return False
+
+
+def _legacy_dump_pre_context() -> dict:
+    """Dump the graph as it looked BEFORE the context column existed. Used only
+    by the schema migration to write a safety backup against the pre-ALTER schema."""
+    _ensure_backup_dir()
+    entities = _rows(db_exec(
+        "MATCH (e:Entity) RETURN e.id, e.name, e.type, e.descr, e.extra, "
+        "e.created_at, e.updated_at"
+    ))
+    relations = _rows(db_exec(
+        "MATCH (a:Entity)-[r:Rel]->(b:Entity) RETURN a.id, r.name, b.id, r.extra, r.created_at"
+    ))
+    return {
+        "version": 1,
+        "exported_at": _now(),
+        "entities": [
+            {"id": r[0], "name": r[1], "type": r[2], "description": r[3],
+             "extra": json.loads(r[4] or "{}"),
+             "created_at": r[5], "updated_at": r[6]}
+            for r in entities
+        ],
+        "relations": [
+            {"from_id": r[0], "relation": r[1], "to_id": r[2],
+             "extra": json.loads(r[3] or "{}"), "created_at": r[4]}
+            for r in relations
+        ],
+    }
+
+
+def _migrate_context_column() -> None:
+    """One-off migration: add `context` column to Entity and backfill from extra."""
+    if _entity_has_context_column():
+        return
+    # Pre-migration safety backup (using a dump that doesn't touch the new column).
+    try:
+        data = _legacy_dump_pre_context()
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_path = os.path.join(BACKUP_DIR, f"backup_pre_context_{ts}.json")
+        tmp = backup_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, backup_path)
+        log.info("Pre-migration backup written: %s", os.path.basename(backup_path))
+    except Exception as e:
+        log.warning("Pre-migration backup failed (continuing): %s", e)
+
+    try:
+        db_exec("ALTER TABLE Entity ADD context STRING DEFAULT ''")
+    except Exception as e:
+        log.error("ALTER TABLE Entity ADD context failed: %s", e)
+        return
+
+    rows = _rows(db_exec("MATCH (e:Entity) RETURN e.id, e.extra"))
+    backfilled = 0
+    for eid, extra_raw in rows:
+        try:
+            ctx = json.loads(extra_raw or "{}").get("context", "") or ""
+        except json.JSONDecodeError:
+            ctx = ""
+        if not ctx:
+            continue
+        db_exec(
+            "MATCH (e:Entity {id: $id}) SET e.context = $ctx",
+            {"id": eid, "ctx": ctx},
+        )
+        backfilled += 1
+    log.info("Schema migration: context column added, %d entities backfilled", backfilled)
 
 
 init_schema()
@@ -173,39 +282,64 @@ def _ensure_backup_dir() -> None:
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
+def _safe_backup_path(name: str) -> Optional[str]:
+    """Resolve `name` under BACKUP_DIR and reject anything escaping it."""
+    if not name or not name.endswith(".json"):
+        return None
+    candidate = os.path.realpath(os.path.join(BACKUP_DIR, name))
+    root = os.path.realpath(BACKUP_DIR)
+    if not (candidate == root or candidate.startswith(root + os.sep)):
+        return None
+    if os.path.dirname(candidate) != root:
+        return None
+    return candidate
+
+
 def _load_backup_cfg() -> dict:
     _ensure_backup_dir()
     try:
         with open(_BACKUP_CONFIG) as f:
-            return json.load(f)
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                return json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"enabled": False, "interval": "daily", "last_backup": None}
 
 
 def _save_backup_cfg(cfg: dict) -> None:
     _ensure_backup_dir()
-    with open(_BACKUP_CONFIG, "w") as f:
-        json.dump(cfg, f, indent=2)
+    # Write through a temp file and atomically replace, with an exclusive lock
+    # on the destination to serialize concurrent writers (scheduler + HTTP).
+    fd = os.open(_BACKUP_CONFIG, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        tmp = _BACKUP_CONFIG + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(tmp, _BACKUP_CONFIG)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
-def _do_backup() -> str:
-    _ensure_backup_dir()
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"backup_{ts}.json"
-    filepath = os.path.join(BACKUP_DIR, filename)
-
+def _dump_graph() -> dict:
+    """Serialize the entire Entity+Rel graph into a plain dict (JSON-ready)."""
     entities = _rows(db_exec(
-        "MATCH (e:Entity) RETURN e.id, e.name, e.type, e.descr, e.extra, e.created_at, e.updated_at"
+        "MATCH (e:Entity) RETURN e.id, e.name, e.type, e.descr, e.extra, "
+        "e.context, e.created_at, e.updated_at"
     ))
     relations = _rows(db_exec(
         "MATCH (a:Entity)-[r:Rel]->(b:Entity) RETURN a.id, r.name, b.id, r.extra, r.created_at"
     ))
-    data = {
+    return {
         "version": 1,
         "exported_at": _now(),
         "entities": [
             {"id": r[0], "name": r[1], "type": r[2], "description": r[3],
-             "extra": json.loads(r[4] or "{}"), "created_at": r[5], "updated_at": r[6]}
+             "extra": json.loads(r[4] or "{}"), "context": r[5] or "",
+             "created_at": r[6], "updated_at": r[7]}
             for r in entities
         ],
         "relations": [
@@ -214,8 +348,19 @@ def _do_backup() -> str:
             for r in relations
         ],
     }
-    with open(filepath, "w", encoding="utf-8") as f:
+
+
+def _do_backup() -> str:
+    _ensure_backup_dir()
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"backup_{ts}.json"
+    filepath = os.path.join(BACKUP_DIR, filename)
+    tmp = filepath + ".tmp"
+
+    data = _dump_graph()
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, filepath)
 
     cfg = _load_backup_cfg()
     cfg["last_backup"] = _now()
@@ -224,16 +369,21 @@ def _do_backup() -> str:
 
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "backup_*.json")), reverse=True)
     for old in files[MAX_BACKUPS:]:
-        os.remove(old)
+        try:
+            os.remove(old)
+        except FileNotFoundError:
+            pass
 
     log.info("Backup created: %s", filename)
     return filename
 
 
+_shutdown = threading.Event()
+
+
 def _scheduler_loop() -> None:
     thresholds = {"hourly": 3600, "daily": 86400, "weekly": 604800}
-    while True:
-        time.sleep(60)
+    while not _shutdown.wait(60):
         cfg = _load_backup_cfg()
         if not cfg.get("enabled"):
             continue
@@ -243,15 +393,17 @@ def _scheduler_loop() -> None:
                 delta = (datetime.now() - datetime.fromisoformat(last)).total_seconds()
                 if delta < thresholds.get(cfg.get("interval", "daily"), 86400):
                     continue
-            except ValueError:
-                pass
+            except ValueError as e:
+                log.warning("Corrupt last_backup timestamp %r, ignoring: %s", last, e)
         try:
             _do_backup()
         except Exception as e:
             log.error("Scheduled backup failed: %s", e)
+    log.info("Scheduler stopped")
 
 
 threading.Thread(target=_scheduler_loop, daemon=True, name="backup-scheduler").start()
+atexit.register(_shutdown.set)
 
 
 # ─── Web UI ──────────────────────────────────────────────────────────────────
@@ -449,87 +601,23 @@ async def cmd_route(request: Request) -> PlainTextResponse:
 
 @mcp.custom_route("/export", methods=["GET"])
 async def export_route(request: Request) -> JSONResponse:
-    entities = _rows(db_exec(
-        "MATCH (e:Entity) RETURN e.id, e.name, e.type, e.descr, e.extra, e.created_at, e.updated_at"
-    ))
-    relations = _rows(db_exec(
-        "MATCH (a:Entity)-[r:Rel]->(b:Entity) RETURN a.id, r.name, b.id, r.extra, r.created_at"
-    ))
-    return JSONResponse({
-        "version": 1,
-        "exported_at": _now(),
-        "entities": [
-            {
-                "id": r[0], "name": r[1], "type": r[2], "description": r[3],
-                "extra": json.loads(r[4] or "{}"), "created_at": r[5], "updated_at": r[6],
-            }
-            for r in entities
-        ],
-        "relations": [
-            {
-                "from_id": r[0], "relation": r[1], "to_id": r[2],
-                "extra": json.loads(r[3] or "{}"), "created_at": r[4],
-            }
-            for r in relations
-        ],
-    })
+    return JSONResponse(await asyncio.to_thread(_dump_graph))
 
 
 @mcp.custom_route("/import", methods=["POST"])
 async def import_route(request: Request) -> JSONResponse:
     try:
         body = await request.json()
-    except Exception:
+    except json.JSONDecodeError as e:
+        log.warning("invalid JSON in /import: %s", e)
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
     mode = request.query_params.get("mode", "merge")
     if mode not in ("merge", "replace"):
         return JSONResponse({"error": "mode must be 'merge' or 'replace'"}, status_code=400)
 
-    if mode == "replace":
-        db_exec("MATCH (e:Entity) DETACH DELETE e")
-
-    ts = _now()
-    entities_created = entities_skipped = relations_created = 0
-
-    for entity in body.get("entities", []):
-        eid = entity.get("id") or _id(entity["name"])
-        extra_json = json.dumps(entity.get("extra", {}), ensure_ascii=False)
-        if _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})):
-            entities_skipped += 1
-            continue
-        db_exec(
-            """CREATE (:Entity {id: $id, name: $name, type: $type,
-                                descr: $descr, extra: $extra,
-                                created_at: $ts, updated_at: $ts})""",
-            {
-                "id": eid, "name": entity["name"], "type": entity.get("type", "Unknown"),
-                "descr": entity.get("description", ""), "extra": extra_json,
-                "ts": entity.get("created_at", ts),
-            },
-        )
-        entities_created += 1
-
-    for rel in body.get("relations", []):
-        from_id, to_id, relation = rel["from_id"], rel["to_id"], rel["relation"]
-        extra_json = json.dumps(rel.get("extra", {}), ensure_ascii=False)
-        if not _rows(db_exec(
-            "MATCH (a:Entity {id: $fid})-[r:Rel {name: $rel}]->(b:Entity {id: $tid}) RETURN r.name",
-            {"fid": from_id, "tid": to_id, "rel": relation},
-        )):
-            db_exec(
-                """MATCH (a:Entity {id: $fid}), (b:Entity {id: $tid})
-                   CREATE (a)-[:Rel {name: $rel, extra: $extra, created_at: $ts}]->(b)""",
-                {"fid": from_id, "tid": to_id, "rel": relation, "extra": extra_json,
-                 "ts": rel.get("created_at", ts)},
-            )
-            relations_created += 1
-
-    return JSONResponse({
-        "status": "ok", "mode": mode,
-        "entities_created": entities_created, "entities_skipped": entities_skipped,
-        "relations_created": relations_created,
-    })
+    result = await asyncio.to_thread(_apply_import, body, mode)
+    return JSONResponse(result)
 
 
 @mcp.custom_route("/ui", methods=["GET"])
@@ -539,8 +627,8 @@ async def ui_route(request: Request) -> Response:
 
 @mcp.custom_route("/api/status", methods=["GET"])
 async def api_status(request: Request) -> JSONResponse:
-    e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
-    r_count = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
+    e_count = _rows(await db_exec_async("MATCH (e:Entity) RETURN count(e)"))[0][0]
+    r_count = _rows(await db_exec_async("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
     cfg = _load_backup_cfg()
     return JSONResponse({"entities": e_count, "relations": r_count, "last_backup": cfg.get("last_backup")})
 
@@ -568,9 +656,10 @@ async def api_backup_config_post(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/backup/now", methods=["POST"])
 async def api_backup_now(request: Request) -> JSONResponse:
     try:
-        filename = _do_backup()
+        filename = await asyncio.to_thread(_do_backup)
         return JSONResponse({"status": "ok", "file": filename})
     except Exception as e:
+        log.error("Manual backup failed: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -584,28 +673,28 @@ async def api_backup_files(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/api/backup/download", methods=["GET"])
 async def api_backup_download(request: Request) -> Response:
-    name = request.query_params.get("file", "")
-    if not name or "/" in name or ".." in name or not name.endswith(".json"):
+    path = _safe_backup_path(request.query_params.get("file", ""))
+    if not path:
         return JSONResponse({"error": "invalid filename"}, status_code=400)
-    path = os.path.join(BACKUP_DIR, name)
     if not os.path.exists(path):
         return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(path, filename=name, media_type="application/json")
+    return FileResponse(path, filename=os.path.basename(path), media_type="application/json")
 
 
 @mcp.custom_route("/api/backup/delete", methods=["POST"])
 async def api_backup_delete(request: Request) -> JSONResponse:
     try:
         body = await request.json()
-    except Exception:
+    except json.JSONDecodeError as e:
+        log.warning("invalid JSON in /api/backup/delete: %s", e)
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
-    name = body.get("file", "")
-    if not name or "/" in name or ".." in name or not name.endswith(".json"):
+    path = _safe_backup_path(body.get("file", ""))
+    if not path:
         return JSONResponse({"error": "invalid filename"}, status_code=400)
-    path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
         return JSONResponse({"error": "not found"}, status_code=404)
-    os.remove(path)
     return JSONResponse({"status": "ok"})
 
 
@@ -613,7 +702,8 @@ async def api_backup_delete(request: Request) -> JSONResponse:
 async def api_restore(request: Request) -> JSONResponse:
     try:
         form = await request.form()
-    except Exception:
+    except Exception as e:
+        log.warning("invalid form data in /api/restore: %s", e)
         return JSONResponse({"error": "invalid form data"}, status_code=400)
     file = form.get("file")
     if not file:
@@ -624,58 +714,25 @@ async def api_restore(request: Request) -> JSONResponse:
     try:
         content = await file.read()
         body = json.loads(content)
-    except Exception:
+    except json.JSONDecodeError as e:
+        log.warning("invalid JSON in restore upload: %s", e)
         return JSONResponse({"error": "invalid JSON in file"}, status_code=400)
 
-    if mode == "replace":
-        db_exec("MATCH (e:Entity) DETACH DELETE e")
-
-    ts = _now()
-    entities_created = entities_skipped = relations_created = 0
-
-    for entity in body.get("entities", []):
-        eid = entity.get("id") or _id(entity["name"])
-        extra_json = json.dumps(entity.get("extra", {}), ensure_ascii=False)
-        if _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})):
-            entities_skipped += 1
-            continue
-        db_exec(
-            """CREATE (:Entity {id: $id, name: $name, type: $type,
-                                descr: $descr, extra: $extra,
-                                created_at: $ts, updated_at: $ts})""",
-            {"id": eid, "name": entity["name"], "type": entity.get("type", "Unknown"),
-             "descr": entity.get("description", ""), "extra": extra_json,
-             "ts": entity.get("created_at", ts)},
-        )
-        entities_created += 1
-
-    for rel in body.get("relations", []):
-        from_id, to_id, relation = rel["from_id"], rel["to_id"], rel["relation"]
-        extra_json = json.dumps(rel.get("extra", {}), ensure_ascii=False)
-        if not _rows(db_exec(
-            "MATCH (a:Entity {id: $fid})-[r:Rel {name: $rel}]->(b:Entity {id: $tid}) RETURN r.name",
-            {"fid": from_id, "tid": to_id, "rel": relation},
-        )):
-            db_exec(
-                """MATCH (a:Entity {id: $fid}), (b:Entity {id: $tid})
-                   CREATE (a)-[:Rel {name: $rel, extra: $extra, created_at: $ts}]->(b)""",
-                {"fid": from_id, "tid": to_id, "rel": relation, "extra": extra_json,
-                 "ts": rel.get("created_at", ts)},
-            )
-            relations_created += 1
-
-    return JSONResponse({
-        "status": "ok", "mode": mode,
-        "entities_created": entities_created, "entities_skipped": entities_skipped,
-        "relations_created": relations_created,
-    })
+    result = await asyncio.to_thread(_apply_import, body, mode)
+    return JSONResponse(result)
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
 
 def _id(name: str) -> str:
-    return re.sub(r"[^a-z0-9_]", "_", name.lower().strip())[:64]
+    slug = re.sub(r"[^a-z0-9_]", "_", name.lower().strip())
+    if len(slug) <= 64:
+        return slug
+    # Names longer than 64 chars: keep readable prefix, append hash of full name
+    # to avoid silent collisions when two distinct names share a 64-char prefix.
+    suffix = hashlib.blake2b(name.encode("utf-8"), digest_size=4).hexdigest()
+    return f"{slug[:55]}_{suffix}"
 
 
 def _now() -> str:
@@ -690,10 +747,104 @@ def _rows(result: kuzu.QueryResult) -> list[list]:
 
 
 def _ctx_match(extra_json: str, context: str) -> bool:
-    """True wenn Entity zum gesuchten Context passt. Ungetaggte Entities (global) passen immer."""
+    """True wenn Entity zum gesuchten Context passt. Ungetaggte Entities (global) passen immer.
+
+    Legacy helper kept for callers that still parse extra JSON (Phase 3 transitional);
+    new code should push the context predicate into Cypher via _ctx_clause().
+    """
     if not context:
         return True
     return json.loads(extra_json or "{}").get("context", "") in ("", context)
+
+
+def _ctx_clause(alias: str, ctx: str, *, where: bool = False) -> str:
+    """Cypher fragment limiting `alias` to the given context, or '' when ctx is empty.
+
+    where=False (default) → fragment starts with ' AND' to chain into an existing WHERE.
+    where=True            → fragment starts with ' WHERE' to introduce a new clause.
+    """
+    if not ctx:
+        return ""
+    keyword = "WHERE" if where else "AND"
+    return f" {keyword} ({alias}.context = $ctx OR {alias}.context = '')"
+
+
+def _apply_import(body: dict, mode: str) -> dict:
+    """Apply an export-format `body` to the graph in 'merge' or 'replace' mode.
+
+    Pre-fetches all existing entity ids and relation tuples to avoid per-row
+    existence queries. Returns a summary dict.
+    """
+    if mode == "replace":
+        db_exec("MATCH (e:Entity) DETACH DELETE e")
+        existing_eids: set[str] = set()
+        existing_rels: set[tuple] = set()
+    else:
+        existing_eids = {
+            r[0] for r in _rows(db_exec("MATCH (e:Entity) RETURN e.id"))
+        }
+        existing_rels = {
+            (r[0], r[1], r[2])
+            for r in _rows(db_exec(
+                "MATCH (a:Entity)-[r:Rel]->(b:Entity) RETURN a.id, r.name, b.id"
+            ))
+        }
+
+    ts = _now()
+    entities_created = entities_skipped = 0
+    relations_created = relations_skipped = 0
+
+    for entity in body.get("entities", []):
+        eid = entity.get("id") or _id(entity["name"])
+        if eid in existing_eids:
+            entities_skipped += 1
+            continue
+        extra = entity.get("extra", {}) or {}
+        # Prefer top-level `context` (new format); fall back to extra.context
+        # (older backups) so restore stays compatible.
+        ctx = entity.get("context") or extra.get("context", "") or ""
+        extra_json = json.dumps(extra, ensure_ascii=False)
+        db_exec(
+            """CREATE (:Entity {id: $id, name: $name, type: $type,
+                                descr: $descr, extra: $extra, context: $ctx,
+                                created_at: $ts, updated_at: $ts})""",
+            {
+                "id": eid, "name": entity["name"],
+                "type": entity.get("type", "Unknown"),
+                "descr": entity.get("description", ""), "extra": extra_json,
+                "ctx": ctx,
+                "ts": entity.get("created_at", ts),
+            },
+        )
+        existing_eids.add(eid)
+        entities_created += 1
+
+    for rel in body.get("relations", []):
+        from_id, to_id, relation = rel["from_id"], rel["to_id"], rel["relation"]
+        if from_id not in existing_eids or to_id not in existing_eids:
+            relations_skipped += 1
+            continue
+        key = (from_id, relation, to_id)
+        if key in existing_rels:
+            relations_skipped += 1
+            continue
+        extra_json = json.dumps(rel.get("extra", {}), ensure_ascii=False)
+        db_exec(
+            """MATCH (a:Entity {id: $fid}), (b:Entity {id: $tid})
+               CREATE (a)-[:Rel {name: $rel, extra: $extra, created_at: $ts}]->(b)""",
+            {"fid": from_id, "tid": to_id, "rel": relation, "extra": extra_json,
+             "ts": rel.get("created_at", ts)},
+        )
+        existing_rels.add(key)
+        relations_created += 1
+
+    return {
+        "status": "ok", "mode": mode,
+        "entities_created": entities_created,
+        "entities_skipped": entities_skipped,
+        "relations_created": relations_created,
+        "relations_skipped": relations_skipped,
+    }
 
 
 # ─── tools ──────────────────────────────────────────────────────────────────
@@ -720,23 +871,23 @@ def memory_add(
     extra_json = json.dumps(merged, ensure_ascii=False)
     ts = _now()
 
-    existing = _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid}))
-    if existing:
-        db_exec(
-            """MATCH (e:Entity {id: $id})
-               SET e.name = $name, e.type = $type,
-                   e.descr = $descr, e.extra = $extra, e.updated_at = $ts""",
-            {"id": eid, "name": name, "type": type, "descr": description, "extra": extra_json, "ts": ts},
-        )
-        return f"Aktualisiert: [{type}] {name}"
-
+    existed = bool(_rows(
+        db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})
+    ))
     db_exec(
-        """CREATE (:Entity {id: $id, name: $name, type: $type,
-                            descr: $descr, extra: $extra,
-                            created_at: $ts, updated_at: $ts})""",
-        {"id": eid, "name": name, "type": type, "descr": description, "extra": extra_json, "ts": ts},
+        """MERGE (e:Entity {id: $id})
+           ON CREATE SET e.name = $name, e.type = $type, e.descr = $descr,
+                         e.extra = $extra, e.context = $ctx,
+                         e.created_at = $ts, e.updated_at = $ts
+           ON MATCH  SET e.name = $name, e.type = $type, e.descr = $descr,
+                         e.extra = $extra, e.context = $ctx,
+                         e.updated_at = $ts""",
+        {"id": eid, "name": name, "type": type,
+         "descr": description, "extra": extra_json,
+         "ctx": context or "", "ts": ts},
     )
-    return f"Angelegt: [{type}] {name}"
+    verb = "Aktualisiert" if existed else "Angelegt"
+    return f"{verb}: [{type}] {name}"
 
 
 @mcp.tool()
@@ -746,25 +897,36 @@ def memory_relate(
     to_name: str,
     extra: Optional[dict] = None,
 ) -> str:
-    """Beziehung zwischen zwei Entities erstellen.
+    """Beziehung zwischen zwei bestehenden Entities erstellen.
 
     Beispiele für relation: NUTZT | ARBEITET_AN | GELÖST_DURCH | HÄNGT_AB_VON |
                              LÄUFT_AUF | INTEGRIERT_MIT | GETROFFEN_VON | BEVORZUGT
-    Entities werden automatisch angelegt falls noch nicht vorhanden.
+    Beide Entities müssen zuvor via memory_add angelegt sein — sonst Fehler,
+    damit Tippfehler den Graphen nicht mit Stub-Einträgen verschmutzen.
     """
     from_id = _id(from_name)
     to_id = _id(to_name)
     extra_json = json.dumps(extra or {}, ensure_ascii=False)
     ts = _now()
 
-    for eid, ename in [(from_id, from_name), (to_id, to_name)]:
-        if not _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})):
+    found = {
+        r[0] for r in _rows(
             db_exec(
-                """CREATE (:Entity {id: $id, name: $name, type: 'Unknown',
-                                   descr: '', extra: '{}',
-                                   created_at: $ts, updated_at: $ts})""",
-                {"id": eid, "name": ename, "ts": ts},
+                "MATCH (e:Entity) WHERE e.id IN [$fid, $tid] RETURN e.id",
+                {"fid": from_id, "tid": to_id},
             )
+        )
+    }
+    missing = []
+    if from_id not in found:
+        missing.append(from_name)
+    if to_id not in found:
+        missing.append(to_name)
+    if missing:
+        return (
+            f"Entity nicht gefunden: {', '.join(missing)}. "
+            f"Lege sie zuerst via memory_add an."
+        )
 
     existing = _rows(
         db_exec(
@@ -791,22 +953,25 @@ def memory_search(query: str, limit: int = 15, context: str = "") -> str:
     context: "work" | "private" | "" (kein Filter, default)
     """
     q = query.lower()
+    params: dict = {"q": q, "lim": limit}
+    if context:
+        params["ctx"] = context
     rows = _rows(
         db_exec(
-            """MATCH (e:Entity)
-               WHERE lower(e.name) CONTAINS $q OR lower(e.descr) CONTAINS $q
-               RETURN e.type, e.name, e.descr, e.updated_at, e.extra
+            f"""MATCH (e:Entity)
+               WHERE (lower(e.name) CONTAINS $q OR lower(e.descr) CONTAINS $q)
+                 {_ctx_clause('e', context)}
+               RETURN e.type, e.name, e.descr, e.updated_at, e.context
                ORDER BY e.updated_at DESC
                LIMIT $lim""",
-            {"q": q, "lim": limit},
+            params,
         )
     )
-    rows = [r for r in rows if _ctx_match(r[4], context)]
     if not rows:
         return "Keine Ergebnisse."
     lines = []
     for r in rows:
-        ctx_tag = json.loads(r[4] or "{}").get("context", "")
+        ctx_tag = r[4] or ""
         ctx_str = f" `[{ctx_tag}]`" if ctx_tag else ""
         lines.append(f"[{r[0]}] **{r[1]}**{ctx_str}: {r[2][:100]}  _(aktualisiert {r[3][:10]})_")
     return "\n".join(lines)
@@ -823,34 +988,36 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
     """
     ctx_label = f" [{context}]" if context else ""
     sections: list[str] = []
+    ctx_param: dict = {"ctx": context} if context else {}
 
     if topic:
         q = topic.lower()
         rows = _rows(
             db_exec(
-                """MATCH (e:Entity)
-                   WHERE lower(e.name) CONTAINS $q OR lower(e.descr) CONTAINS $q
-                   RETURN e.type, e.name, e.descr, e.updated_at, e.extra
+                f"""MATCH (e:Entity)
+                   WHERE (lower(e.name) CONTAINS $q OR lower(e.descr) CONTAINS $q)
+                     {_ctx_clause('e', context)}
+                   RETURN e.type, e.name, e.descr, e.updated_at
                    ORDER BY e.updated_at DESC
                    LIMIT 20""",
-                {"q": q},
+                {"q": q, **ctx_param},
             )
         )
-        rows = [r for r in rows if _ctx_match(r[4], context)]
         if rows:
             lines = [f"[{r[0]}] {r[1]}: {r[2][:100]}" for r in rows]
             sections.append(f"## Kontext: {topic}{ctx_label}\n" + "\n".join(lines))
 
         rel_rows = _rows(
             db_exec(
-                """MATCH (a:Entity)-[r:Rel]->(b:Entity)
-                   WHERE lower(a.name) CONTAINS $q OR lower(b.name) CONTAINS $q
-                   RETURN a.name, r.name, b.name, a.extra, b.extra
+                f"""MATCH (a:Entity)-[r:Rel]->(b:Entity)
+                   WHERE (lower(a.name) CONTAINS $q OR lower(b.name) CONTAINS $q)
+                     {_ctx_clause('a', context)}
+                     {_ctx_clause('b', context)}
+                   RETURN a.name, r.name, b.name
                    LIMIT 15""",
-                {"q": q},
+                {"q": q, **ctx_param},
             )
         )
-        rel_rows = [r for r in rel_rows if _ctx_match(r[3], context) and _ctx_match(r[4], context)]
         if rel_rows:
             lines = [f"{r[0]} -[{r[1]}]-> {r[2]}" for r in rel_rows]
             sections.append("### Relationen\n" + "\n".join(lines))
@@ -858,18 +1025,20 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
     # Offene Tasks
     task_rows = _rows(
         db_exec(
-            """MATCH (e:Entity {type: 'Task'})
+            f"""MATCH (e:Entity {{type: 'Task'}})
+               {_ctx_clause('e', context, where=True)}
                RETURN e.name, e.descr, e.extra, e.updated_at
                ORDER BY e.updated_at DESC
                LIMIT 10""",
-            {},
+            ctx_param,
         )
     )
     tasks = []
     for r in task_rows:
-        if not _ctx_match(r[2], context):
-            continue
-        extra = json.loads(r[2] or "{}")
+        try:
+            extra = json.loads(r[2] or "{}")
+        except json.JSONDecodeError:
+            extra = {}
         status = extra.get("status", "offen")
         if status.lower() not in ("erledigt", "done", "closed"):
             tasks.append(f"- [{status}] **{r[0]}**: {r[1][:80]}")
@@ -879,18 +1048,20 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
     # Aktive Projekte
     proj_rows = _rows(
         db_exec(
-            """MATCH (e:Entity {type: 'Project'})
+            f"""MATCH (e:Entity {{type: 'Project'}})
+               {_ctx_clause('e', context, where=True)}
                RETURN e.name, e.descr, e.extra, e.updated_at
                ORDER BY e.updated_at DESC
                LIMIT 8""",
-            {},
+            ctx_param,
         )
     )
     projects = []
     for r in proj_rows:
-        if not _ctx_match(r[2], context):
-            continue
-        extra = json.loads(r[2] or "{}")
+        try:
+            extra = json.loads(r[2] or "{}")
+        except json.JSONDecodeError:
+            extra = {}
         status = extra.get("status", "aktiv")
         projects.append(f"- [{status}] **{r[0]}**: {r[1][:80]}")
     if projects:
@@ -899,15 +1070,15 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
     # Letzte Entscheidungen / Lösungen / Probleme
     recent_rows = _rows(
         db_exec(
-            """MATCH (e:Entity)
+            f"""MATCH (e:Entity)
                WHERE e.type IN ['Problem', 'Solution', 'Decision']
-               RETURN e.type, e.name, e.descr, e.updated_at, e.extra
+                 {_ctx_clause('e', context)}
+               RETURN e.type, e.name, e.descr, e.updated_at
                ORDER BY e.updated_at DESC
                LIMIT 8""",
-            {},
+            ctx_param,
         )
     )
-    recent_rows = [r for r in recent_rows if _ctx_match(r[4], context)]
     if recent_rows:
         lines = [f"- [{r[0]}] **{r[1]}**: {r[2][:80]}  _({r[3][:10]})_" for r in recent_rows]
         sections.append(f"## Letzte Entscheidungen & Lösungen{ctx_label}\n" + "\n".join(lines))
@@ -924,32 +1095,38 @@ def memory_list(type: str = "", context: str = "") -> str:
     Bekannte Typen: Person, Project, Task, Tool, Problem, Solution, Decision, Preference, Topic
     context: "work" | "private" | "" (alles, default)
     """
+    params: dict = {}
+    if context:
+        params["ctx"] = context
     if type:
+        params["type"] = type
         rows = _rows(
             db_exec(
-                """MATCH (e:Entity {type: $type})
-                   RETURN e.name, e.descr, e.updated_at, e.extra
+                f"""MATCH (e:Entity {{type: $type}})
+                   {_ctx_clause('e', context, where=True)}
+                   RETURN e.name, e.descr, e.updated_at, e.context
                    ORDER BY e.name""",
-                {"type": type},
+                params,
             )
         )
-        rows = [r for r in rows if _ctx_match(r[3], context)]
         if not rows:
             return f"Keine Einträge vom Typ '{type}'" + (f" mit context='{context}'" if context else "") + "."
         lines = []
         for r in rows:
-            ctx_tag = json.loads(r[3] or "{}").get("context", "")
+            ctx_tag = r[3] or ""
             ctx_str = f" `[{ctx_tag}]`" if ctx_tag else ""
             lines.append(f"- **{r[0]}**{ctx_str}: {r[1][:80]}  _({r[2][:10]})_")
         return "\n".join(lines)
 
     rows = _rows(
         db_exec(
-            "MATCH (e:Entity) RETURN e.type, e.name, e.descr, e.updated_at, e.extra ORDER BY e.type, e.name",
-            {},
+            f"""MATCH (e:Entity)
+               {_ctx_clause('e', context, where=True)}
+               RETURN e.type, e.name, e.descr, e.updated_at, e.context
+               ORDER BY e.type, e.name""",
+            params,
         )
     )
-    rows = [r for r in rows if _ctx_match(r[4], context)]
     if not rows:
         return "Keine Einträge."
 
@@ -959,7 +1136,7 @@ def memory_list(type: str = "", context: str = "") -> str:
         if r[0] != current_type:
             current_type = r[0]
             lines.append(f"\n### {current_type}")
-        ctx_tag = json.loads(r[4] or "{}").get("context", "")
+        ctx_tag = r[4] or ""
         ctx_str = f" `[{ctx_tag}]`" if ctx_tag else ""
         lines.append(f"- **{r[1]}**{ctx_str}: {r[2][:80]}")
     return "\n".join(lines).strip()
