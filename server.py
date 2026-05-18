@@ -36,11 +36,17 @@ _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 _KG_URL = os.getenv("KG_PUBLIC_URL", "http://localhost:3456")
 
 SETUP_SCRIPT = r"""#!/usr/bin/env bash
+# ai-rem Setup - plattformunabhaengig (macOS + Linux).
+# Abhaengigkeiten: bash, curl, python3, claude CLI.
 set -e
 KG_URL="__KG_URL__"
-CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+CLAUDE_HOME="$HOME/.claude"
+HOOK_PATH="$CLAUDE_HOME/hooks/ai-rem-bootstrap.py"
 
 echo "=== ai-rem Setup ==="
+
+command -v python3 >/dev/null 2>&1 || { echo "✗ python3 fehlt - bitte installieren"; exit 1; }
+command -v curl    >/dev/null 2>&1 || { echo "✗ curl fehlt - bitte installieren"; exit 1; }
 
 # Alte kg-memory Registrierung entfernen
 if claude mcp list 2>/dev/null | grep -q "kg-memory"; then
@@ -56,18 +62,93 @@ else
     echo "✓ MCP registriert (ai-rem)"
 fi
 
-# settings.json Allowlist updaten
-SETTINGS="$HOME/.claude/settings.json"
-if [ -f "$SETTINGS" ] && grep -q "mcp__kg-memory__" "$SETTINGS"; then
-    sed -i 's/mcp__kg-memory__/mcp__ai-rem__/g' "$SETTINGS"
-    echo "✓ settings.json Allowlist migriert (kg-memory → ai-rem)"
-fi
+mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
 
-# ai-rem Permissions in settings.json eintragen (kein Prompt mehr nötig)
-python3 - << 'PYEOF'
-import json, os
+# SessionStart-Hook: Python, damit kein jq/sed-Dialekt-Problem.
+cat > "$HOOK_PATH" << 'PYHOOK'
+#!/usr/bin/env python3
+# SessionStart hook: prueft ai-rem-Erreichbarkeit via memory_status.
+import json
+import os
+import re
+import sys
+import urllib.request
+
+ENDPOINT = os.environ.get("AI_REM_ENDPOINT", "__KG_URL__/mcp")
+TIMEOUT = 5
+
+
+def emit(msg):
+    print(json.dumps({"systemMessage": msg, "suppressOutput": True}))
+    sys.exit(0)
+
+
+def post(body, sid=None):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if sid:
+        headers["mcp-session-id"] = sid
+    req = urllib.request.Request(
+        ENDPOINT, data=json.dumps(body).encode(), headers=headers, method="POST"
+    )
+    return urllib.request.urlopen(req, timeout=TIMEOUT)
+
+
+try:
+    resp = post({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "claude-code-bootstrap", "version": "1.0"}},
+    })
+    sid = resp.headers.get("mcp-session-id")
+    resp.read()
+    if not sid:
+        emit("ai-rem: nicht erreichbar")
+
+    try:
+        post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=sid).read()
+    except Exception:
+        pass
+
+    resp = post({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "memory_status", "arguments": {}},
+    }, sid=sid)
+    raw = resp.read().decode()
+    m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
+    body = m.group(1) if m else raw
+    obj = json.loads(body)
+    text = obj.get("result", {}).get("content", [{}])[0].get("text", "")
+    if text:
+        emit(text)
+except Exception:
+    pass
+
+emit("ai-rem: nicht erreichbar")
+PYHOOK
+# __KG_URL__ wird vom Server bereits beim Rendern des SETUP_SCRIPT ersetzt
+# (Python-seitiges .replace), daher steht im Hook bereits die echte URL.
+chmod +x "$HOOK_PATH"
+echo "✓ SessionStart-Hook: $HOOK_PATH"
+
+# settings.json: Allowlist migrieren, Permissions, SessionStart-Hook, autoMemoryEnabled
+HOOK_PATH="$HOOK_PATH" python3 - << 'PYEOF'
+import json
+import os
+
 path = os.path.expanduser("~/.claude/settings.json")
-perms = [
+hook_path = os.environ["HOOK_PATH"]
+data = json.load(open(path)) if os.path.exists(path) else {}
+
+# Alte kg-memory Allow-Eintraege migrieren
+perms = data.setdefault("permissions", {})
+allow = perms.setdefault("allow", [])
+allow[:] = [p.replace("mcp__kg-memory__", "mcp__ai-rem__") for p in allow]
+
+# ai-rem Permissions ergaenzen
+needed = [
     "mcp__ai-rem__memory_status",
     "mcp__ai-rem__memory_get_context",
     "mcp__ai-rem__memory_search",
@@ -77,45 +158,92 @@ perms = [
     "mcp__ai-rem__memory_relate",
     "mcp__ai-rem__memory_delete",
 ]
-data = json.load(open(path)) if os.path.exists(path) else {}
-allow = data.setdefault("permissions", {}).setdefault("allow", [])
-added = [p for p in perms if p not in allow]
+added = [p for p in needed if p not in allow]
 allow.extend(added)
+
+# SessionStart-Hook idempotent eintragen
+hooks = data.setdefault("hooks", {})
+sessions = hooks.setdefault("SessionStart", [])
+group = next((g for g in sessions if g.get("matcher") == "*"), None)
+if group is None:
+    group = {"matcher": "*", "hooks": []}
+    sessions.append(group)
+group.setdefault("hooks", [])
+hook_added = False
+if not any(h.get("command") == hook_path for h in group["hooks"]):
+    group["hooks"].append({"type": "command", "command": hook_path, "timeout": 10})
+    hook_added = True
+
+# Datei-Auto-Memory abschalten (alles laeuft ueber ai-rem)
+auto_changed = data.get("autoMemoryEnabled") is not False
+data["autoMemoryEnabled"] = False
+
 json.dump(data, open(path, "w"), indent=2)
-print(f"✓ {len(added)} ai-rem Permissions hinzugefügt" if added else "✓ ai-rem Permissions bereits vorhanden")
+parts = []
+if added:        parts.append(f"+{len(added)} Permissions")
+if hook_added:   parts.append("SessionStart-Hook")
+if auto_changed: parts.append("autoMemoryEnabled=false")
+print("✓ settings.json: " + (", ".join(parts) if parts else "bereits aktuell"))
 PYEOF
 
-# CLAUDE.md
-mkdir -p "$HOME/.claude"
-if grep -q "Knowledge Graph Memory" "$CLAUDE_MD" 2>/dev/null; then
-    echo "✓ CLAUDE.md bereits konfiguriert"
-else
-    cat >> "$CLAUDE_MD" << 'CMEOF'
+# CLAUDE.md aktualisieren - bestehenden Block (alt oder neu) ersetzen
+python3 - << 'PYEOF'
+import os
+import re
 
+path = os.path.expanduser("~/.claude/CLAUDE.md")
+new_block = '''
 ## Knowledge Graph Memory (ai-rem)
-PFLICHT beim Start jeder Sitzung – vor der ersten inhaltlichen Antwort:
-1. `memory_status()` aufrufen → Ergebnis einzeilig ausgeben, z.B. "ai-rem: 42 Entities, 18 Relationen"
-2. `memory_get_context()` aufrufen → Kontext laden, dort aufgeführte Routinen & Anweisungen befolgen, Kontext als Arbeitsgrundlage nutzen.
+ai-rem ist die einzige Wissensquelle für persistenten Kontext. Verbindung wird beim Sitzungsstart per SessionStart-Hook geprüft (Statuszeile "ai-rem: N Entities, M Relationen" oder "nicht erreichbar"). Datei-basierte Auto-Memory ist deaktiviert — alle Memory-Verhalten laufen über ai-rem.
 
-Beim Speichern: context="private". Globale Entities ohne context-Tag.
-Proaktiv speichern: Tasks, Entscheidungen, Probleme, Projekte, Tools.
-CMEOF
-    echo "✓ CLAUDE.md aktualisiert"
-fi
+### Kontext holen
+`memory_get_context` für offene Tasks / aktive Projekte / letzte Einträge, `memory_search` für gezielte Themen. Nur wenn die Aufgabe wirklich früheres Wissen braucht.
 
-# Alten Slash-Command entfernen
-OLD_CMD="$HOME/.claude/commands/setup-ai-rem.md"
-[ -f "$OLD_CMD" ] && rm "$OLD_CMD"
-OLD_CMD_LEGACY="$HOME/.claude/commands/setup-kg-memory.md"
-[ -f "$OLD_CMD_LEGACY" ] && rm "$OLD_CMD_LEGACY" && echo "✓ Alter /setup-kg-memory Command entfernt"
+### Speichern – proaktiv, ohne Nachfrage
+Tool: `memory_add` (+ `memory_relate` für Verknüpfungen). Vor neuem Eintrag immer prüfen, ob es eine bestehende Entity gibt — updaten statt duplizieren.
 
-# Neuen Slash-Command anlegen
-mkdir -p "$HOME/.claude/commands"
-curl -sf "$KG_URL/cmd" > "$HOME/.claude/commands/setup-ai-rem.md"
+**Entity-Typen** (ai-rem kennt: Person | Project | Task | Tool | Problem | Solution | Decision | Preference | Topic):
+- **Preference** — wer der User ist, Präferenzen, Arbeitsweisen, Feedback. Korrekturen UND bestätigte Ansätze ("genau so weitermachen") zählen — auch quiet confirmations. Feedback-Einträge mit Name-Präfix `Feedback: …`. Body bei Regeln: Regel + **Why:** + **How to apply:**.
+- **Project** — laufende Arbeit, Ziele, Deadlines. Relative Daten in absolute umrechnen ("Donnerstag" → "2026-05-21").
+- **Topic** — Pointer auf externe Systeme / Referenzen (Linear-Projekt, Slack-Channel, Grafana-Dashboard, Doku-Repo, …).
+- **Person** — Stakeholder, Team-Mitglieder, Kontakte.
+- **Task / Decision / Problem / Solution / Tool** — Strukturen für offene Aufgaben, Architekturentscheidungen, Bugs/Vorfälle, Lösungen, Tools.
+
+### Nicht speichern
+Code-Patterns / Architektur / Pfade (aus Code ableitbar), git-Historie (git log/blame ist autoritativ), Fix-Rezepte (Code + Commit haben Kontext), ephemere Sitzungsdetails. Gilt **auch wenn der User darum bittet** — bei "Speicher die PR-Liste" rückfragen, was *überraschend / nicht-offensichtlich* war.
+
+### Vor Empfehlung aus Memory
+Wenn eine Erinnerung Datei-Pfade, Funktions- oder Flag-Namen nennt: verifizieren (existiert noch?). Memory ist Behauptung über damals, nicht über jetzt. Bei Konflikt: dem aktuellen Code-Stand vertrauen, Memory updaten.
+
+### Konventionen
+- `context="private"` für private Inhalte; globale Entities ohne context-Tag.
+- Verwandte Entities verlinken via `memory_relate`.
+'''
+
+os.makedirs(os.path.dirname(path), exist_ok=True)
+text = open(path).read() if os.path.exists(path) else ""
+
+# Bestehenden ai-rem-Block (alt oder neu) entfernen
+pattern = re.compile(r"\n## Knowledge Graph Memory \(ai-rem\)[\s\S]*?(?=\n## |\Z)")
+text, n = pattern.subn("", text)
+if not text.endswith("\n"):
+    text += "\n"
+text += new_block
+
+open(path, "w").write(text)
+print("✓ CLAUDE.md " + ("Block ersetzt" if n else "Block angelegt"))
+PYEOF
+
+# Legacy-Slash-Command entfernen
+LEGACY="$CLAUDE_HOME/commands/setup-kg-memory.md"
+[ -f "$LEGACY" ] && rm "$LEGACY" && echo "✓ Alter /setup-kg-memory Command entfernt"
+
+# Slash-Command refresh
+curl -sf "$KG_URL/cmd" > "$CLAUDE_HOME/commands/setup-ai-rem.md"
 echo "✓ /setup-ai-rem Command angelegt"
 
 echo ""
-echo "Fertig. Claude Code neu starten — dann ist ai-rem aktiv."
+echo "Fertig. Claude Code neu starten - dann ist ai-rem aktiv."
 echo "Auf jeder neuen Maschine: bash <(curl -s __KG_URL__/setup)"
 """.replace("__KG_URL__", _KG_URL)
 
