@@ -246,6 +246,88 @@ mkdir -p "$CLAUDE_HOME/commands/ai-rem"
 curl -sf "$KG_URL/cmd/prefedit" > "$CLAUDE_HOME/commands/ai-rem/prefedit.md"
 echo "✓ /ai-rem:prefedit Command angelegt"
 
+# Preferences & Tool-Entities direkt via MCP API anlegen (kein Claude-Token-Verbrauch)
+KG_URL="$KG_URL" python3 - << 'PYSETUP'
+import json, os, re, sys, urllib.request
+
+BASE    = os.environ["KG_URL"]
+MCP_URL = BASE + "/mcp"
+_SID    = None
+
+def _post(body, sid=None):
+    hdrs = {"Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream"}
+    if sid:
+        hdrs["mcp-session-id"] = sid
+    req = urllib.request.Request(
+        MCP_URL, data=json.dumps(body).encode(), headers=hdrs, method="POST")
+    return urllib.request.urlopen(req, timeout=10)
+
+def _parse(resp):
+    raw = resp.read().decode()
+    m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
+    try:
+        obj = json.loads(m.group(1) if m else raw)
+        return obj.get("result", {}).get("content", [{}])[0].get("text", "")
+    except Exception:
+        return ""
+
+def _session():
+    global _SID
+    if _SID: return _SID
+    resp = _post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                  "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                             "clientInfo": {"name": "setup", "version": "1.0"}}})
+    _SID = resp.headers.get("mcp-session-id")
+    resp.read()
+    try: _post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=_SID).read()
+    except Exception: pass
+    return _SID
+
+def _tool(name, args):
+    resp = _post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": name, "arguments": args}}, sid=_session())
+    return _parse(resp)
+
+ENTITIES = [
+    {"name": "session-start-tool-awareness", "type": "Preference", "context": "private",
+     "pinned": True,
+     "description": "tools-mcp: tool_md_to_pdf (md→PDF, designs: default2/default), tool_pdf_to_text, tool_head_lines, tool_echo, tool_pipeline_run, tool_list_scripts | MCP: paperless (Dok-Mgmt), ai-rem (KG) | Skills: /setup-ai-rem"},
+    {"name": "tool_md_to_pdf", "type": "Tool", "context": "private",
+     "description": "Markdown → PDF via WeasyPrint. Inputs: md_path (required), output_path (optional), design (default, default: default2). Output: pdf_path, size_bytes."},
+    {"name": "tool_list_scripts", "type": "Tool", "context": "private",
+     "description": "Meta-Tool: listet alle registrierten tools-mcp Scripts mit Manifest-Metadaten (name, description, inputs, requires, ai_rem_entity)."},
+    {"name": "skill_example_4", "type": "Tool", "context": "private",
+     "description": "Slash-Command /example-hook: Example hook skill."},
+    {"name": "skill_setup_ai_rem", "type": "Tool", "context": "private",
+     "description": "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten."},
+    {"name": "skill_ai_rem_prefedit", "type": "Tool", "context": "private",
+     "description": "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager — pin/unpin, Context ändern, sort_order setzen, löschen. Nutzt memory_preference_update und memory_delete."},
+    {"name": "skill_example_1", "type": "Tool", "context": "private",
+     "description": "Skill /example-skill:doc: Example skill."},
+    {"name": "skill_example_2", "type": "Tool", "context": "private",
+     "description": "Skill /example-skill:pres: Example skill."},
+    {"name": "skill_example_3", "type": "Tool", "context": "private",
+     "description": "Skill /example-skill:ibcs: Example skill."},
+    {"name": "mcp_paperless", "type": "Tool", "context": "private",
+     "description": "MCP-Server paperless: Paperless-NGX. Tools: search_documents, get/upload/update/delete_document, create_letter(_from_md), list_correspondents/document_types/tags."},
+    {"name": "mcp_example_rag", "type": "Tool", "context": "private",
+     "description": "MCP-Server example-rag: RAG system."},
+    {"name": "mcp_playwright", "type": "Tool", "context": "private",
+     "description": "MCP-Server playwright: Browser-Automation – navigieren, Screenshots, Formulare ausfüllen, Web-Scraping."},
+    {"name": "mcp_github", "type": "Tool", "context": "private",
+     "description": "MCP-Server github: GitHub API – Issues, Pull Requests, Repositories, Commits, Actions verwalten."},
+]
+
+try:
+    for e in ENTITIES:
+        _tool("memory_add", e)
+    _tool("memory_preference_update", {"name": "session-start-tool-awareness", "sort_order": 1})
+    print(f"✓ {len(ENTITIES)} Preferences & Tool-Entities aktualisiert")
+except Exception as ex:
+    print(f"⚠ Entities: {ex}")
+PYSETUP
+
 echo ""
 echo "Fertig. Claude Code neu starten - dann ist ai-rem aktiv."
 echo "Auf jeder neuen Maschine: bash <(curl -s __KG_URL__/setup)"
@@ -254,44 +336,20 @@ echo "Auf jeder neuen Maschine: bash <(curl -s __KG_URL__/setup)"
 CMD_MD = """\
 # ai-rem einrichten
 
-## Schritt 1 – MCP-Server registrieren
+Führe auf jeder neuen Maschine aus:
 
 ```bash
 bash <(curl -s __KG_URL__/setup)
 ```
 
-Das Skript registriert den ai-rem MCP-Server und konfiguriert CLAUDE.md.
-Auf jeder neuen Maschine: `bash <(curl -s __KG_URL__/setup)`
+Das Skript erledigt automatisch:
+- MCP-Server registrieren
+- SessionStart-Hook + settings.json konfigurieren
+- CLAUDE.md aktualisieren
+- Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`)
+- Preferences & Tool-Entities im Knowledge Graph anlegen
 
-## Schritt 2 – Gepinnte Tool-Übersicht anlegen
-
-Lege folgende Preference in ai-rem an [type="Preference", context="private", pinned=True]:
-
-Name: `session-start-tool-awareness`
-Beschreibung:
-```
-tools-mcp: tool_md_to_pdf (md→PDF, designs: default2/default), tool_pdf_to_text, tool_head_lines, tool_echo, tool_pipeline_run, tool_list_scripts | MCP: paperless (Dok-Mgmt), ai-rem (KG) | Skills: /setup-ai-rem
-```
-
-Danach Position fixieren, damit sie immer ganz oben landet:
-`memory_preference_update(name="session-start-tool-awareness", sort_order=1)`
-
-## Schritt 3 – Tool-Entities für semantische Suche anlegen
-
-Lege folgende Entities an [type="Tool", context="private"]:
-
-- `tool_md_to_pdf`: "Markdown → PDF via WeasyPrint. Inputs: md_path (required), output_path (optional), design (default, default: default2). Output: pdf_path, size_bytes."
-- `tool_list_scripts`: "Meta-Tool: listet alle registrierten tools-mcp Scripts mit Manifest-Metadaten (name, description, inputs, requires, ai_rem_entity)."
-- `skill_example_4`: "Slash-Command /example-hook: Example hook skill."
-- `skill_setup_ai_rem`: "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten (MCP registrieren, CLAUDE.md konfigurieren, Tool-Entities anlegen)."
-- `skill_ai_rem_prefedit`: "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager — pin/unpin, Context ändern, sort_order setzen, löschen. Nutzt memory_preference_update(name, context, pinned, sort_order) und memory_delete."
-- `skill_example_1`: "Skill /example-skill:doc: Example skill."
-- `skill_example_2`: "Skill /example-skill:pres: Example skill."
-- `skill_example_3`: "Skill /example-skill:ibcs: Example skill."
-- `mcp_paperless`: "MCP-Server paperless: Paperless-NGX. Tools: search_documents, get/upload/update/delete_document, create_letter(_from_md), list_correspondents/document_types/tags, create_tag/correspondent/document_type."
-- `mcp_example_rag`: "MCP-Server example-rag: RAG system."
-- `mcp_playwright`: "MCP-Server playwright: Browser-Automation – navigieren, Screenshots, Formulare ausfüllen, Web-Scraping."
-- `mcp_github`: "MCP-Server github: GitHub API – Issues, Pull Requests, Repositories, Commits, Actions verwalten."
+Danach Claude Code neu starten — fertig.
 """.replace("__KG_URL__", _KG_URL)
 
 PREFEDIT_CMD_MD = """\
