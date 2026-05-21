@@ -27,10 +27,10 @@ Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontex
 
 | Tool | Beschreibung |
 |---|---|
-| `memory_add(name, type, description, context)` | Entity anlegen oder aktualisieren |
+| `memory_add(name, type, description, context, pinned)` | Entity anlegen oder aktualisieren. `pinned=True` → Preference erscheint immer ganz oben in `get_context` |
 | `memory_relate(from, relation, to)` | Beziehung zwischen zwei Entities erstellen |
 | `memory_search(query, context)` | Volltextsuche über Name + Beschreibung |
-| `memory_get_context(topic, context)` | Relevanten Subgraph laden (Tasks, Projekte, Decisions) |
+| `memory_get_context(topic, context)` | Relevanten Subgraph laden (Tasks, Projekte, Decisions, Preferences) |
 | `memory_list(type, context)` | Alle Entities auflisten |
 | `memory_get_relations(name)` | Alle Beziehungen einer Entity |
 | `memory_delete(name)` | Entity und Relationen entfernen |
@@ -77,9 +77,10 @@ Umgebungsvariablen werden aus einer `.env`-Datei im Compose-Verzeichnis geladen:
 ```env
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Öffentliche URL des Servers
 PORT=3456                                # TCP-Port (Standard: 3456)
-KG_DATA_PATH=./data                      # Pfad zur Datenbank
-KG_BACKUP_PATH=./backups                 # Pfad für Backup-Dateien
+KUZU_DB_PATH=/data/kg.db                 # Pfad zur Datenbank
+BACKUP_DIR=/backups                      # Pfad für Backup-Dateien
 MAX_BACKUPS=10                           # Maximale Anzahl aufbewahrter Backups
+KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 ```
 
 ---
@@ -114,15 +115,14 @@ Führe aus: bash <(curl -s http://<SERVER_IP>:3456/setup)
 
 Das Skript erledigt automatisch:
 1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren
-2. `~/.claude/CLAUDE.md` — Startup-Instruction anlegen
-3. `~/.claude/commands/setup-ai-rem.md` — lokalen Slash-Command anlegen
+2. `~/.claude/CLAUDE.md` — KG-Memory-Block anlegen oder aktualisieren (Entity-Typen, Speicherregeln)
+3. `~/.claude/settings.json` — Permissions für alle ai-rem-Tools, `autoMemoryEnabled: false`
+4. `~/.claude/hooks/ai-rem-bootstrap.py` — SessionStart-Hook: prüft Verbindung und zeigt Statuszeile (`"ai-rem: N Entities, M Relationen"` oder `"nicht erreichbar"`)
+5. `~/.claude/commands/setup-ai-rem.md` — lokalen Slash-Command `/setup-ai-rem` anlegen
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`.
 
-Der Slash-Command `/setup-ai-rem` ist ein **lokaler Shortcut** — er existiert nur auf Maschinen,
-auf denen das Setup bereits gelaufen ist. Wer `~/.claude/commands/` per Dotfiles/Syncthing
-synchronisiert, kann auf weiteren Maschinen `/setup-ai-rem` nutzen — alle anderen verwenden
-einfach den curl-Befehl.
+Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
 
 ### Update nach Code-Änderungen
 
@@ -152,10 +152,15 @@ ai-rem/
 
 ## CLAUDE.md Strategie
 
-Die CLAUDE.md-Dateien sind minimal gehalten — sie enthalten nur den Verweis auf ai-rem.
-Alles andere (Präferenzen, LAN-Konfiguration, Projektinfos, Entscheidungen) lebt im Graph.
+Der `## Knowledge Graph Memory (ai-rem)`-Block in `~/.claude/CLAUDE.md` wird vom Setup-Skript angelegt und bei jedem erneuten Setup auf den aktuellen Stand gebracht. Er enthält:
 
-| Datei | Inhalt |
+- **Was zu speichern ist** — Entity-Typ pro Kategorie (`Preference` für Feedback/Arbeitsweisen, `Project`, `Task`, `Decision`, `Problem`, `Solution`, `Tool`, `Topic`, `Person`)
+- **Was nicht zu speichern ist** — Code-Patterns, Architektur, Pfade (aus Code ableitbar), git-Historie, Fix-Rezepte, ephemere Sitzungsdetails — auch wenn der User explizit darum bittet
+- **Vor Empfehlung aus Memory** — Pfade, Funktions- und Flag-Namen verifizieren bevor empfohlen; Memory ist Behauptung über damals, nicht über jetzt
+
+Projekt-spezifische CLAUDE.md-Dateien setzen den Standard-Context:
+
+| Datei | Zweck |
 |---|---|
-| `~/.claude/CLAUDE.md` | Startup: `memory_get_context()`, Standard-Context `"private"` |
-| `work-repo/CLAUDE.md` | Startup: `memory_get_context(context="work")`, Standard-Context `"work"` |
+| `~/.claude/CLAUDE.md` | Globale Regeln + KG-Memory-Block (verwaltet vom Setup-Skript) |
+| `work-repo/CLAUDE.md` | `context="work"` als Standard für Arbeits-Repos |
