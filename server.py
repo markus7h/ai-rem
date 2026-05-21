@@ -297,27 +297,155 @@ Lege folgende Entities an [type="Tool", context="private"]:
 PREFEDIT_CMD_MD = """\
 # Preferences verwalten
 
-Öffne den interaktiven Preferences-Manager für ai-rem.
+Führe aus — das Tool läuft direkt im Terminal, kein Token-Verbrauch:
 
-## Ablauf
+```bash
+python3 <(curl -fsSL __KG_URL__/tools/pref-tui.py)
+```
 
-1. Lade alle Preferences mit `memory_list(type="Preference")` und zeige sie als nummerierte Tabelle:
-   `Nr | 📌 | #Pos | Name | Context | Datum`
-   - 📌 = gepinnt; #Pos = sort_order (leer = automatisch nach Datum)
-2. Frage den User per AskUserQuestion was er tun möchte. Optionen:
-   - **Pin / Unpin** — wählt eine Nummer, togglet den pinned-Status
-   - **Context ändern** — wählt Nummer + neuen Context (work / private / global)
-   - **Position setzen** — wählt Nummer + neue Positionsnummer (1 = ganz oben, leer = auto)
-   - **Löschen** — wählt eine Nummer, bestätigt, löscht via `memory_delete`
-   - **Fertig** — beendet den Manager
-3. Führe die Aktion mit `memory_preference_update` (oder `memory_delete`) aus.
-4. Zeige die aktualisierte Tabelle und wiederhole ab Schritt 2.
+Befehle im Tool: `p <#>` pin/unpin · `c <#> <work|private|global>` context · `s <#> <pos>` position · `d <#>` löschen · `q` beenden
+""".replace("__KG_URL__", _KG_URL)
 
-## Regeln
-- `memory_preference_update` für alle Änderungen an context / pinned / sort_order verwenden — es überschreibt nur die explizit gesetzten Felder
-- Beim Löschen immer kurz bestätigen lassen bevor `memory_delete` aufgerufen wird
-- Tabelle nach jeder Aktion neu laden und anzeigen
-"""
+PREF_TUI_SCRIPT = r'''#!/usr/bin/env python3
+"""ai-rem Preference Manager — läuft direkt im Terminal, kein Claude-Token-Verbrauch."""
+import json, os, re, sys, urllib.request
+
+BASE    = os.environ.get("AI_REM_URL", "__BASE__")
+API_URL = BASE + "/api/preferences"
+MCP_URL = BASE + "/mcp"
+_SID    = None
+
+
+def _post(body, sid=None):
+    hdrs = {"Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream"}
+    if sid:
+        hdrs["mcp-session-id"] = sid
+    req = urllib.request.Request(
+        MCP_URL, data=json.dumps(body).encode(), headers=hdrs, method="POST")
+    return urllib.request.urlopen(req, timeout=10)
+
+
+def _parse(resp):
+    raw = resp.read().decode()
+    m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
+    try:
+        obj = json.loads(m.group(1) if m else raw)
+        return obj.get("result", {}).get("content", [{}])[0].get("text", "")
+    except Exception:
+        return raw
+
+
+def _session():
+    global _SID
+    if _SID:
+        return _SID
+    resp = _post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                  "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                             "clientInfo": {"name": "pref-tui", "version": "1.0"}}})
+    _SID = resp.headers.get("mcp-session-id")
+    resp.read()
+    try:
+        _post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=_SID).read()
+    except Exception:
+        pass
+    return _SID
+
+
+def _tool(name, args):
+    resp = _post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": name, "arguments": args}}, sid=_session())
+    return _parse(resp)
+
+
+def load():
+    resp = urllib.request.urlopen(API_URL, timeout=10)
+    return json.loads(resp.read().decode())
+
+
+def show(prefs):
+    print()
+    print(f"  {'#':>2}  {'P':2}  {'Pos':>3}  {'Context':<8}  Name")
+    print(f"  {'─'*2}  {'─'*2}  {'─'*3}  {'─'*8}  {'─'*50}")
+    for i, p in enumerate(prefs, 1):
+        pin = "📌" if p["pinned"] else "  "
+        pos = str(p["sort_order"]) if p["sort_order"] is not None else "─"
+        ctx = (p["context"] or "global")[:8]
+        print(f"  {i:>2}  {pin}  {pos:>3}  {ctx:<8}  {p['name'][:50]}")
+    print()
+    print("  p <#>           pin/unpin")
+    print("  c <#> <ctx>     context: work | private | global")
+    print("  s <#> <pos>     position (1=oben, leer=auto)")
+    print("  d <#>           löschen")
+    print("  q               beenden")
+    print()
+
+
+def run():
+    print("=== ai-rem Preferences ===")
+    try:
+        prefs = load()
+    except Exception as e:
+        sys.exit(f"Fehler: {e}")
+
+    while True:
+        show(prefs)
+        try:
+            line = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nTschüss.")
+            break
+
+        if not line or line == "q":
+            break
+
+        parts = line.split()
+        cmd   = parts[0].lower()
+
+        if cmd not in ("p", "c", "s", "d") or len(parts) < 2:
+            print("  ?")
+            continue
+
+        try:
+            p = prefs[int(parts[1]) - 1]
+        except (IndexError, ValueError):
+            print("  Ungültige Nummer.")
+            continue
+
+        if cmd == "p":
+            new_pin = not p["pinned"]
+            _tool("memory_preference_update", {"name": p["name"], "pinned": new_pin})
+            print(f"  {'📌' if new_pin else '  '} {p['name']}")
+        elif cmd == "c":
+            ctx = parts[2] if len(parts) > 2 else "global"
+            _tool("memory_preference_update",
+                  {"name": p["name"], "context": "" if ctx == "global" else ctx})
+            print(f"  context={ctx}: {p['name']}")
+        elif cmd == "s":
+            try:
+                pos = int(parts[2]) if len(parts) > 2 and parts[2] else None
+            except ValueError:
+                pos = None
+            _tool("memory_preference_update",
+                  {"name": p["name"], "sort_order": pos})
+            print(f"  pos={pos}: {p['name']}")
+        elif cmd == "d":
+            try:
+                confirm = input(f"  '{p['name']}' löschen? [j/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                confirm = ""
+            if confirm == "j":
+                _tool("memory_delete", {"name": p["name"]})
+                print("  Gelöscht.")
+            else:
+                print("  Abgebrochen.")
+
+        prefs = load()
+
+
+if __name__ == "__main__":
+    run()
+'''
 
 db = kuzu.Database(DB_PATH)
 
@@ -827,6 +955,35 @@ async def cmd_route(request: Request) -> PlainTextResponse:
 @mcp.custom_route("/cmd/prefedit", methods=["GET"])
 async def cmd_prefedit_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(PREFEDIT_CMD_MD, media_type="text/plain")
+
+
+@mcp.custom_route("/tools/pref-tui.py", methods=["GET"])
+async def pref_tui_route(request: Request) -> PlainTextResponse:
+    script = PREF_TUI_SCRIPT.replace("__BASE__", _KG_URL)
+    return PlainTextResponse(script, media_type="text/plain")
+
+
+@mcp.custom_route("/api/preferences", methods=["GET"])
+async def api_preferences(request: Request) -> JSONResponse:
+    rows = _rows(db_exec(
+        "MATCH (e:Entity {type: 'Preference'}) "
+        "RETURN e.id, e.name, e.context, e.pinned, e.sort_order, e.descr, e.updated_at"
+    ))
+    prefs = [
+        {"id": r[0], "name": r[1], "context": r[2] or "",
+         "pinned": r[3] == "true",
+         "sort_order": int(r[4]) if r[4] else None,
+         "descr": r[5] or "", "updated_at": r[6] or ""}
+        for r in rows
+    ]
+
+    def _key(p):
+        return (0 if p["pinned"] else 1,
+                (0, p["sort_order"]) if p["sort_order"] is not None else (1, 0),
+                p["updated_at"])
+
+    prefs.sort(key=_key)
+    return JSONResponse(prefs)
 
 
 @mcp.custom_route("/export", methods=["GET"])
