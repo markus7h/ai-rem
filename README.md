@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.0.7](https://github.com/markus7h/ai-rem/releases/tag/v0.0.7)** ([Release Notes](release-notes-v0.0.7.md)).
+> Diese Dokumentation bezieht sich auf **[v0.0.8](https://github.com/markus7h/ai-rem/releases/tag/v0.0.8)** ([Release Notes](release-notes-v0.0.8.md)).
 
 **ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
 Claude hat von Haus aus kein Gedächtnis über Sessions hinaus. Dieses Projekt löst das Problem: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – werden in einem Knowledge Graph gespeichert und beim nächsten Gespräch automatisch geladen.
@@ -28,6 +28,7 @@ Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontex
 | Tool | Beschreibung |
 |---|---|
 | `memory_add(name, type, description, context, pinned)` | Entity anlegen oder aktualisieren. `pinned=True` → Preference erscheint immer ganz oben in `get_context` |
+| `memory_preference_update(name, context, pinned, sort_order)` | Felder einer Preference gezielt ändern ohne `description` zu überschreiben |
 | `memory_relate(from, relation, to)` | Beziehung zwischen zwei Entities erstellen |
 | `memory_search(query, context)` | Volltextsuche über Name + Beschreibung |
 | `memory_get_context(topic, context)` | Relevanten Subgraph laden (Tasks, Projekte, Decisions, Preferences) |
@@ -52,13 +53,12 @@ Der Kontext kann per CLAUDE.md gesetzt werden: z.B. `context="work"` für Arbeit
 
 ## Web UI
 
-Die eingebaute Web-Oberfläche ist erreichbar unter `http://<SERVER_IP>:3456/ui`.
+| URL | Funktion |
+|---|---|
+| `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore |
+| `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen |
 
-Funktionen:
-- **Manueller Backup** — DB-Snapshot per Klick erstellen
-- **Automatischer Backup-Schedule** — stündlich / täglich / wöchentlich, konfigurierbar in der UI
-- **Backup-Verwaltung** — Liste aller Backups mit Download und Löschen
-- **Restore** — JSON-Backup hochladen, Modus `merge` oder `replace`
+**`/prefs`** — Vollständiger Preferences-Manager im Browser: pin/unpin, Context-Dropdown, manuelle Reihenfolge (`sort_order`), löschen. Klick auf den Namen klappt die vollständige Beschreibung auf. Aufrufbar über den Slash-Command `/ai-rem:prefedit`.
 
 ---
 
