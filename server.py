@@ -359,16 +359,15 @@ Danach Claude Code neu starten — fertig.
 PREFEDIT_CMD_MD = """\
 # Preferences verwalten
 
-Das TUI braucht ein interaktives Terminal — NICHT per Bash-Tool ausführen.
-Sag dem User er soll folgenden Befehl mit `!`-Präfix eingeben:
+Gib dem User folgende Anweisung (nur ausgeben, NICHT selbst ausführen):
+
+Öffne ein separates Terminal und führe aus:
 
 ```
-! python3 ~/.claude/ai-rem/pref-tui.py
+python3 ~/.claude/ai-rem/pref-tui.py
 ```
 
-Das `!` in Claude Code öffnet ein interaktives Terminal direkt im Chat.
-
-Befehle im Tool: `p <#>` pin/unpin · `c <#> <work|private|global>` context · `s <#> <pos>` position · `d <#>` löschen · `q` beenden
+Befehle: `p <#>` pin/unpin · `c <#> <work|private|global>` context · `s <#> <pos>` position · `d <#>` löschen · `q` beenden
 """
 
 PREF_TUI_SCRIPT = r'''#!/usr/bin/env python3
