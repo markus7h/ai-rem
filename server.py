@@ -848,8 +848,10 @@ select,input[type=number]{background:var(--bg);border:1px solid var(--border);co
 input[type=number]{width:60px}
 .del{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;transition:all .15s}
 .del:hover{border-color:var(--err);color:var(--err)}
-.name{font-size:13px;font-weight:500;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.name{font-size:13px;font-weight:500;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.name:hover{color:var(--ah)}
 .descr{font-size:11px;color:var(--muted);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.full-descr{display:none;font-size:12px;color:var(--muted);white-space:pre-wrap;word-break:break-word;margin-top:6px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;line-height:1.5}
 .date{font-size:11px;color:var(--muted)}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
@@ -881,7 +883,7 @@ async function load(){
   tb.innerHTML=prefs.map((p,i)=>`
     <tr>
       <td><button class="pin-btn ${p.pinned?'active':''}" onclick="togglePin(${i})" title="${p.pinned?'Unpin':'Pin'}">📌</button></td>
-      <td><div class="name" title="${esc(p.name)}">${esc(p.name)}</div><div class="descr" title="${esc(p.descr)}">${esc(p.descr)}</div></td>
+      <td><div class="name" onclick="toggleDescr(${i})" title="Klicken zum Aufklappen">${esc(p.name)}</div><div class="descr">${esc(p.descr)}</div><div class="full-descr" id="fd${i}">${esc(p.descr)}</div></td>
       <td>
         <select onchange="setCtx(${i},this.value)">
           <option value="" ${!p.context?'selected':''}>global</option>
@@ -897,6 +899,11 @@ async function load(){
 }
 
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+
+function toggleDescr(i){
+  const el=document.getElementById('fd'+i);
+  el.style.display=el.style.display==='block'?'none':'block';
+}
 
 async function api(action,body){
   const r=await fetch('/api/preferences/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
