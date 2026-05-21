@@ -273,6 +273,9 @@ Beschreibung:
 tools-mcp: tool_md_to_pdf (md→PDF, designs: magicM/collana), tool_pdf_to_text, tool_head_lines, tool_echo, tool_pipeline_run, tool_list_scripts | MCP: paperless (Dok-Mgmt), paperless-ai (RAG/Chat), ai-rem (KG), playwright (Browser), github (API), tools-mcp | Skills: /pii-pause, /setup-ai-rem, /bimtec-codex:business-doc, /bimtec-codex:create-presentation, /bimtec-codex:ibcs
 ```
 
+Danach Position fixieren, damit sie immer ganz oben landet:
+`memory_preference_update(name="session-start-tool-awareness", sort_order=1)`
+
 ## Schritt 3 – Tool-Entities für semantische Suche anlegen
 
 Lege folgende Entities an [type="Tool", context="private"]:
@@ -281,6 +284,7 @@ Lege folgende Entities an [type="Tool", context="private"]:
 - `tool_list_scripts`: "Meta-Tool: listet alle registrierten tools-mcp Scripts mit Manifest-Metadaten (name, description, inputs, requires, ai_rem_entity)."
 - `skill_pii_pause`: "Slash-Command /pii-pause: PII-Guard (UserPromptSubmit-Hook) pausieren oder fortsetzen."
 - `skill_setup_ai_rem`: "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten (MCP registrieren, CLAUDE.md konfigurieren, Tool-Entities anlegen)."
+- `skill_ai_rem_prefedit`: "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager — pin/unpin, Context ändern, sort_order setzen, löschen. Nutzt memory_preference_update(name, context, pinned, sort_order) und memory_delete."
 - `skill_bimtec_business_doc`: "Skill /bimtec-codex:business-doc: Geschäftsdokument im TK Dark oder b-imtec Corporate Design erstellen."
 - `skill_bimtec_presentation`: "Skill /bimtec-codex:create-presentation: HTML-Präsentation im TK Dark oder b-imtec Corporate Design erstellen."
 - `skill_bimtec_ibcs`: "Skill /bimtec-codex:ibcs: IBCS/Hichert-Standards auf Präsentationen, Reports, Dashboards anwenden oder prüfen."
