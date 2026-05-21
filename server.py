@@ -297,12 +297,14 @@ Lege folgende Entities an [type="Tool", context="private"]:
 PREFEDIT_CMD_MD = """\
 # Preferences verwalten
 
-Teile dem User mit, dass er folgenden Befehl direkt in seinem Terminal ausführen soll
-(NICHT selbst per Bash-Tool ausführen — das Tool braucht ein interaktives Terminal):
+Das TUI braucht ein interaktives Terminal — NICHT per Bash-Tool ausführen.
+Sag dem User er soll folgenden Befehl mit `!`-Präfix eingeben:
 
-```bash
-python3 <(curl -fsSL __KG_URL__/tools/pref-tui.py)
 ```
+! python3 <(curl -fsSL __KG_URL__/tools/pref-tui.py)
+```
+
+Das `!` in Claude Code öffnet ein interaktives Terminal direkt im Chat.
 
 Befehle im Tool: `p <#>` pin/unpin · `c <#> <work|private|global>` context · `s <#> <pos>` position · `d <#>` löschen · `q` beenden
 """.replace("__KG_URL__", _KG_URL)
