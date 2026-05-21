@@ -242,9 +242,13 @@ LEGACY="$CLAUDE_HOME/commands/setup-kg-memory.md"
 curl -sf "$KG_URL/cmd" > "$CLAUDE_HOME/commands/setup-ai-rem.md"
 echo "✓ /setup-ai-rem Command angelegt"
 
-mkdir -p "$CLAUDE_HOME/commands/ai-rem"
+mkdir -p "$CLAUDE_HOME/commands/ai-rem" "$CLAUDE_HOME/ai-rem"
 curl -sf "$KG_URL/cmd/prefedit" > "$CLAUDE_HOME/commands/ai-rem/prefedit.md"
 echo "✓ /ai-rem:prefedit Command angelegt"
+
+curl -sf "$KG_URL/tools/pref-tui.py" > "$CLAUDE_HOME/ai-rem/pref-tui.py"
+chmod +x "$CLAUDE_HOME/ai-rem/pref-tui.py"
+echo "✓ pref-tui.py installiert: $CLAUDE_HOME/ai-rem/pref-tui.py"
 
 # Preferences & Tool-Entities direkt via MCP API anlegen (kein Claude-Token-Verbrauch)
 KG_URL="$KG_URL" python3 - << 'PYSETUP'
@@ -359,13 +363,13 @@ Das TUI braucht ein interaktives Terminal — NICHT per Bash-Tool ausführen.
 Sag dem User er soll folgenden Befehl mit `!`-Präfix eingeben:
 
 ```
-! python3 <(curl -fsSL __KG_URL__/tools/pref-tui.py)
+! python3 ~/.claude/ai-rem/pref-tui.py
 ```
 
 Das `!` in Claude Code öffnet ein interaktives Terminal direkt im Chat.
 
 Befehle im Tool: `p <#>` pin/unpin · `c <#> <work|private|global>` context · `s <#> <pos>` position · `d <#>` löschen · `q` beenden
-""".replace("__KG_URL__", _KG_URL)
+"""
 
 PREF_TUI_SCRIPT = r'''#!/usr/bin/env python3
 """ai-rem Preference Manager — läuft direkt im Terminal, kein Claude-Token-Verbrauch."""
