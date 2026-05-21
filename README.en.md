@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.0.6](https://github.com/markus7h/ai-rem/releases/tag/v0.0.6)** ([release notes](release-notes-v0.0.6.md)).
+> This documentation describes **[v0.0.7](https://github.com/markus7h/ai-rem/releases/tag/v0.0.7)** ([release notes](release-notes-v0.0.7.md)).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
 Claude has no memory across sessions by default. This project solves that: relevant information — open tasks, decisions made, solved problems, projects, tools used — is stored in a knowledge graph and automatically loaded at the start of each conversation.
