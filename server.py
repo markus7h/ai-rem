@@ -250,7 +250,7 @@ echo "Auf jeder neuen Maschine: bash <(curl -s __KG_URL__/setup)"
 CMD_MD = """\
 # ai-rem einrichten
 
-Führe dieses Setup-Skript aus:
+## Schritt 1 – MCP-Server registrieren
 
 ```bash
 bash <(curl -s __KG_URL__/setup)
@@ -258,6 +258,32 @@ bash <(curl -s __KG_URL__/setup)
 
 Das Skript registriert den ai-rem MCP-Server und konfiguriert CLAUDE.md.
 Auf jeder neuen Maschine: `bash <(curl -s __KG_URL__/setup)`
+
+## Schritt 2 – Gepinnte Tool-Übersicht anlegen
+
+Lege folgende Preference in ai-rem an [type="Preference", context="private", pinned=True]:
+
+Name: `session-start-tool-awareness`
+Beschreibung:
+```
+tools-mcp: tool_md_to_pdf (md→PDF, designs: default2/default), tool_pdf_to_text, tool_head_lines, tool_echo, tool_pipeline_run, tool_list_scripts | MCP: paperless (Dok-Mgmt), ai-rem (KG) | Skills: /setup-ai-rem
+```
+
+## Schritt 3 – Tool-Entities für semantische Suche anlegen
+
+Lege folgende Entities an [type="Tool", context="private"]:
+
+- `tool_md_to_pdf`: "Markdown → PDF via WeasyPrint. Inputs: md_path (required), output_path (optional), design (default, default: default2). Output: pdf_path, size_bytes."
+- `tool_list_scripts`: "Meta-Tool: listet alle registrierten tools-mcp Scripts mit Manifest-Metadaten (name, description, inputs, requires, ai_rem_entity)."
+- `skill_example_4`: "Slash-Command /example-hook: Example hook skill."
+- `skill_setup_ai_rem`: "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten (MCP registrieren, CLAUDE.md konfigurieren, Tool-Entities anlegen)."
+- `skill_example_1`: "Skill /example-skill:doc: Example skill."
+- `skill_example_2`: "Skill /example-skill:pres: Example skill."
+- `skill_example_3`: "Skill /example-skill:ibcs: Example skill."
+- `mcp_paperless`: "MCP-Server paperless: Paperless-NGX. Tools: search_documents, get/upload/update/delete_document, create_letter(_from_md), list_correspondents/document_types/tags, create_tag/correspondent/document_type."
+- `mcp_example_rag`: "MCP-Server example-rag: RAG system."
+- `mcp_playwright`: "MCP-Server playwright: Browser-Automation – navigieren, Screenshots, Formulare ausfüllen, Web-Scraping."
+- `mcp_github`: "MCP-Server github: GitHub API – Issues, Pull Requests, Repositories, Commits, Actions verwalten."
 """.replace("__KG_URL__", _KG_URL)
 
 db = kuzu.Database(DB_PATH)
@@ -329,27 +355,26 @@ def init_schema() -> None:
         except Exception as e:
             log.warning("Schema stmt skipped: %s", e)
     _migrate_context_column()
+    _migrate_pinned_column()
     log.info("Schema ready — DB at %s", DB_PATH)
 
 
-def _entity_has_context_column() -> bool:
-    """Probe whether Entity already has the `context` column.
-
-    TABLE_INFO column layout varies across Kuzu releases, so we scan every
-    string cell rather than relying on a fixed position. False positives only
-    happen if another column literally is named "context", which is the column
-    we're checking for anyway.
-    """
+def _entity_has_column(column: str) -> bool:
     try:
         result = db_exec("CALL TABLE_INFO('Entity') RETURN *")
     except Exception as e:
         log.warning("TABLE_INFO probe failed: %s", e)
-        return True  # be conservative: skip migration if probe fails
+        return True
     for row in _rows(result):
         for cell in row:
-            if isinstance(cell, str) and cell == "context":
+            if isinstance(cell, str) and cell == column:
                 return True
     return False
+
+
+def _entity_has_context_column() -> bool:
+    """Probe whether Entity already has the `context` column."""
+    return _entity_has_column("context")
 
 
 def _legacy_dump_pre_context() -> dict:
@@ -418,6 +443,17 @@ def _migrate_context_column() -> None:
         )
         backfilled += 1
     log.info("Schema migration: context column added, %d entities backfilled", backfilled)
+
+
+def _migrate_pinned_column() -> None:
+    """One-off migration: add `pinned` column to Entity (no backfill needed)."""
+    if _entity_has_column("pinned"):
+        return
+    try:
+        db_exec("ALTER TABLE Entity ADD pinned STRING DEFAULT ''")
+        log.info("Schema migration: pinned column added")
+    except Exception as e:
+        log.error("ALTER TABLE Entity ADD pinned failed: %s", e)
 
 
 init_schema()
@@ -990,18 +1026,21 @@ def memory_add(
     description: str = "",
     extra: Optional[dict] = None,
     context: str = "",
+    pinned: bool = False,
 ) -> str:
     """Entity im Knowledge Graph anlegen oder aktualisieren.
 
     type-Werte: Person | Project | Task | Tool | Problem | Solution | Decision | Preference | Topic
     extra: beliebige JSON-Properties (z.B. {"status": "offen", "priority": "hoch"})
     context: "work" | "private" | "" (global, default — erscheint in allen Context-Abfragen)
+    pinned: True → Preference erscheint immer ganz oben in get_context, unabhängig von updated_at
     """
     eid = _id(name)
     merged = dict(extra or {})
     if context:
         merged["context"] = context
     extra_json = json.dumps(merged, ensure_ascii=False)
+    pinned_val = "true" if pinned else ""
     ts = _now()
 
     existed = bool(_rows(
@@ -1010,17 +1049,18 @@ def memory_add(
     db_exec(
         """MERGE (e:Entity {id: $id})
            ON CREATE SET e.name = $name, e.type = $type, e.descr = $descr,
-                         e.extra = $extra, e.context = $ctx,
+                         e.extra = $extra, e.context = $ctx, e.pinned = $pinned,
                          e.created_at = $ts, e.updated_at = $ts
            ON MATCH  SET e.name = $name, e.type = $type, e.descr = $descr,
-                         e.extra = $extra, e.context = $ctx,
+                         e.extra = $extra, e.context = $ctx, e.pinned = $pinned,
                          e.updated_at = $ts""",
         {"id": eid, "name": name, "type": type,
          "descr": description, "extra": extra_json,
-         "ctx": context or "", "ts": ts},
+         "ctx": context or "", "pinned": pinned_val, "ts": ts},
     )
     verb = "Aktualisiert" if existed else "Angelegt"
-    return f"{verb}: [{type}] {name}"
+    pin_marker = " 📌" if pinned else ""
+    return f"{verb}: [{type}] {name}{pin_marker}"
 
 
 @mcp.tool()
@@ -1157,18 +1197,22 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
 
     # Routinen & Anweisungen (Preferences) — surface near the top so they are
     # acted on, not just read. Topic-specific block above still wins when set.
+    # Pinned preferences always sort first; remaining slots fill by recency.
     pref_rows = _rows(
         db_exec(
             f"""MATCH (e:Entity {{type: 'Preference'}})
                {_ctx_clause('e', context, where=True)}
-               RETURN e.name, e.descr, e.updated_at
-               ORDER BY e.updated_at DESC
-               LIMIT 8""",
+               RETURN e.name, e.descr, e.pinned, e.updated_at
+               ORDER BY e.pinned DESC, e.updated_at DESC
+               LIMIT 12""",
             ctx_param,
         )
     )
     if pref_rows:
-        lines = [f"- **{r[0]}**: {r[1][:120]}" for r in pref_rows]
+        lines = [
+            f"- {'📌 ' if r[2] == 'true' else ''}**{r[0]}**: {r[1][:120]}"
+            for r in pref_rows
+        ]
         sections.append(f"## Routinen & Anweisungen{ctx_label}\n" + "\n".join(lines))
 
     # Offene Tasks
