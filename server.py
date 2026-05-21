@@ -297,7 +297,8 @@ Lege folgende Entities an [type="Tool", context="private"]:
 PREFEDIT_CMD_MD = """\
 # Preferences verwalten
 
-Führe aus — das Tool läuft direkt im Terminal, kein Token-Verbrauch:
+Teile dem User mit, dass er folgenden Befehl direkt in seinem Terminal ausführen soll
+(NICHT selbst per Bash-Tool ausführen — das Tool braucht ein interaktives Terminal):
 
 ```bash
 python3 <(curl -fsSL __KG_URL__/tools/pref-tui.py)
