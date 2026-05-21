@@ -273,6 +273,9 @@ Beschreibung:
 tools-mcp: tool_md_to_pdf (md→PDF, designs: default2/default), tool_pdf_to_text, tool_head_lines, tool_echo, tool_pipeline_run, tool_list_scripts | MCP: paperless (Dok-Mgmt), ai-rem (KG) | Skills: /setup-ai-rem
 ```
 
+Danach Position fixieren, damit sie immer ganz oben landet:
+`memory_preference_update(name="session-start-tool-awareness", sort_order=1)`
+
 ## Schritt 3 – Tool-Entities für semantische Suche anlegen
 
 Lege folgende Entities an [type="Tool", context="private"]:
@@ -281,6 +284,7 @@ Lege folgende Entities an [type="Tool", context="private"]:
 - `tool_list_scripts`: "Meta-Tool: listet alle registrierten tools-mcp Scripts mit Manifest-Metadaten (name, description, inputs, requires, ai_rem_entity)."
 - `skill_example_4`: "Slash-Command /example-hook: Example hook skill."
 - `skill_setup_ai_rem`: "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten (MCP registrieren, CLAUDE.md konfigurieren, Tool-Entities anlegen)."
+- `skill_ai_rem_prefedit`: "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager — pin/unpin, Context ändern, sort_order setzen, löschen. Nutzt memory_preference_update(name, context, pinned, sort_order) und memory_delete."
 - `skill_example_1`: "Skill /example-skill:doc: Example skill."
 - `skill_example_2`: "Skill /example-skill:pres: Example skill."
 - `skill_example_3`: "Skill /example-skill:ibcs: Example skill."
