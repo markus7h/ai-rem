@@ -359,16 +359,14 @@ Danach Claude Code neu starten — fertig.
 PREFEDIT_CMD_MD = """\
 # Preferences verwalten
 
-Gib dem User folgende Anweisung (nur ausgeben, NICHT selbst ausführen):
+Öffne den Browser mit folgendem Bash-Befehl:
 
-Öffne ein separates Terminal und führe aus:
-
-```
-python3 ~/.claude/ai-rem/pref-tui.py
+```bash
+xdg-open __KG_URL__/prefs
 ```
 
-Befehle: `p <#>` pin/unpin · `c <#> <work|private|global>` context · `s <#> <pos>` position · `d <#>` löschen · `q` beenden
-"""
+Falls xdg-open nicht funktioniert, URL direkt im Browser öffnen: __KG_URL__/prefs
+""".replace("__KG_URL__", _KG_URL)
 
 PREF_TUI_SCRIPT = r'''#!/usr/bin/env python3
 """ai-rem Preference Manager — läuft direkt im Terminal, kein Claude-Token-Verbrauch."""
@@ -825,6 +823,128 @@ atexit.register(_shutdown.set)
 
 # ─── Web UI ──────────────────────────────────────────────────────────────────
 
+_PREFS_HTML = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Preferences</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3e;--accent:#6366f1;--ah:#818cf8;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--err:#ef4444;--pin:#f59e0b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:28px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,.02)}
+.pin-btn{background:none;border:none;font-size:16px;cursor:pointer;opacity:.35;transition:opacity .15s;padding:0 4px}
+.pin-btn.active{opacity:1}
+.pin-btn:hover{opacity:.8}
+select,input[type=number]{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 7px;font-size:12px;width:100%}
+input[type=number]{width:60px}
+.del{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;transition:all .15s}
+.del:hover{border-color:var(--err);color:var(--err)}
+.name{font-size:13px;font-weight:500;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.descr{font-size:11px;color:var(--muted);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.date{font-size:11px;color:var(--muted)}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
+</style>
+</head>
+<body>
+<h1>Preferences</h1>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext</p>
+<table>
+  <thead><tr>
+    <th style="width:32px">📌</th>
+    <th>Name</th>
+    <th style="width:110px">Context</th>
+    <th style="width:70px">Position</th>
+    <th style="width:90px">Datum</th>
+    <th style="width:60px"></th>
+  </tr></thead>
+  <tbody id="rows"><tr><td colspan="6" style="color:var(--muted);padding:20px 10px">Lade…</td></tr></tbody>
+</table>
+<div class="toast" id="toast"></div>
+<script>
+let prefs=[];
+
+async function load(){
+  prefs=await fetch('/api/preferences').then(r=>r.json()).catch(()=>[]);
+  document.getElementById('cnt').textContent=prefs.length;
+  const tb=document.getElementById('rows');
+  if(!prefs.length){tb.innerHTML='<tr><td colspan="6" style="color:var(--muted);padding:20px 10px">Keine Preferences.</td></tr>';return;}
+  tb.innerHTML=prefs.map((p,i)=>`
+    <tr>
+      <td><button class="pin-btn ${p.pinned?'active':''}" onclick="togglePin(${i})" title="${p.pinned?'Unpin':'Pin'}">📌</button></td>
+      <td><div class="name" title="${esc(p.name)}">${esc(p.name)}</div><div class="descr" title="${esc(p.descr)}">${esc(p.descr)}</div></td>
+      <td>
+        <select onchange="setCtx(${i},this.value)">
+          <option value="" ${!p.context?'selected':''}>global</option>
+          <option value="private" ${p.context==='private'?'selected':''}>private</option>
+          <option value="work" ${p.context==='work'?'selected':''}>work</option>
+        </select>
+      </td>
+      <td><input type="number" min="1" value="${p.sort_order??''}" placeholder="─"
+           onchange="setPos(${i},this.value)" onblur="setPos(${i},this.value)"></td>
+      <td class="date">${p.updated_at?p.updated_at.slice(0,10):'—'}</td>
+      <td><button class="del" onclick="del(${i})">Löschen</button></td>
+    </tr>`).join('');
+}
+
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+
+async function api(action,body){
+  const r=await fetch('/api/preferences/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.json();
+}
+
+async function togglePin(i){
+  const p=prefs[i];
+  await api('update',{name:p.name,pinned:!p.pinned});
+  toast((!p.pinned?'📌 Gepinnt: ':'Unpinned: ')+p.name,'ok');
+  load();
+}
+
+async function setCtx(i,ctx){
+  const p=prefs[i];
+  await api('update',{name:p.name,context:ctx});
+  toast('Context → '+(ctx||'global')+': '+p.name,'ok');
+  load();
+}
+
+async function setPos(i,val){
+  const p=prefs[i];
+  const pos=val===''||val===null?null:parseInt(val);
+  if(pos===p.sort_order||(pos===null&&p.sort_order===null))return;
+  await api('update',{name:p.name,sort_order:pos});
+  toast('Position → '+(pos??'auto')+': '+p.name,'ok');
+  load();
+}
+
+async function del(i){
+  const p=prefs[i];
+  if(!confirm('Löschen: '+p.name+'?'))return;
+  await api('delete',{name:p.name});
+  toast('Gelöscht: '+p.name,'ok');
+  load();
+}
+
+function toast(msg,type){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className='toast show '+type;
+  setTimeout(()=>el.className='toast',3000);
+}
+
+load();
+</script>
+</body>
+</html>"""
+
 _UI_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1048,6 +1168,37 @@ async def api_preferences(request: Request) -> JSONResponse:
 
     prefs.sort(key=_key)
     return JSONResponse(prefs)
+
+
+@mcp.custom_route("/api/preferences/update", methods=["POST"])
+async def api_preferences_update(request: Request) -> JSONResponse:
+    body = await request.json()
+    name = body.get("name")
+    if not name:
+        return JSONResponse({"error": "name required"}, status_code=400)
+    result = await asyncio.to_thread(
+        memory_preference_update,
+        name=name,
+        context=body.get("context"),
+        pinned=body.get("pinned"),
+        sort_order=body.get("sort_order"),
+    )
+    return JSONResponse({"result": result})
+
+
+@mcp.custom_route("/api/preferences/delete", methods=["POST"])
+async def api_preferences_delete(request: Request) -> JSONResponse:
+    body = await request.json()
+    name = body.get("name")
+    if not name:
+        return JSONResponse({"error": "name required"}, status_code=400)
+    result = await asyncio.to_thread(memory_delete, name=name)
+    return JSONResponse({"result": result})
+
+
+@mcp.custom_route("/prefs", methods=["GET"])
+async def prefs_route(request: Request) -> Response:
+    return Response(content=_PREFS_HTML, media_type="text/html")
 
 
 @mcp.custom_route("/export", methods=["GET"])
