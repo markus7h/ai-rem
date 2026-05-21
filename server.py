@@ -359,13 +359,9 @@ Danach Claude Code neu starten — fertig.
 PREFEDIT_CMD_MD = """\
 # Preferences verwalten
 
-Öffne den Browser mit folgendem Bash-Befehl:
+Antworte dem User mit genau diesem Text (URL nicht verändern):
 
-```bash
-xdg-open __KG_URL__/prefs
-```
-
-Falls xdg-open nicht funktioniert, URL direkt im Browser öffnen: __KG_URL__/prefs
+Preferences-Manager: __KG_URL__/prefs
 """.replace("__KG_URL__", _KG_URL)
 
 PREF_TUI_SCRIPT = r'''#!/usr/bin/env python3
