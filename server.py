@@ -238,9 +238,13 @@ PYEOF
 LEGACY="$CLAUDE_HOME/commands/setup-kg-memory.md"
 [ -f "$LEGACY" ] && rm "$LEGACY" && echo "✓ Alter /setup-kg-memory Command entfernt"
 
-# Slash-Command refresh
+# Slash-Commands installieren
 curl -sf "$KG_URL/cmd" > "$CLAUDE_HOME/commands/setup-ai-rem.md"
 echo "✓ /setup-ai-rem Command angelegt"
+
+mkdir -p "$CLAUDE_HOME/commands/ai-rem"
+curl -sf "$KG_URL/cmd/prefedit" > "$CLAUDE_HOME/commands/ai-rem/prefedit.md"
+echo "✓ /ai-rem:prefedit Command angelegt"
 
 echo ""
 echo "Fertig. Claude Code neu starten - dann ist ai-rem aktiv."
@@ -285,6 +289,31 @@ Lege folgende Entities an [type="Tool", context="private"]:
 - `mcp_playwright`: "MCP-Server playwright: Browser-Automation – navigieren, Screenshots, Formulare ausfüllen, Web-Scraping."
 - `mcp_github`: "MCP-Server github: GitHub API – Issues, Pull Requests, Repositories, Commits, Actions verwalten."
 """.replace("__KG_URL__", _KG_URL)
+
+PREFEDIT_CMD_MD = """\
+# Preferences verwalten
+
+Öffne den interaktiven Preferences-Manager für ai-rem.
+
+## Ablauf
+
+1. Lade alle Preferences mit `memory_list(type="Preference")` und zeige sie als nummerierte Tabelle:
+   `Nr | 📌 | #Pos | Name | Context | Datum`
+   - 📌 = gepinnt; #Pos = sort_order (leer = automatisch nach Datum)
+2. Frage den User per AskUserQuestion was er tun möchte. Optionen:
+   - **Pin / Unpin** — wählt eine Nummer, togglet den pinned-Status
+   - **Context ändern** — wählt Nummer + neuen Context (work / private / global)
+   - **Position setzen** — wählt Nummer + neue Positionsnummer (1 = ganz oben, leer = auto)
+   - **Löschen** — wählt eine Nummer, bestätigt, löscht via `memory_delete`
+   - **Fertig** — beendet den Manager
+3. Führe die Aktion mit `memory_preference_update` (oder `memory_delete`) aus.
+4. Zeige die aktualisierte Tabelle und wiederhole ab Schritt 2.
+
+## Regeln
+- `memory_preference_update` für alle Änderungen an context / pinned / sort_order verwenden — es überschreibt nur die explizit gesetzten Felder
+- Beim Löschen immer kurz bestätigen lassen bevor `memory_delete` aufgerufen wird
+- Tabelle nach jeder Aktion neu laden und anzeigen
+"""
 
 db = kuzu.Database(DB_PATH)
 
@@ -356,6 +385,7 @@ def init_schema() -> None:
             log.warning("Schema stmt skipped: %s", e)
     _migrate_context_column()
     _migrate_pinned_column()
+    _migrate_sort_order_column()
     log.info("Schema ready — DB at %s", DB_PATH)
 
 
@@ -454,6 +484,17 @@ def _migrate_pinned_column() -> None:
         log.info("Schema migration: pinned column added")
     except Exception as e:
         log.error("ALTER TABLE Entity ADD pinned failed: %s", e)
+
+
+def _migrate_sort_order_column() -> None:
+    """One-off migration: add `sort_order` column to Entity (no backfill needed)."""
+    if _entity_has_column("sort_order"):
+        return
+    try:
+        db_exec("ALTER TABLE Entity ADD sort_order STRING DEFAULT ''")
+        log.info("Schema migration: sort_order column added")
+    except Exception as e:
+        log.error("ALTER TABLE Entity ADD sort_order failed: %s", e)
 
 
 init_schema()
@@ -779,6 +820,11 @@ async def cmd_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(CMD_MD, media_type="text/plain")
 
 
+@mcp.custom_route("/cmd/prefedit", methods=["GET"])
+async def cmd_prefedit_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(PREFEDIT_CMD_MD, media_type="text/plain")
+
+
 @mcp.custom_route("/export", methods=["GET"])
 async def export_route(request: Request) -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(_dump_graph))
@@ -1064,6 +1110,47 @@ def memory_add(
 
 
 @mcp.tool()
+def memory_preference_update(
+    name: str,
+    context: Optional[str] = None,
+    pinned: Optional[bool] = None,
+    sort_order: Optional[int] = None,
+) -> str:
+    """Felder einer Preference gezielt ändern ohne andere Felder zu überschreiben.
+
+    Nur übergebene Parameter (nicht None) werden aktualisiert.
+    context: "work" | "private" | "" (global)
+    pinned: True → immer oben in get_context
+    sort_order: manuelle Reihenfolge (1 = ganz oben); None/leer = nach updated_at
+    """
+    eid = _id(name)
+    row = _rows(db_exec(
+        "MATCH (e:Entity {id: $id}) RETURN e.context, e.pinned, e.sort_order, e.type",
+        {"id": eid},
+    ))
+    if not row:
+        return f"Nicht gefunden: {name}"
+
+    cur_ctx, cur_pin, cur_so, cur_type = row[0]
+    new_ctx = context if context is not None else (cur_ctx or "")
+    new_pin = ("true" if pinned else "") if pinned is not None else (cur_pin or "")
+    new_so  = str(sort_order) if sort_order is not None else (cur_so or "")
+    ts = _now()
+
+    db_exec(
+        """MATCH (e:Entity {id: $id})
+           SET e.context = $ctx, e.pinned = $pin,
+               e.sort_order = $so, e.updated_at = $ts""",
+        {"id": eid, "ctx": new_ctx, "pin": new_pin, "so": new_so, "ts": ts},
+    )
+    parts = []
+    if context  is not None: parts.append(f"context={new_ctx!r}")
+    if pinned   is not None: parts.append(f"pinned={new_pin!r}")
+    if sort_order is not None: parts.append(f"sort_order={new_so!r}")
+    return f"[{cur_type}] {name}: {', '.join(parts) or 'keine Änderung'}"
+
+
+@mcp.tool()
 def memory_relate(
     from_name: str,
     relation: str,
@@ -1197,18 +1284,25 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
 
     # Routinen & Anweisungen (Preferences) — surface near the top so they are
     # acted on, not just read. Topic-specific block above still wins when set.
-    # Pinned preferences always sort first; remaining slots fill by recency.
+    # Sort: pinned first → sort_order (numeric, empty last) → updated_at DESC.
     pref_rows = _rows(
         db_exec(
             f"""MATCH (e:Entity {{type: 'Preference'}})
                {_ctx_clause('e', context, where=True)}
-               RETURN e.name, e.descr, e.pinned, e.updated_at
-               ORDER BY e.pinned DESC, e.updated_at DESC
-               LIMIT 12""",
+               RETURN e.name, e.descr, e.pinned, e.sort_order, e.updated_at""",
             ctx_param,
         )
     )
     if pref_rows:
+        def _pref_sort_key(r):
+            pin_key  = 0 if r[2] == "true" else 1
+            try:
+                ord_key = (0, int(r[3]))
+            except (TypeError, ValueError):
+                ord_key = (1, 0)
+            return (pin_key, ord_key, r[4] or "")
+
+        pref_rows = sorted(pref_rows, key=_pref_sort_key, reverse=False)[:12]
         lines = [
             f"- {'📌 ' if r[2] == 'true' else ''}**{r[0]}**: {r[1][:120]}"
             for r in pref_rows
