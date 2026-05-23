@@ -761,6 +761,16 @@ def _dump_graph() -> dict:
     }
 
 
+def _graph_signature() -> dict:
+    """Fingerprint that changes iff the graph changed. Cheap (4 aggregate queries)."""
+    e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
+    r_count = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
+    max_e = _rows(db_exec("MATCH (e:Entity) RETURN max(e.updated_at)"))[0][0] or ""
+    max_r = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN max(r.created_at)"))[0][0] or ""
+    return {"entities": int(e_count), "relations": int(r_count),
+            "max_entity_updated": max_e, "max_relation_created": max_r}
+
+
 def _do_backup() -> str:
     _ensure_backup_dir()
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -776,6 +786,7 @@ def _do_backup() -> str:
     cfg = _load_backup_cfg()
     cfg["last_backup"] = _now()
     cfg["last_backup_file"] = filename
+    cfg["last_backup_signature"] = _graph_signature()
     _save_backup_cfg(cfg)
 
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "backup_*.json")), reverse=True)
@@ -807,6 +818,9 @@ def _scheduler_loop() -> None:
             except ValueError as e:
                 log.warning("Corrupt last_backup timestamp %r, ignoring: %s", last, e)
         try:
+            if cfg.get("last_backup_signature") == _graph_signature():
+                log.info("Scheduled backup skipped: no graph changes since last backup")
+                continue
             _do_backup()
         except Exception as e:
             log.error("Scheduled backup failed: %s", e)
@@ -992,7 +1006,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </head>
 <body>
 <h1>ai-rem</h1>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations</p>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a></p>
 <div class="grid">
 
   <div class="card">
