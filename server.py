@@ -35,13 +35,317 @@ _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 
 _KG_URL = os.getenv("KG_PUBLIC_URL", "http://localhost:3456")
 
+_SETUP_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup-config.json")
+
+SYSTEM_CHECK_PY = r'''#!/usr/bin/env python3
+"""Unified SessionStart system check for Claude Code.
+
+Order: ai-rem → SMB → MCP (functional) → Settings (auto-sync) → Tools (count)
+Config is read from ~/.claude/settings-template.json — no hardcoded paths.
+"""
+import json
+import os
+import platform
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+
+SETTINGS = os.path.expanduser("~/.claude/settings.json")
+TEMPLATE = os.path.expanduser("~/.claude/settings-template.json")
+
+
+def _load_template():
+    if os.path.exists(TEMPLATE):
+        try:
+            with open(TEMPLATE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+TMPL = _load_template()
+
+AI_REM_ENDPOINT = os.environ.get(
+    "AI_REM_ENDPOINT", TMPL.get("ai_rem_endpoint", "")
+)
+AI_REM_TIMEOUT = 5
+
+SMB_CFG = TMPL.get("smb", {})
+SMB_MOUNT = SMB_CFG.get("mount", "")
+SMB_URL = SMB_CFG.get("url", "")
+SMB_RETRIES = 5
+
+MCP_STDIO_SERVERS = TMPL.get("mcp_stdio_servers", {})
+MCP_STDIO_TIMEOUT = 3
+
+TOOLS_SCRIPTS = TMPL.get("tools_scripts_dir", "")
+
+results = []
+
+INIT_MSG = json.dumps({
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05", "capabilities": {},
+        "clientInfo": {"name": "system-check", "version": "1.0"},
+    },
+}) + "\n"
+
+
+def emit(msg):
+    print(json.dumps({"systemMessage": msg, "suppressOutput": True}))
+    sys.exit(0)
+
+
+def check_ai_rem():
+    if not AI_REM_ENDPOINT:
+        return
+
+    def post(body, sid=None):
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if sid:
+            headers["mcp-session-id"] = sid
+        req = urllib.request.Request(
+            AI_REM_ENDPOINT, data=json.dumps(body).encode(),
+            headers=headers, method="POST",
+        )
+        return urllib.request.urlopen(req, timeout=AI_REM_TIMEOUT)
+
+    try:
+        resp = post({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05", "capabilities": {},
+                "clientInfo": {"name": "system-check", "version": "1.0"},
+            },
+        })
+        sid = resp.headers.get("mcp-session-id")
+        resp.read()
+        if not sid:
+            results.append("ai-rem: nicht erreichbar")
+            return
+
+        try:
+            post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=sid).read()
+        except Exception:
+            pass
+
+        resp = post({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "memory_status", "arguments": {}},
+        }, sid=sid)
+        raw = resp.read().decode()
+        m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
+        body = m.group(1) if m else raw
+        obj = json.loads(body)
+        text = obj.get("result", {}).get("content", [{}])[0].get("text", "")
+        results.append(text if text else "ai-rem: nicht erreichbar")
+    except Exception:
+        results.append("ai-rem: nicht erreichbar")
+
+
+def check_smb():
+    if platform.system() != "Darwin" or not SMB_MOUNT or not SMB_URL:
+        return
+
+    def is_mounted():
+        try:
+            return f"on {SMB_MOUNT} " in subprocess.check_output(
+                ["mount"], text=True, timeout=3,
+            )
+        except Exception:
+            return False
+
+    if is_mounted():
+        results.append("SMB ✓")
+        return
+
+    try:
+        subprocess.Popen(
+            ["open", SMB_URL],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        results.append("SMB ✗")
+        return
+
+    for _ in range(SMB_RETRIES):
+        time.sleep(1)
+        if is_mounted():
+            results.append("SMB ✓")
+            return
+
+    results.append("SMB ✗ (timeout)")
+
+
+def _check_one_stdio(name, path):
+    if not os.path.exists(path):
+        return False
+    try:
+        proc = subprocess.Popen(
+            ["node", path],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        proc.stdin.write(INIT_MSG.encode())
+        proc.stdin.flush()
+
+        output = []
+
+        def reader():
+            try:
+                for _ in range(10):
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    output.append(line.decode().strip())
+                    try:
+                        obj = json.loads(output[-1])
+                        if "result" in obj:
+                            return
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+            except Exception:
+                pass
+
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+        t.join(timeout=MCP_STDIO_TIMEOUT)
+
+        proc.kill()
+        try:
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+        for line in output:
+            try:
+                if "result" in json.loads(line):
+                    return True
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return False
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return False
+
+
+def check_mcp_servers():
+    if not MCP_STDIO_SERVERS:
+        return
+
+    server_results = {}
+
+    def check_one(name, path):
+        server_results[name] = _check_one_stdio(name, path)
+
+    threads = []
+    for name, path in MCP_STDIO_SERVERS.items():
+        t = threading.Thread(target=check_one, args=(name, path))
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join(timeout=MCP_STDIO_TIMEOUT + 2)
+
+    ok = [n for n, v in server_results.items() if v]
+    fail = [n for n in MCP_STDIO_SERVERS if not server_results.get(n)]
+    total = len(MCP_STDIO_SERVERS)
+
+    if fail:
+        results.append(f"MCP: {len(ok)}/{total}, ✗ {', '.join(fail)}")
+    else:
+        results.append(f"MCP: {total}/{total} ✓")
+
+
+def check_and_sync_settings():
+    if not os.path.exists(TEMPLATE) or not os.path.exists(SETTINGS):
+        if not os.path.exists(SETTINGS):
+            results.append("settings: keine settings.json")
+        return
+
+    try:
+        with open(SETTINGS) as f:
+            local = json.load(f)
+    except Exception:
+        return
+
+    changes = []
+
+    for key, expected in TMPL.get("general", {}).items():
+        actual = local.get(key)
+        if actual != expected:
+            local[key] = expected
+            changes.append(f"{key}: {actual}→{expected}")
+
+    local_allow = local.setdefault("permissions", {}).setdefault("allow", [])
+    local_allow_set = set(local_allow)
+    added_allow = []
+    for p in TMPL.get("permissions_allow_portable", []):
+        if p not in local_allow_set and not any(
+            a.endswith("*") and p.startswith(a[:-1]) for a in local_allow_set
+        ):
+            local_allow.append(p)
+            added_allow.append(p)
+    if added_allow:
+        changes.append(f"+{len(added_allow)} allow")
+
+    local_deny = local.setdefault("permissions", {}).setdefault("deny", [])
+    local_deny_set = set(local_deny)
+    added_deny = []
+    for p in TMPL.get("permissions_deny", []):
+        if p not in local_deny_set:
+            local_deny.append(p)
+            added_deny.append(p)
+    if added_deny:
+        changes.append(f"+{len(added_deny)} deny")
+
+    if changes:
+        with open(SETTINGS, "w") as f:
+            json.dump(local, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        results.append(f"settings: {', '.join(changes)}")
+    else:
+        results.append("settings ✓")
+
+
+def check_tools():
+    if not TOOLS_SCRIPTS or not os.path.isdir(TOOLS_SCRIPTS):
+        return
+    count = sum(
+        1 for e in os.listdir(TOOLS_SCRIPTS)
+        if os.path.exists(os.path.join(TOOLS_SCRIPTS, e, "manifest.yaml"))
+    )
+    if count:
+        results.append(f"{count} tools")
+
+
+check_ai_rem()
+check_smb()
+check_mcp_servers()
+check_and_sync_settings()
+check_tools()
+
+if results:
+    emit(" | ".join(results))
+'''
+
 SETUP_SCRIPT = r"""#!/usr/bin/env bash
 # ai-rem Setup - plattformunabhaengig (macOS + Linux).
 # Abhaengigkeiten: bash, curl, python3, claude CLI.
 set -e
 KG_URL="__KG_URL__"
 CLAUDE_HOME="$HOME/.claude"
-HOOK_PATH="$CLAUDE_HOME/hooks/ai-rem-bootstrap.py"
+HOOK_PATH="$CLAUDE_HOME/hooks/system-check.py"
 
 echo "=== ai-rem Setup ==="
 
@@ -64,104 +368,87 @@ fi
 
 mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
 
-# SessionStart-Hook: Python, damit kein jq/sed-Dialekt-Problem.
-cat > "$HOOK_PATH" << 'PYHOOK'
-#!/usr/bin/env python3
-# SessionStart hook: prueft ai-rem-Erreichbarkeit via memory_status.
-import json
-import os
-import re
-import sys
-import urllib.request
+# Setup-Config laden (persoenliche Entities, Permissions — nicht im Repo)
+SETUP_CFG=$(curl -sf "$KG_URL/setup-config" 2>/dev/null || echo '{}')
+export SETUP_CFG
 
-ENDPOINT = os.environ.get("AI_REM_ENDPOINT", "__KG_URL__/mcp")
-TIMEOUT = 5
+# settings-template.json: Basis-Template anlegen (falls nicht vorhanden)
+TEMPLATE_PATH="$CLAUDE_HOME/settings-template.json"
+if [ ! -f "$TEMPLATE_PATH" ]; then
+    python3 -c "
+import json, os
+cfg = json.loads(os.environ.get('SETUP_CFG', '{}'))
+tmpl = {
+    'version': '2026-05-25',
+    'ai_rem_endpoint': '$KG_URL/mcp',
+    'smb': cfg.get('smb', {}),
+    'mcp_stdio_servers': cfg.get('mcp_stdio_servers', {}),
+    'tools_scripts_dir': cfg.get('tools_scripts_dir', ''),
+    'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto'},
+    'permissions_allow_portable': cfg.get('permissions_allow_portable', [
+        'Bash', 'Skill(update-config)', 'Skill(update-config:*)',
+        'mcp__ai-rem__memory_status', 'mcp__ai-rem__memory_get_context',
+        'mcp__ai-rem__memory_search', 'mcp__ai-rem__memory_add',
+        'mcp__ai-rem__memory_list', 'mcp__ai-rem__memory_get_relations',
+        'mcp__ai-rem__memory_relate', 'mcp__ai-rem__memory_delete',
+    ]),
+    'permissions_allow_path_templates': ['Read(//{HOME}/.claude/**)', 'Read(//{TMP}/**)'],
+    'permissions_deny': cfg.get('permissions_deny', []),
+    'hooks': {
+        'SessionStart': ['system-check.py (ai-rem, SMB, MCP, settings-sync, tools)'],
+        'UserPromptSubmit': ['Tool-Discovery'],
+    },
+    'additional_directories_templates': ['{HOME}/.claude', '{HOME}'],
+    'path_mappings': cfg.get('path_mappings', {}),
+}
+with open(os.path.expanduser('~/.claude/settings-template.json'), 'w') as f:
+    json.dump(tmpl, f, indent=2, ensure_ascii=False); f.write('\n')
+print('✓ settings-template.json angelegt')
+"
+else
+    echo "✓ settings-template.json bereits vorhanden"
+fi
 
-
-def emit(msg):
-    print(json.dumps({"systemMessage": msg, "suppressOutput": True}))
-    sys.exit(0)
-
-
-def post(body, sid=None):
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-    }
-    if sid:
-        headers["mcp-session-id"] = sid
-    req = urllib.request.Request(
-        ENDPOINT, data=json.dumps(body).encode(), headers=headers, method="POST"
-    )
-    return urllib.request.urlopen(req, timeout=TIMEOUT)
-
-
-try:
-    resp = post({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                   "clientInfo": {"name": "claude-code-bootstrap", "version": "1.0"}},
-    })
-    sid = resp.headers.get("mcp-session-id")
-    resp.read()
-    if not sid:
-        emit("ai-rem: nicht erreichbar")
-
-    try:
-        post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=sid).read()
-    except Exception:
-        pass
-
-    resp = post({
-        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": {"name": "memory_status", "arguments": {}},
-    }, sid=sid)
-    raw = resp.read().decode()
-    m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
-    body = m.group(1) if m else raw
-    obj = json.loads(body)
-    text = obj.get("result", {}).get("content", [{}])[0].get("text", "")
-    if text:
-        emit(text)
-except Exception:
-    pass
-
-emit("ai-rem: nicht erreichbar")
-PYHOOK
-# __KG_URL__ wird vom Server bereits beim Rendern des SETUP_SCRIPT ersetzt
-# (Python-seitiges .replace), daher steht im Hook bereits die echte URL.
+# SessionStart-Hook: konsolidiertes system-check.py
+curl -sf "$KG_URL/hooks/system-check.py" > "$HOOK_PATH"
 chmod +x "$HOOK_PATH"
 echo "✓ SessionStart-Hook: $HOOK_PATH"
 
-# settings.json: Allowlist migrieren, Permissions, SessionStart-Hook, autoMemoryEnabled
+# settings.json: Permissions, konsolidierter Hook, alte Hooks entfernen
 HOOK_PATH="$HOOK_PATH" python3 - << 'PYEOF'
 import json
 import os
 
 path = os.path.expanduser("~/.claude/settings.json")
 hook_path = os.environ["HOOK_PATH"]
+tmpl_path = os.path.expanduser("~/.claude/settings-template.json")
 data = json.load(open(path)) if os.path.exists(path) else {}
+tmpl = json.load(open(tmpl_path)) if os.path.exists(tmpl_path) else {}
 
-# Alte kg-memory Allow-Eintraege migrieren
 perms = data.setdefault("permissions", {})
 allow = perms.setdefault("allow", [])
 allow[:] = [p.replace("mcp__kg-memory__", "mcp__ai-rem__") for p in allow]
 
-# ai-rem Permissions ergaenzen
-needed = [
-    "mcp__ai-rem__memory_status",
-    "mcp__ai-rem__memory_get_context",
-    "mcp__ai-rem__memory_search",
-    "mcp__ai-rem__memory_add",
-    "mcp__ai-rem__memory_list",
-    "mcp__ai-rem__memory_get_relations",
-    "mcp__ai-rem__memory_relate",
-    "mcp__ai-rem__memory_delete",
-]
-added = [p for p in needed if p not in allow]
-allow.extend(added)
+allow_set = set(allow)
+added = []
+for p in tmpl.get("permissions_allow_portable", []):
+    if p not in allow_set and not any(
+        a.endswith("*") and p.startswith(a[:-1]) for a in allow_set
+    ):
+        allow.append(p)
+        added.append(p)
 
-# SessionStart-Hook idempotent eintragen
+deny = perms.setdefault("deny", [])
+deny_set = set(deny)
+added_deny = []
+for p in tmpl.get("permissions_deny", []):
+    if p not in deny_set:
+        deny.append(p)
+        added_deny.append(p)
+
+for key, val in tmpl.get("general", {}).items():
+    data[key] = val
+
 hooks = data.setdefault("hooks", {})
 sessions = hooks.setdefault("SessionStart", [])
 group = next((g for g in sessions if g.get("matcher") == "*"), None)
@@ -169,69 +456,58 @@ if group is None:
     group = {"matcher": "*", "hooks": []}
     sessions.append(group)
 group.setdefault("hooks", [])
+
+OLD_HOOKS = [
+    "ai-rem-bootstrap.py", "ai-rem-bootstrap.sh",
+    "settings-sync-check.py",
+]
+OLD_HOOKS.extend(json.loads(os.environ.get("SETUP_CFG", "{}")).get("old_hooks", []))
+group["hooks"] = [
+    h for h in group["hooks"]
+    if not any(h.get("command", "").endswith(o) for o in OLD_HOOKS)
+]
+
 hook_added = False
 if not any(h.get("command") == hook_path for h in group["hooks"]):
-    group["hooks"].append({"type": "command", "command": hook_path, "timeout": 10})
+    group["hooks"].append({"type": "command", "command": hook_path, "timeout": 15})
     hook_added = True
 
-# Datei-Auto-Memory abschalten (alles laeuft ueber ai-rem)
-auto_changed = data.get("autoMemoryEnabled") is not False
-data["autoMemoryEnabled"] = False
-
-json.dump(data, open(path, "w"), indent=2)
-parts = []
-if added:        parts.append(f"+{len(added)} Permissions")
-if hook_added:   parts.append("SessionStart-Hook")
-if auto_changed: parts.append("autoMemoryEnabled=false")
-print("✓ settings.json: " + (", ".join(parts) if parts else "bereits aktuell"))
+json.dump(data, open(path, "w"), indent=2, ensure_ascii=False)
+print("\n".join([p for p in ("" if not added else f"  +{len(added)} allow permissions",
+                             "" if not added_deny else f"  +{len(added_deny)} deny rules",
+                             "  SessionStart-Hook" if hook_added else "",
+                             "  autoMemoryEnabled=false") if p]))
+print("✓ settings.json aktualisiert")
 PYEOF
 
-# CLAUDE.md aktualisieren - bestehenden Block (alt oder neu) ersetzen
+# CLAUDE.md: minimaler Pointer auf ai-rem (Regeln kommen ueber MCP Server Instructions)
 python3 - << 'PYEOF'
 import os
 import re
 
 path = os.path.expanduser("~/.claude/CLAUDE.md")
 new_block = '''
-## Knowledge Graph Memory (ai-rem)
-ai-rem ist die einzige Wissensquelle für persistenten Kontext. Verbindung wird beim Sitzungsstart per SessionStart-Hook geprüft (Statuszeile "ai-rem: N Entities, M Relationen" oder "nicht erreichbar"). Datei-basierte Auto-Memory ist deaktiviert — alle Memory-Verhalten laufen über ai-rem.
-
-### Kontext holen
-`memory_get_context` für offene Tasks / aktive Projekte / letzte Einträge, `memory_search` für gezielte Themen. Nur wenn die Aufgabe wirklich früheres Wissen braucht.
-
-### Speichern – proaktiv, ohne Nachfrage
-Tool: `memory_add` (+ `memory_relate` für Verknüpfungen). Vor neuem Eintrag immer prüfen, ob es eine bestehende Entity gibt — updaten statt duplizieren.
-
-**Entity-Typen** (ai-rem kennt: Person | Project | Task | Tool | Problem | Solution | Decision | Preference | Topic):
-- **Preference** — wer der User ist, Präferenzen, Arbeitsweisen, Feedback. Korrekturen UND bestätigte Ansätze ("genau so weitermachen") zählen — auch quiet confirmations. Feedback-Einträge mit Name-Präfix `Feedback: …`. Body bei Regeln: Regel + **Why:** + **How to apply:**.
-- **Project** — laufende Arbeit, Ziele, Deadlines. Relative Daten in absolute umrechnen ("Donnerstag" → "2026-05-21").
-- **Topic** — Pointer auf externe Systeme / Referenzen (Linear-Projekt, Slack-Channel, Grafana-Dashboard, Doku-Repo, …).
-- **Person** — Stakeholder, Team-Mitglieder, Kontakte.
-- **Task / Decision / Problem / Solution / Tool** — Strukturen für offene Aufgaben, Architekturentscheidungen, Bugs/Vorfälle, Lösungen, Tools.
-
-### Nicht speichern
-Code-Patterns / Architektur / Pfade (aus Code ableitbar), git-Historie (git log/blame ist autoritativ), Fix-Rezepte (Code + Commit haben Kontext), ephemere Sitzungsdetails. Gilt **auch wenn der User darum bittet** — bei "Speicher die PR-Liste" rückfragen, was *überraschend / nicht-offensichtlich* war.
-
-### Vor Empfehlung aus Memory
-Wenn eine Erinnerung Datei-Pfade, Funktions- oder Flag-Namen nennt: verifizieren (existiert noch?). Memory ist Behauptung über damals, nicht über jetzt. Bei Konflikt: dem aktuellen Code-Stand vertrauen, Memory updaten.
-
-### Konventionen
-- `context="private"` für private Inhalte; globale Entities ohne context-Tag.
-- Verwandte Entities verlinken via `memory_relate`.
+## ai-rem
+ai-rem ist die einzige Wissensquelle für persistenten Kontext. Auto-Memory ist deaktiviert.
+Nutzungsregeln kommen über die MCP Server Instructions, Verhaltensregeln aus den ai-rem Preferences.
 '''
 
 os.makedirs(os.path.dirname(path), exist_ok=True)
 text = open(path).read() if os.path.exists(path) else ""
 
 # Bestehenden ai-rem-Block (alt oder neu) entfernen
-pattern = re.compile(r"\n## Knowledge Graph Memory \(ai-rem\)[\s\S]*?(?=\n## |\Z)")
-text, n = pattern.subn("", text)
+for pat in [
+    re.compile(r"\n## Knowledge Graph Memory \(ai-rem\)[\s\S]*?(?=\n## |\Z)"),
+    re.compile(r"\n## ai-rem[\s\S]*?(?=\n## |\Z)"),
+]:
+    text, n = pat.subn("", text)
+
 if not text.endswith("\n"):
     text += "\n"
 text += new_block
 
 open(path, "w").write(text)
-print("✓ CLAUDE.md " + ("Block ersetzt" if n else "Block angelegt"))
+print("✓ CLAUDE.md aktualisiert (minimaler ai-rem Pointer)")
 PYEOF
 
 # Legacy-Slash-Command entfernen
@@ -293,40 +569,17 @@ def _tool(name, args):
                   "params": {"name": name, "arguments": args}}, sid=_session())
     return _parse(resp)
 
-ENTITIES = [
-    {"name": "session-start-tool-awareness", "type": "Preference", "context": "private",
-     "pinned": True,
-     "description": "tools-mcp: tool_md_to_pdf (md→PDF, designs: default2/default), tool_pdf_to_text, tool_head_lines, tool_echo, tool_pipeline_run, tool_list_scripts | MCP: paperless (Dok-Mgmt), ai-rem (KG) | Skills: /setup-ai-rem"},
-    {"name": "tool_md_to_pdf", "type": "Tool", "context": "private",
-     "description": "Markdown → PDF via WeasyPrint. Inputs: md_path (required), output_path (optional), design (default, default: default2). Output: pdf_path, size_bytes."},
-    {"name": "tool_list_scripts", "type": "Tool", "context": "private",
-     "description": "Meta-Tool: listet alle registrierten tools-mcp Scripts mit Manifest-Metadaten (name, description, inputs, requires, ai_rem_entity)."},
-    {"name": "skill_example_4", "type": "Tool", "context": "private",
-     "description": "Slash-Command /example-hook: Example hook skill."},
-    {"name": "skill_setup_ai_rem", "type": "Tool", "context": "private",
+cfg = json.loads(os.environ.get("SETUP_CFG", "{}"))
+ENTITIES = cfg.get("entities", [
+    {"name": "skill_setup_ai_rem", "type": "Tool",
      "description": "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten."},
-    {"name": "skill_ai_rem_prefedit", "type": "Tool", "context": "private",
-     "description": "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager — pin/unpin, Context ändern, sort_order setzen, löschen. Nutzt memory_preference_update und memory_delete."},
-    {"name": "skill_example_1", "type": "Tool", "context": "private",
-     "description": "Skill /example-skill:doc: Example skill."},
-    {"name": "skill_example_2", "type": "Tool", "context": "private",
-     "description": "Skill /example-skill:pres: Example skill."},
-    {"name": "skill_example_3", "type": "Tool", "context": "private",
-     "description": "Skill /example-skill:ibcs: Example skill."},
-    {"name": "mcp_paperless", "type": "Tool", "context": "private",
-     "description": "MCP-Server paperless: Paperless-NGX. Tools: search_documents, get/upload/update/delete_document, create_letter(_from_md), list_correspondents/document_types/tags."},
-    {"name": "mcp_example_rag", "type": "Tool", "context": "private",
-     "description": "MCP-Server example-rag: RAG system."},
-    {"name": "mcp_playwright", "type": "Tool", "context": "private",
-     "description": "MCP-Server playwright: Browser-Automation – navigieren, Screenshots, Formulare ausfüllen, Web-Scraping."},
-    {"name": "mcp_github", "type": "Tool", "context": "private",
-     "description": "MCP-Server github: GitHub API – Issues, Pull Requests, Repositories, Commits, Actions verwalten."},
-]
+    {"name": "skill_ai_rem_prefedit", "type": "Tool",
+     "description": "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager."},
+])
 
 try:
     for e in ENTITIES:
         _tool("memory_add", e)
-    _tool("memory_preference_update", {"name": "session-start-tool-awareness", "sort_order": 1})
     print(f"✓ {len(ENTITIES)} Preferences & Tool-Entities aktualisiert")
 except Exception as ex:
     print(f"⚠ Entities: {ex}")
@@ -348,7 +601,8 @@ bash <(curl -s __KG_URL__/setup)
 
 Das Skript erledigt automatisch:
 - MCP-Server registrieren
-- SessionStart-Hook + settings.json konfigurieren
+- Konsolidiertes system-check.py Hook deployen (ai-rem, SMB, MCP, Settings-Sync, Tools)
+- settings-template.json + settings.json konfigurieren (Permissions, Deny-Rules, Hooks)
 - CLAUDE.md aktualisieren
 - Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`)
 - Preferences & Tool-Entities im Knowledge Graph anlegen
@@ -1136,9 +1390,28 @@ loadStatus();loadSchedule();loadFiles();
 mcp = FastMCP(
     "ai-rem",
     instructions=(
-        "Langzeit-Gedächtnis als Knowledge Graph. "
-        "Nutze memory_add/memory_relate um Wissen zu speichern, "
-        "memory_get_context/memory_search zum Abrufen."
+        "Langzeit-Gedächtnis als Knowledge Graph. Einzige Quelle für persistenten Kontext — Auto-Memory ist deaktiviert.\n\n"
+        "## Kontext holen\n"
+        "memory_get_context für offene Tasks/Projekte/letzte Einträge, memory_search für gezielte Themen. "
+        "Vor Rückfragen immer erst in ai-rem prüfen ob die Info schon da ist.\n\n"
+        "## Speichern — proaktiv, ohne Nachfrage\n"
+        "memory_add + memory_relate. Vor neuem Eintrag prüfen ob Entity schon existiert — updaten statt duplizieren.\n\n"
+        "Entity-Typen: Person | Project | Task | Tool | Problem | Solution | Decision | Preference | Topic\n"
+        "- Preference: User-Präferenzen, Arbeitsweisen, Feedback. Feedback-Einträge mit Präfix 'Feedback: …'. "
+        "Body bei Regeln: Regel + Why: + How to apply:.\n"
+        "- Project: laufende Arbeit, Ziele. Relative Daten → absolute.\n"
+        "- Topic: Pointer auf externe Systeme/Referenzen.\n"
+        "- Task/Decision/Problem/Solution/Tool: offene Aufgaben, Architektur, Bugs, Lösungen, Tools.\n\n"
+        "## Nicht speichern\n"
+        "Code-Patterns/Architektur/Pfade (aus Code ableitbar), git-Historie (git log/blame), "
+        "Fix-Rezepte (Code+Commit), ephemere Sitzungsdetails. "
+        "Auch wenn der User darum bittet — rückfragen was überraschend/nicht-offensichtlich war.\n\n"
+        "## Vor Empfehlung aus Memory\n"
+        "Datei-Pfade/Funktionsnamen aus Memory verifizieren (existiert noch?). "
+        "Memory ist Behauptung über damals, nicht über jetzt. Bei Konflikt: Code vertrauen, Memory updaten.\n\n"
+        "## Konventionen\n"
+        "context='private' für private Inhalte; globale Entities ohne context-Tag. "
+        "Verwandte Entities verlinken via memory_relate."
     ),
 )
 
@@ -1146,6 +1419,19 @@ mcp = FastMCP(
 @mcp.custom_route("/setup", methods=["GET"])
 async def setup_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(SETUP_SCRIPT, media_type="text/plain")
+
+
+@mcp.custom_route("/hooks/system-check.py", methods=["GET"])
+async def system_check_hook_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(SYSTEM_CHECK_PY, media_type="text/x-python")
+
+
+@mcp.custom_route("/setup-config", methods=["GET"])
+async def setup_config_route(request: Request) -> JSONResponse:
+    if os.path.exists(_SETUP_CONFIG_PATH):
+        with open(_SETUP_CONFIG_PATH) as f:
+            return JSONResponse(json.load(f))
+    return JSONResponse({})
 
 
 @mcp.custom_route("/cmd", methods=["GET"])

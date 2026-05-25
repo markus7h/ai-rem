@@ -4,3 +4,4 @@ backups/
 __pycache__/
 *.pyc
 deploy.sh
+setup-config.json
