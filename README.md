@@ -1,135 +1,137 @@
-# ai-rem — Knowledge Graph Memory für Claude
+# ai-rem — Knowledge Graph Memory for Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.1.0](https://github.com/markus7h/ai-rem/releases/tag/v0.1.0)**.
+> This documentation describes **[v0.1.0](https://github.com/markus7h/ai-rem/releases/tag/v0.1.0)**.
 
-**ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
-Claude hat von Haus aus kein Gedächtnis über Sessions hinaus. Dieses Projekt löst das Problem: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – werden in einem Knowledge Graph gespeichert und beim nächsten Gespräch automatisch geladen.
+**ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
+Claude has no memory across sessions by default. This project solves that: relevant information — open tasks, decisions made, solved problems, projects, tools used — is stored in a knowledge graph and automatically loaded at the start of each conversation.
 
----
-
-## Was ist ai-rem?
-
-**ai-rem** ist der MCP-Server, der den Knowledge Graph bereitstellt. Er läuft als Docker Container auf dem Heimserver (`<SERVER_IP>`, Port konfigurierbar, Standard `3456`) und ist damit immer verfügbar, solange der Server läuft.
-
-Technisch:
-- **[FastMCP](https://gofastmcp.com)** — Python MCP-Server-Framework, HTTP-Transport (Streamable HTTP)
-- **[Kuzu](https://kuzudb.com)** — embedded Graph-Datenbank (kein separater DB-Container nötig)
-- Daten liegen persistent in `./data/kg.db` (konfigurierbar via `KG_DATA_PATH`)
-- Backups werden in `./backups/` gespeichert (konfigurierbar via `KG_BACKUP_PATH`)
+Docker Hub: `docker pull magic3arkus/ai-rem`
 
 ---
 
-## Wie es funktioniert
+## What is ai-rem?
 
-Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontext aus dem Graph und nutzt ihn als Arbeitsgrundlage. Neue Erkenntnisse speichert Claude proaktiv mit `memory_add` oder `memory_relate`.
+**ai-rem** is the MCP server that provides the knowledge graph. It runs as a Docker container on your home server (`<SERVER_IP>`, configurable port, default `3456`) and is always available as long as the server is running.
 
-### Verfügbare MCP-Tools
+Technically:
+- **[FastMCP](https://gofastmcp.com)** — Python MCP server framework, HTTP transport (Streamable HTTP)
+- **[Kuzu](https://kuzudb.com)** — embedded graph database (no separate DB container needed)
+- Data is stored persistently in `./data/kg.db` (configurable via `KG_DATA_PATH`)
+- Backups are saved to `./backups/` (configurable via `KG_BACKUP_PATH`)
 
-| Tool | Beschreibung |
+---
+
+## How it works
+
+At the start of each session, Claude loads the relevant context from the graph via `memory_get_context()` and uses it as a working basis. New insights are proactively saved by Claude using `memory_add` or `memory_relate`.
+
+### Available MCP Tools
+
+| Tool | Description |
 |---|---|
-| `memory_add(name, type, description, context, pinned)` | Entity anlegen oder aktualisieren. `pinned=True` → Preference erscheint immer ganz oben in `get_context` |
-| `memory_preference_update(name, context, pinned, sort_order)` | Felder einer Preference gezielt ändern ohne `description` zu überschreiben |
-| `memory_relate(from, relation, to)` | Beziehung zwischen zwei Entities erstellen |
-| `memory_search(query, context)` | Volltextsuche über Name + Beschreibung |
-| `memory_get_context(topic, context)` | Relevanten Subgraph laden (Tasks, Projekte, Decisions, Preferences) |
-| `memory_list(type, context)` | Alle Entities auflisten |
-| `memory_get_relations(name)` | Alle Beziehungen einer Entity |
-| `memory_delete(name)` | Entity und Relationen entfernen |
-| `memory_status()` | Kurzstatus: Anzahl Entities und Relationen (wird vom SessionStart-Hook genutzt) |
+| `memory_add(name, type, description, context, pinned)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context` |
+| `memory_preference_update(name, context, pinned, sort_order)` | Update preference fields without overwriting the description |
+| `memory_relate(from, relation, to)` | Create a relationship between two entities |
+| `memory_search(query, context)` | Full-text search across name and description |
+| `memory_get_context(topic, context)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
+| `memory_list(type, context)` | List all entities |
+| `memory_get_relations(name)` | Show all relationships of an entity |
+| `memory_delete(name)` | Remove an entity and its relationships |
+| `memory_status()` | Quick status: number of entities and relations (used by the SessionStart hook) |
 
-### Entity-Typen
+### Entity Types
 
 `Person` · `Project` · `Task` · `Tool` · `Problem` · `Solution` · `Decision` · `Preference` · `Topic`
 
-### Kontext-Trennung
+### Context Separation
 
-Jede Entity kann mit einem `context`-Tag versehen werden:
-- `context="work"` — nur in Arbeits-Sessions sichtbar
-- `context="private"` — nur in privaten Sessions sichtbar
-- kein Tag — global, erscheint in allen Abfragen
+Each entity can be tagged with a `context`:
+- `context="work"` — only visible in work sessions
+- `context="private"` — only visible in private sessions
+- no tag — global, appears in all queries
 
-Der Kontext kann per CLAUDE.md gesetzt werden: z.B. `context="work"` für Arbeits-Repos und `context="private"` für private Projekte.
+The context can be set per CLAUDE.md: e.g. `context="work"` for work repositories and `context="private"` for personal projects.
 
 ---
 
 ## Web UI
 
-| URL | Funktion |
+| URL | Function |
 |---|---|
-| `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore |
-| `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen |
+| `/ui` | Backup management: manual, schedule, download, restore |
+| `/prefs` | Preferences manager: pin, context, sort order, delete |
 
-**`/prefs`** — Vollständiger Preferences-Manager im Browser: pin/unpin, Context-Dropdown, manuelle Reihenfolge (`sort_order`), löschen. Klick auf den Namen klappt die vollständige Beschreibung auf. Aufrufbar über den Slash-Command `/ai-rem:prefedit`.
-
----
-
-## Voraussetzungen
-
-- Docker auf dem Zielserver
-- Claude Code CLI auf dem Client-Rechner
-- Netzwerkzugang zu `<SERVER_IP>:<PORT>`
+**`/prefs`** — Full preferences manager in the browser: pin/unpin, context dropdown, manual sort order, delete. Click on the name to expand the full description inline. Accessible via the slash command `/ai-rem:prefedit`.
 
 ---
 
-## Konfiguration
+## Requirements
 
-Umgebungsvariablen werden aus einer `.env`-Datei im Compose-Verzeichnis geladen:
+- Docker on the target server
+- Claude Code CLI on the client machine
+- Network access to `<SERVER_IP>:<PORT>`
+
+---
+
+## Configuration
+
+Environment variables are loaded from a `.env` file in the Compose directory:
 
 ```env
-KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Öffentliche URL des Servers
-PORT=3456                                # TCP-Port (Standard: 3456)
-KUZU_DB_PATH=/data/kg.db                 # Pfad zur Datenbank
-BACKUP_DIR=/backups                      # Pfad für Backup-Dateien
-MAX_BACKUPS=10                           # Maximale Anzahl aufbewahrter Backups
-KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
+KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Public URL of the server
+PORT=3456                                # TCP port (default: 3456)
+KUZU_DB_PATH=/data/kg.db                 # Path to the database
+BACKUP_DIR=/backups                      # Path for backup files
+MAX_BACKUPS=10                           # Maximum number of backups to keep
+KUZU_POOL_SIZE=4                         # Connection pool size
 ```
 
 ---
 
 ## Installation / Deployment
 
-### Server (einmalig)
+### Server (one-time setup)
 
 ```bash
-# Verzeichnis anlegen
+# Create directory
 mkdir -p ~/mydocker/compose-files/ai-rem
 cd ~/mydocker/compose-files/ai-rem
 
-# docker-compose.yml und .env.example herunterladen
+# Download docker-compose.yml and .env.example
 curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/docker-compose.yml
 curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/.env.example
 
-# .env anlegen und anpassen
+# Create .env and set your server IP
 cp .env.example .env
-# → KG_PUBLIC_URL in .env auf die echte Server-IP setzen
+# → set KG_PUBLIC_URL in .env to your actual server IP
 
-# Image pullen und Container starten
+# Pull image and start container
 docker compose pull && docker compose up -d
 ```
 
-### Client — neuer Rechner einrichten
+### Client — setting up a new machine
 
-**Auf jeder neuen Maschine** — einen Satz zu Claude:
+**On every new machine** — say this to Claude:
 
 ```
-Führe aus: bash <(curl -s http://<SERVER_IP>:3456/setup)
+Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
 ```
 
-Das Skript erledigt automatisch:
-1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren
-2. `~/.claude/settings-template.json` — Basis-Template für Permissions, Deny-Rules und Hooks anlegen (falls nicht vorhanden)
-3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl)
-4. `~/.claude/settings.json` — Permissions, Deny-Rules und Hook eintragen; alte Hooks entfernen; `autoMemoryEnabled: false`
-5. `~/.claude/CLAUDE.md` — minimalen 3-Zeilen-Pointer auf ai-rem anlegen oder aktualisieren
-6. Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`)
-7. `~/.claude/ai-rem/pref-tui.py` — Terminal-Preferences-Manager installieren
-8. Preferences & Tool-Entities direkt via MCP API im Knowledge Graph anlegen
+The script automatically handles:
+1. `claude mcp add` — register ai-rem as a user-scoped HTTP MCP server
+2. `~/.claude/settings-template.json` — create base template for permissions, deny rules and hooks (if not present)
+3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count)
+4. `~/.claude/settings.json` — add permissions, deny rules and hook; remove old hooks; set `autoMemoryEnabled: false`
+5. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
+6. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`)
+7. `~/.claude/ai-rem/pref-tui.py` — install terminal preferences manager
+8. Create preferences & tool entities directly in the knowledge graph via MCP API
 
-**Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`.
+**The only thing to remember:** the URL `<SERVER_IP>:3456/setup`.
 
-Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
+The script is idempotent — running it multiple times on the same machine is safe.
 
-### Update auf neue Version
+### Update to a new version
 
 ```bash
 ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && docker compose up -d"
@@ -137,49 +139,49 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && do
 
 ---
 
-## Dateien
+## Files
 
 ```
 ai-rem/
-├── server.py              # MCP-Server (FastMCP + Kuzu + Web UI + Backup)
+├── server.py              # MCP server (FastMCP + Kuzu + web UI + backup)
 ├── requirements.txt       # fastmcp, kuzu
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env.example           # Vorlage für Konfiguration
-├── .env                   # Konfiguration (nicht im Repo, aus .env.example ableiten)
-├── setup-config.json      # Persönliche Konfiguration (gitignored; Beispiel im Repo)
-├── README.md
-└── README.en.md
+├── .env.example           # Configuration template
+├── .env                   # Configuration (not in repo, derived from .env.example)
+├── setup-config.json      # Personal configuration (gitignored; example in repo)
+├── README.md              # This file (English)
+└── README.de.md           # German documentation
 ```
 
 ---
 
-## CLAUDE.md Strategie
+## CLAUDE.md Strategy
 
-Das Setup-Skript schreibt in `~/.claude/CLAUDE.md` nur einen **minimalen 3-Zeilen-Pointer**:
+The setup script writes only a **minimal 3-line pointer** to `~/.claude/CLAUDE.md`:
 
 ```markdown
 ## ai-rem
-ai-rem ist die einzige Wissensquelle für persistenten Kontext. Auto-Memory ist deaktiviert.
-Nutzungsregeln kommen über die MCP Server Instructions, Verhaltensregeln aus den ai-rem Preferences.
+ai-rem is the only knowledge source for persistent context. Auto-memory is disabled.
+Usage rules come via MCP Server Instructions, behavioural rules from ai-rem Preferences.
 ```
 
-Die eigentlichen Regeln kommen aus zwei Quellen, die automatisch beim Sitzungsstart geladen werden:
-- **MCP Server Instructions** — was zu speichern ist, was nicht, wie Entities zu verknüpfen sind (fest im Server)
-- **ai-rem Preferences** (`memory_get_context`) — persönliche Verhaltensregeln, Feedback, Arbeitsweisen (dynamisch, im Graph)
+The actual rules come from two sources loaded automatically at session start:
+- **MCP Server Instructions** — what to store, what not to, how to link entities (built into the server)
+- **ai-rem Preferences** (`memory_get_context`) — personal behaviour rules, feedback, working styles (dynamic, in the graph)
 
-Projekt-spezifische CLAUDE.md-Dateien setzen den Standard-Context:
+Project-specific CLAUDE.md files set the default context:
 
-| Datei | Zweck |
+| File | Purpose |
 |---|---|
-| `~/.claude/CLAUDE.md` | Minimaler ai-rem-Pointer (verwaltet vom Setup-Skript) |
-| `work-repo/CLAUDE.md` | `context="work"` als Standard für Arbeits-Repos |
+| `~/.claude/CLAUDE.md` | Minimal ai-rem pointer (managed by setup script) |
+| `work-repo/CLAUDE.md` | `context="work"` as default for work repositories |
 
 ---
 
-## Persönliche Konfiguration (setup-config.json)
+## Personal Configuration (setup-config.json)
 
-Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-config`). Diese Datei ist **nicht im Repo** — sie enthält persönliche Einstellungen:
+The setup endpoint optionally loads a `setup-config.json` from the server (`/setup-config`). This file is **not in the repo** — it contains personal settings:
 
 ```json
 {
@@ -193,6 +195,4 @@ Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-c
 }
 ```
 
-Im Docker-Image wird die Datei zur Buildzeit kopiert (`COPY setup-config*.json ./`). Ein Dummy `setup-config.json` im Repo dient als öffentliches Beispiel ohne private Daten; die echte persönliche Version ist gitignored.
-
-Der `system-check.py`-Hook liest seine Konfiguration aus `~/.claude/settings-template.json`, das beim ersten Setup angelegt wird und u.a. SMB-Pfad, MCP-stdio-Server-Pfade und tools-Verzeichnis enthält.
+The Docker image copies this file at build time (`COPY setup-config*.json ./`). A dummy `setup-config.json` in the repo serves as a public example without private data; the real personal version is gitignored.
