@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.0.9](https://github.com/markus7h/ai-rem/releases/tag/v0.0.9)** ([Release Notes](release-notes-v0.0.9.md)).
+> Diese Dokumentation bezieht sich auf **[v0.1.0](https://github.com/markus7h/ai-rem/releases/tag/v0.1.0)**.
 
 **ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
 Claude hat von Haus aus kein Gedächtnis über Sessions hinaus. Dieses Projekt löst das Problem: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – werden in einem Knowledge Graph gespeichert und beim nächsten Gespräch automatisch geladen.
@@ -35,6 +35,7 @@ Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontex
 | `memory_list(type, context)` | Alle Entities auflisten |
 | `memory_get_relations(name)` | Alle Beziehungen einer Entity |
 | `memory_delete(name)` | Entity und Relationen entfernen |
+| `memory_status()` | Kurzstatus: Anzahl Entities und Relationen (wird vom SessionStart-Hook genutzt) |
 
 ### Entity-Typen
 
@@ -92,17 +93,18 @@ KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 ```bash
 # Verzeichnis anlegen
 mkdir -p ~/mydocker/compose-files/ai-rem
+cd ~/mydocker/compose-files/ai-rem
 
-# Dateien übertragen
-rsync -av server.py requirements.txt Dockerfile docker-compose.yml .env.example \
-  your-server:~/mydocker/compose-files/ai-rem/
+# docker-compose.yml und .env.example herunterladen
+curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/.env.example
 
-# .env aus Vorlage anlegen und anpassen
-ssh your-server "cp ~/mydocker/compose-files/ai-rem/.env.example ~/mydocker/compose-files/ai-rem/.env"
+# .env anlegen und anpassen
+cp .env.example .env
 # → KG_PUBLIC_URL in .env auf die echte Server-IP setzen
 
-# Container starten
-ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose up -d --build"
+# Image pullen und Container starten
+docker compose pull && docker compose up -d
 ```
 
 ### Client — neuer Rechner einrichten
@@ -115,21 +117,22 @@ Führe aus: bash <(curl -s http://<SERVER_IP>:3456/setup)
 
 Das Skript erledigt automatisch:
 1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren
-2. `~/.claude/CLAUDE.md` — KG-Memory-Block anlegen oder aktualisieren (Entity-Typen, Speicherregeln)
-3. `~/.claude/settings.json` — Permissions für alle ai-rem-Tools, `autoMemoryEnabled: false`
-4. `~/.claude/hooks/ai-rem-bootstrap.py` — SessionStart-Hook: prüft Verbindung und zeigt Statuszeile (`"ai-rem: N Entities, M Relationen"` oder `"nicht erreichbar"`)
-5. `~/.claude/commands/setup-ai-rem.md` — lokalen Slash-Command `/setup-ai-rem` anlegen
+2. `~/.claude/settings-template.json` — Basis-Template für Permissions, Deny-Rules und Hooks anlegen (falls nicht vorhanden)
+3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl)
+4. `~/.claude/settings.json` — Permissions, Deny-Rules und Hook eintragen; alte Hooks entfernen; `autoMemoryEnabled: false`
+5. `~/.claude/CLAUDE.md` — minimalen 3-Zeilen-Pointer auf ai-rem anlegen oder aktualisieren
+6. Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`)
+7. `~/.claude/ai-rem/pref-tui.py` — Terminal-Preferences-Manager installieren
+8. Preferences & Tool-Entities direkt via MCP API im Knowledge Graph anlegen
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`.
 
 Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
 
-### Update nach Code-Änderungen
+### Update auf neue Version
 
 ```bash
-rsync -av server.py requirements.txt Dockerfile docker-compose.yml \
-  your-server:~/mydocker/compose-files/ai-rem/
-ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose up -d --build"
+ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && docker compose up -d"
 ```
 
 ---
@@ -138,12 +141,13 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose up -d --bu
 
 ```
 ai-rem/
-├── server.py          # MCP-Server (FastMCP + Kuzu + Web UI + Backup)
-├── requirements.txt   # fastmcp, kuzu
+├── server.py              # MCP-Server (FastMCP + Kuzu + Web UI + Backup)
+├── requirements.txt       # fastmcp, kuzu
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env.example       # Vorlage für Konfiguration
-├── .env               # Konfiguration (nicht im Repo, aus .env.example ableiten)
+├── .env.example           # Vorlage für Konfiguration
+├── .env                   # Konfiguration (nicht im Repo, aus .env.example ableiten)
+├── setup-config.json      # Persönliche Konfiguration (gitignored; Beispiel im Repo)
 ├── README.md
 └── README.en.md
 ```
@@ -152,15 +156,43 @@ ai-rem/
 
 ## CLAUDE.md Strategie
 
-Der `## Knowledge Graph Memory (ai-rem)`-Block in `~/.claude/CLAUDE.md` wird vom Setup-Skript angelegt und bei jedem erneuten Setup auf den aktuellen Stand gebracht. Er enthält:
+Das Setup-Skript schreibt in `~/.claude/CLAUDE.md` nur einen **minimalen 3-Zeilen-Pointer**:
 
-- **Was zu speichern ist** — Entity-Typ pro Kategorie (`Preference` für Feedback/Arbeitsweisen, `Project`, `Task`, `Decision`, `Problem`, `Solution`, `Tool`, `Topic`, `Person`)
-- **Was nicht zu speichern ist** — Code-Patterns, Architektur, Pfade (aus Code ableitbar), git-Historie, Fix-Rezepte, ephemere Sitzungsdetails — auch wenn der User explizit darum bittet
-- **Vor Empfehlung aus Memory** — Pfade, Funktions- und Flag-Namen verifizieren bevor empfohlen; Memory ist Behauptung über damals, nicht über jetzt
+```markdown
+## ai-rem
+ai-rem ist die einzige Wissensquelle für persistenten Kontext. Auto-Memory ist deaktiviert.
+Nutzungsregeln kommen über die MCP Server Instructions, Verhaltensregeln aus den ai-rem Preferences.
+```
+
+Die eigentlichen Regeln kommen aus zwei Quellen, die automatisch beim Sitzungsstart geladen werden:
+- **MCP Server Instructions** — was zu speichern ist, was nicht, wie Entities zu verknüpfen sind (fest im Server)
+- **ai-rem Preferences** (`memory_get_context`) — persönliche Verhaltensregeln, Feedback, Arbeitsweisen (dynamisch, im Graph)
 
 Projekt-spezifische CLAUDE.md-Dateien setzen den Standard-Context:
 
 | Datei | Zweck |
 |---|---|
-| `~/.claude/CLAUDE.md` | Globale Regeln + KG-Memory-Block (verwaltet vom Setup-Skript) |
+| `~/.claude/CLAUDE.md` | Minimaler ai-rem-Pointer (verwaltet vom Setup-Skript) |
 | `work-repo/CLAUDE.md` | `context="work"` als Standard für Arbeits-Repos |
+
+---
+
+## Persönliche Konfiguration (setup-config.json)
+
+Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-config`). Diese Datei ist **nicht im Repo** — sie enthält persönliche Einstellungen:
+
+```json
+{
+  "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
+  "permissions_deny": ["Bash(bw get *)", ...],
+  "smb": {"mount": "/Volumes/markus", "url": "smb://server/share"},
+  "mcp_stdio_servers": {"paperless": "/path/to/index.js"},
+  "tools_scripts_dir": "/path/to/tools-mcp/scripts",
+  "old_hooks": ["legacy-hook.sh"],
+  "entities": [{"name": "...", "type": "Tool", "description": "..."}]
+}
+```
+
+Im Docker-Image wird die Datei zur Buildzeit kopiert (`COPY setup-config*.json ./`). Ein Dummy `setup-config.json` im Repo dient als öffentliches Beispiel ohne private Daten; die echte persönliche Version ist gitignored.
+
+Der `system-check.py`-Hook liest seine Konfiguration aus `~/.claude/settings-template.json`, das beim ersten Setup angelegt wird und u.a. SMB-Pfad, MCP-stdio-Server-Pfade und tools-Verzeichnis enthält.
