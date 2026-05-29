@@ -1885,6 +1885,21 @@ def memory_relate(
     return f"Erstellt: {from_name} -[{relation}]-> {to_name}"
 
 
+def _smart_truncate(text: str, threshold: int = 400) -> str:
+    if not text or len(text) <= threshold:
+        return text
+    sentences = re.split(r'(?<=\.)\s+', text.strip())
+    if len(sentences) <= 2:
+        return text[:threshold] + "…"
+    first = sentences[0]
+    last = sentences[-1]
+    middle_budget = threshold - len(first) - len(last) - 10
+    if middle_budget > 40:
+        middle = " ".join(sentences[1:-1])
+        return f"{first} {middle[:middle_budget]}… {last}"
+    return f"{first} … {last}"
+
+
 @mcp.tool()
 def memory_search(query: str, limit: int = 15, context: str = "") -> str:
     """Entities nach Name oder Beschreibung durchsuchen.
@@ -1912,7 +1927,7 @@ def memory_search(query: str, limit: int = 15, context: str = "") -> str:
     for r in rows:
         ctx_tag = r[4] or ""
         ctx_str = f" `[{ctx_tag}]`" if ctx_tag else ""
-        lines.append(f"[{r[0]}] **{r[1]}**{ctx_str}: {r[2][:100]}  _(aktualisiert {r[3][:10]})_")
+        lines.append(f"[{r[0]}] **{r[1]}**{ctx_str}: {_smart_truncate(r[2])}  _(aktualisiert {r[3][:10]})_")
     return "\n".join(lines)
 
 
@@ -1943,7 +1958,7 @@ def memory_get_context(topic: str = "", context: str = "") -> str:
             )
         )
         if rows:
-            lines = [f"[{r[0]}] {r[1]}: {r[2][:100]}" for r in rows]
+            lines = [f"[{r[0]}] {r[1]}: {r[2][:300]}" for r in rows]
             sections.append(f"## Kontext: {topic}{ctx_label}\n" + "\n".join(lines))
 
         rel_rows = _rows(
