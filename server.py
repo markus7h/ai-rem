@@ -25,6 +25,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, R
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
+VERSION = "0.1.2"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
@@ -2162,6 +2163,33 @@ def memory_status() -> str:
     e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
     r_count = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
     return f"ai-rem: {e_count} Entities, {r_count} Relationen"
+
+
+@mcp.tool()
+def memory_check_update() -> str:
+    """Zeigt die installierte Version und prüft ob auf Docker Hub eine neuere verfügbar ist."""
+    import urllib.request, json as _json
+    installed = VERSION
+    try:
+        url = "https://hub.docker.com/v2/repositories/magic3arkus/ai-rem/tags/?page_size=50&ordering=last_updated"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = _json.loads(resp.read())
+        tags = [t["name"] for t in data.get("results", [])
+                if t["name"] != "latest" and t["name"].startswith("v")]
+        if not tags:
+            return f"Installiert: v{installed}\nDocker Hub: keine Tags gefunden"
+
+        def _ver(tag):
+            try:
+                return tuple(int(x) for x in tag.lstrip("v").split("."))
+            except ValueError:
+                return (0,)
+
+        latest = max(tags, key=_ver)
+        status = "✓ aktuell" if latest == f"v{installed}" else "⚠ Update verfügbar"
+        return f"Installiert: v{installed}\nDocker Hub: {latest}\nStatus: {status}"
+    except Exception as e:
+        return f"Installiert: v{installed}\nDocker Hub: nicht erreichbar ({e})"
 
 
 @mcp.tool()
