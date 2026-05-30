@@ -1,6 +1,7 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.1.0](https://github.com/markus7h/ai-rem/releases/tag/v0.1.0)**.
+> Diese Dokumentation bezieht sich auf **[v0.1.3](https://github.com/markus7h/ai-rem/releases/tag/v0.1.3)**.
+> Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 
 **ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
 Claude hat von Haus aus kein Gedächtnis über Sessions hinaus. Dieses Projekt löst das Problem: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – werden in einem Knowledge Graph gespeichert und beim nächsten Gespräch automatisch geladen.
@@ -33,9 +34,14 @@ Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontex
 | `memory_search(query, context)` | Volltextsuche über Name + Beschreibung |
 | `memory_get_context(topic, context)` | Relevanten Subgraph laden (Tasks, Projekte, Decisions, Preferences) |
 | `memory_list(type, context)` | Alle Entities auflisten |
-| `memory_get_relations(name)` | Alle Beziehungen einer Entity |
-| `memory_delete(name)` | Entity und Relationen entfernen |
+| `memory_get_relations(name)` | Alle Beziehungen einer Entity (zeigt auch archivierte → für Historie) |
+| `memory_archive(name, compressed_description, superseded_by)` | Eintrag archivieren statt löschen (Original in `extra.original_descr` gesichert), verlinkt via `VERALTET_DURCH` |
+| `memory_merge(canonical_name, duplicate_name)` | Dublette in canonical falten, Relationen umhängen, Dublette archivieren + `DUPLIKAT_VON` |
+| `memory_delete(name)` | Entity und Relationen hart entfernen |
 | `memory_status()` | Kurzstatus: Anzahl Entities und Relationen (wird vom SessionStart-Hook genutzt) |
+| `memory_check_update()` | Installierte Version vs. neuester Docker-Hub-Tag |
+
+`memory_get_context`, `memory_search` und `memory_list` blenden archivierte Einträge standardmäßig aus — Opt-in über `include_archived=true`.
 
 ### Entity-Typen
 
@@ -58,8 +64,29 @@ Der Kontext kann per CLAUDE.md gesetzt werden: z.B. `context="work"` für Arbeit
 |---|---|
 | `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore |
 | `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen |
+| `/cleanup` | Nightly-Cleanup: Konfiguration, manueller Lauf, Pending-Reviews, Lauf-Log |
 
 **`/prefs`** — Vollständiger Preferences-Manager im Browser: pin/unpin, Context-Dropdown, manuelle Reihenfolge (`sort_order`), löschen. Klick auf den Namen klappt die vollständige Beschreibung auf. Aufrufbar über den Slash-Command `/ai-rem:prefedit`.
+
+---
+
+## Auto-Memory & Nightly-Cleanup
+
+**Auto-Memory** ersetzt das eingebaute Markdown-Auto-Memory durch einen Transcript-Extraktor:
+`PreCompact`/`SessionEnd`-Hook → `ai-rem ingest` → Ollama extrahiert strukturierte Entities/
+Relations → ai-rem.
+
+- **md-Fallback:** Ist Ollama nicht erreichbar, geht nichts verloren — eine heuristische Extraktion
+  landet in `~/.claude/auto-memory/fallback.md` (via `@`-Import in `CLAUDE.md` weiter im Kontext)
+  und die Session wird vorgemerkt.
+- **Catch-up:** Sobald Ollama zurück ist, zieht `ai-rem catchup` die verpassten Sessions sauber nach
+  ai-rem nach und leert das md wieder.
+
+**Nightly-Cleanup** (Daemon im Container, default 03:00, konfigurierbar unter `/cleanup`) räumt
+Dubletten & überholte Einträge auf — **nicht-destruktiv: archivieren statt löschen**, mit Backup vor
+jeder Mutation. `Preference`, gepinnte und bereits archivierte Einträge werden nie angefasst.
+Mehrdeutiges (und alles bei Ollama-Ausfall) landet in einer Review-Queue, die der Slash-Command
+**`/memory-cleanup`** (still beim Session-Start ausgelöst) mit Urteil abarbeitet.
 
 ---
 
