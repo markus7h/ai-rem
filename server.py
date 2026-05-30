@@ -377,7 +377,15 @@ def check_auto_memory():
             d = json.load(f)
         n = d.get("entity_count", len(d.get("entities", [])))
         tag = " (md-Fallback)" if d.get("mode") == "md" else ""
-        parts.append(f"🧠 {n} Entities, {d.get('relations', 0)} Rel{tag}")
+        ents = d.get("entities") or []
+        shown = ", ".join(ents[:4]) + ("…" if len(ents) > 4 else "")
+        applied = d.get("applied", 0)
+        line = f"🧠 {n} Entities, {d.get('relations', 0)} Rel{tag}"
+        if applied:
+            line += f", {applied} applied"
+        if shown:
+            line += f" → {shown}"
+        parts.append(line)
     except Exception:
         pass
     try:
@@ -467,6 +475,43 @@ def _find_cli():
     return shutil.which("ai-rem") or ""
 
 
+def _notify(text):
+    """Desktop-Notification, plattformübergreifend: macOS (osascript) /
+    Linux-GNOME (notify-send). Schlägt still fehl (SSH/headless ohne DBUS)."""
+    title = "ai-rem gespeichert"
+    try:
+        if sys.platform == "darwin":
+            safe = text.replace("\\", " ").replace('"', "'")
+            subprocess.run(
+                ["osascript", "-e", f'display notification "{safe}" with title "{title}"'],
+                capture_output=True, timeout=5)
+        elif sys.platform.startswith("linux") and shutil.which("notify-send"):
+            subprocess.run(["notify-send", "-a", "ai-rem", title, text],
+                           capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
+def _notify_last_run(sid):
+    """Zeigt nach erfolgreichem Ingest, was gespeichert wurde (aus last-run.json)."""
+    try:
+        d = json.loads((AUTO_MEM_DIR / "last-run.json").read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if sid and d.get("session") and d["session"] != sid:
+        return  # last-run gehört zu anderer Session (Race) → nichts zeigen
+    n = d.get("entity_count", 0)
+    applied = d.get("applied", 0)
+    if not n and not applied:
+        return  # nichts gespeichert → keine Notification-Noise
+    ents = d.get("entities") or []
+    shown = ", ".join(ents[:4]) + ("…" if len(ents) > 4 else "")
+    msg = f"{n} Entities, {d.get('relations', 0)} Rel, {applied} applied"
+    if shown:
+        msg += f"\n{shown}"
+    _notify(msg)
+
+
 def _log_error(msg):
     try:
         AUTO_MEM_DIR.mkdir(parents=True, exist_ok=True)
@@ -548,6 +593,7 @@ def main():
         return
 
     _mark_processed(session_id)
+    _notify_last_run(session_id)
 
 
 if __name__ == "__main__":
