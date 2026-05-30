@@ -14,6 +14,7 @@ import os
 import queue
 import re
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -1044,6 +1045,7 @@ def init_schema() -> None:
     _migrate_pinned_column()
     _migrate_sort_order_column()
     _migrate_archived_column()
+    _migrate_embedding_column()
     log.info("Schema ready — DB at %s", DB_PATH)
 
 
@@ -1168,6 +1170,18 @@ def _migrate_archived_column() -> None:
         log.info("Schema migration: archived column added")
     except Exception as e:
         log.error("ALTER TABLE Entity ADD archived failed: %s", e)
+
+
+def _migrate_embedding_column() -> None:
+    """One-off migration: add `embedding` column (JSON-Float-Liste). Backfill läuft
+    separat im Hintergrund-Thread (_embed_backfill) nach dem Startup."""
+    if _entity_has_column("embedding"):
+        return
+    try:
+        db_exec("ALTER TABLE Entity ADD embedding STRING DEFAULT ''")
+        log.info("Schema migration: embedding column added")
+    except Exception as e:
+        log.error("ALTER TABLE Entity ADD embedding failed: %s", e)
 
 
 init_schema()
@@ -2189,6 +2203,7 @@ def memory_add(
          "descr": description, "extra": extra_json,
          "ctx": context or "", "pinned": pinned_val, "ts": ts},
     )
+    _store_embedding(eid, name, description)
     verb = "Aktualisiert" if existed else "Angelegt"
     pin_marker = " 📌" if pinned else ""
     return f"{verb}: [{type}] {name}{pin_marker}"
@@ -2306,12 +2321,11 @@ def _smart_truncate(text: str, threshold: int = 400) -> str:
     return f"{first} … {last}"
 
 
-@mcp.tool()
-def memory_search(query: str, limit: int = 15, context: str = "", include_archived: bool = False) -> str:
-    """Entities nach Name oder Beschreibung durchsuchen.
+def _lexical_hits(query: str, context: str = "", include_archived: bool = False,
+                  limit: int = 15) -> list[dict]:
+    """Substring-Suche über name/descr. Liefert strukturierte Treffer-Dicts.
 
-    context: "work" | "private" | "" (kein Filter, default)
-    include_archived: True → auch archivierte (alte/überholte) Einträge zeigen (default: aus)
+    Gemeinsame Basis für memory_search (Formatierung) und /discover (Kategorisierung).
     """
     q = query.lower()
     params: dict = {"q": q, "lim": limit}
@@ -2329,14 +2343,294 @@ def memory_search(query: str, limit: int = 15, context: str = "", include_archiv
             params,
         )
     )
-    if not rows:
+    return [{"type": r[0], "name": r[1], "descr": r[2] or "",
+             "updated_at": r[3] or "", "context": r[4] or ""} for r in rows]
+
+
+@mcp.tool()
+def memory_search(query: str, limit: int = 15, context: str = "", include_archived: bool = False) -> str:
+    """Entities nach Name oder Beschreibung durchsuchen.
+
+    context: "work" | "private" | "" (kein Filter, default)
+    include_archived: True → auch archivierte (alte/überholte) Einträge zeigen (default: aus)
+    """
+    hits = _lexical_hits(query, context, include_archived, limit)
+    if not hits:
         return "Keine Ergebnisse."
     lines = []
-    for r in rows:
-        ctx_tag = r[4] or ""
-        ctx_str = f" `[{ctx_tag}]`" if ctx_tag else ""
-        lines.append(f"[{r[0]}] **{r[1]}**{ctx_str}: {_smart_truncate(r[2])}  _(aktualisiert {r[3][:10]})_")
+    for h in hits:
+        ctx_str = f" `[{h['context']}]`" if h["context"] else ""
+        lines.append(
+            f"[{h['type']}] **{h['name']}**{ctx_str}: {_smart_truncate(h['descr'])}  "
+            f"_(aktualisiert {h['updated_at'][:10]})_"
+        )
     return "\n".join(lines)
+
+
+# ─── Embeddings (semantische Suche, in-container via fastembed/ONNX) ───────────
+# Vektoren liegen als JSON-Float-Liste in Entity.embedding, Suche per Brute-Force-
+# Cosine über eine in-memory numpy-Matrix (bei <~10k Entities <1ms, kein Index nötig).
+# Kein externer Dienst — alles im ai-rem-Container.
+
+EMBED_ENABLED = os.getenv("EMBED_ENABLED", "1") != "0"
+# MiniLM-L12 multilingual (0.22GB, DE+EN, leichtgewichtig für 1g-Container). Catalog
+# via fastembed verifiziert; e5-small ist NICHT verfügbar. Upgrade-Pfad: jina-v2-base-de.
+EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+# MiniLM/jina-Cosines sind breit gestreut → ~0.45; e5/nomic bräuchten ~0.82.
+EMBED_THRESHOLD = float(os.getenv("EMBED_THRESHOLD", "0.45"))
+# Nur e5/nomic brauchen "query: "/"passage: "-Präfixe; MiniLM/jina ohne → Default leer.
+EMBED_QUERY_PREFIX = os.getenv("EMBED_QUERY_PREFIX", "")
+EMBED_PASSAGE_PREFIX = os.getenv("EMBED_PASSAGE_PREFIX", "")
+EMBED_THREADS = int(os.getenv("EMBED_THREADS", "2"))  # onnxruntime-Threads zähmen (shared host)
+
+_embed_model = None
+_embed_model_lock = threading.Lock()
+_embed_matrix = None        # numpy (N, D), L2-normalisiert
+_embed_names: list = []
+_embed_meta: dict = {}
+_embed_dirty = True
+_embed_cache_lock = threading.Lock()
+
+
+def _get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        with _embed_model_lock:
+            if _embed_model is None:
+                from fastembed import TextEmbedding
+                _embed_model = TextEmbedding(model_name=EMBED_MODEL, threads=EMBED_THREADS)
+                log.info("Embedding-Modell geladen: %s (threads=%d)", EMBED_MODEL, EMBED_THREADS)
+    return _embed_model
+
+
+def _embed_texts(texts: list[str], prefix: str):
+    """Liste Texte → L2-normalisierte float32-Matrix (N, D)."""
+    import numpy as np
+    model = _get_embed_model()
+    vecs = list(model.embed([f"{prefix}{t}" for t in texts]))
+    arr = np.asarray(vecs, dtype="float32")
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return arr / norms
+
+
+def _embed_payload(name: str, descr: str) -> str:
+    return f"{name}: {descr}".strip()
+
+
+def _store_embedding(eid: str, name: str, descr: str) -> None:
+    if not EMBED_ENABLED:
+        return
+    try:
+        vec = _embed_texts([_embed_payload(name, descr)], EMBED_PASSAGE_PREFIX)[0]
+        db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
+                {"id": eid, "emb": json.dumps([round(float(x), 6) for x in vec])})
+        _invalidate_embed_cache()
+    except Exception as e:
+        log.warning("Embedding-Store fehlgeschlagen für %s: %s", name, e)
+
+
+def _invalidate_embed_cache() -> None:
+    global _embed_dirty
+    with _embed_cache_lock:
+        _embed_dirty = True
+
+
+def _ensure_embed_matrix():
+    """Lazy (Re)Build der in-memory Matrix aus der DB. Gibt (names, matrix|None)."""
+    global _embed_matrix, _embed_names, _embed_meta, _embed_dirty
+    with _embed_cache_lock:
+        if not _embed_dirty and _embed_matrix is not None:
+            return _embed_names, _embed_matrix
+    import numpy as np
+    rows = _rows(db_exec(
+        "MATCH (e:Entity) WHERE e.embedding IS NOT NULL AND e.embedding <> '' "
+        "AND (e.archived IS NULL OR e.archived <> 'true') "
+        "RETURN e.name, e.type, e.descr, e.context, e.embedding"))
+    names, vecs, meta = [], [], {}
+    for nm, typ, descr, ctx, emb in rows:
+        try:
+            v = json.loads(emb)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        names.append(nm)
+        vecs.append(v)
+        meta[nm] = {"type": typ, "descr": descr or "", "context": ctx or ""}
+    matrix = np.asarray(vecs, dtype="float32") if vecs else None
+    with _embed_cache_lock:
+        _embed_names, _embed_meta, _embed_matrix, _embed_dirty = names, meta, matrix, False
+        return _embed_names, _embed_matrix
+
+
+def _semantic_hits(query: str, context: str = "", limit: int = 10) -> list[dict]:
+    """Cosine-Top-K über die Embedding-Matrix. Form wie _lexical_hits."""
+    if not EMBED_ENABLED or not query.strip():
+        return []
+    try:
+        import numpy as np
+        names, matrix = _ensure_embed_matrix()
+        if matrix is None or not names:
+            return []
+        qv = _embed_texts([query], EMBED_QUERY_PREFIX)[0]
+        sims = matrix @ qv  # beide normalisiert → Cosine
+        order = np.argsort(-sims)
+        out = []
+        for i in order:
+            score = float(sims[i])
+            if score < EMBED_THRESHOLD:
+                break
+            nm = names[i]
+            m = _embed_meta.get(nm, {})
+            if context and m.get("context") not in (context, ""):
+                continue
+            out.append({"type": m.get("type", ""), "name": nm, "descr": m.get("descr", ""),
+                        "updated_at": "", "context": m.get("context", ""), "score": score})
+            if len(out) >= limit:
+                break
+        return out
+    except Exception as e:
+        log.warning("Semantische Suche fehlgeschlagen: %s", e)
+        return []
+
+
+def _embed_backfill() -> None:
+    """Idempotent: embedded alle Entities ohne Vektor. Startup + Nightly-Reconcile."""
+    if not EMBED_ENABLED:
+        return
+    try:
+        rows = _rows(db_exec(
+            "MATCH (e:Entity) WHERE (e.embedding IS NULL OR e.embedding = '') "
+            "RETURN e.id, e.name, e.descr"))
+        if not rows:
+            _ensure_embed_matrix()
+            return
+        log.info("Embedding-Backfill: %d Entities", len(rows))
+        vecs = _embed_texts([_embed_payload(nm, descr or "") for _, nm, descr in rows],
+                            EMBED_PASSAGE_PREFIX)
+        for (eid, _nm, _d), v in zip(rows, vecs):
+            db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
+                    {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
+        _invalidate_embed_cache()
+        _ensure_embed_matrix()
+        log.info("Embedding-Backfill fertig (%d)", len(rows))
+    except Exception as e:
+        log.error("Embedding-Backfill fehlgeschlagen: %s", e)
+
+
+# ─── Discovery (UserPromptSubmit-Hook Endpoint) ───────────────────────────────
+# Der Hook schickt den rohen Prompt; Keyword-Extraktion, Suche und Kategorisierung
+# laufen hier server-seitig, damit der Hook ein dünner Client bleibt (Portabilität).
+
+_DISCOVER_STOPWORDS = {
+    # DE
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer", "eines",
+    "ich", "mir", "mich", "mein", "meine", "meinen", "meinem", "meiner",
+    "wir", "uns", "unser", "unsere", "unseren",
+    "ist", "sind", "war", "waren", "sein", "habe", "hat", "hatte", "hatten",
+    "wird", "werden", "wurde", "wurden", "kann", "kannst", "könnte", "können",
+    "soll", "sollte", "sollen", "muss", "müsste", "müssen", "mag", "möchte",
+    "und", "oder", "aber", "doch", "denn", "weil", "dass", "ob", "wenn", "als",
+    "auch", "noch", "nur", "schon", "etwa", "etwas", "mehr", "weniger",
+    "diese", "dieser", "dieses", "diesen", "diesem", "jene", "jener", "jenes",
+    "über", "unter", "ohne", "mit", "für", "von", "vor", "nach", "bei", "aus",
+    "vom", "zum", "zur", "beim", "ihre", "ihren", "ihrer", "seine", "seinen",
+    "kurz", "lang", "ganz", "fast", "sehr", "viel", "wenig", "mal", "wieder",
+    "bitte", "danke", "mache", "machen", "macht",
+    # EN
+    "the", "and", "but", "for", "nor", "yet", "with", "from", "into", "onto",
+    "would", "could", "should", "shall", "will", "this", "that", "these", "those",
+    "have", "has", "had", "been", "what", "when", "where", "which", "while", "who",
+    # Domain
+    "claude", "code", "datei", "dateien", "ordner", "thing", "stuff",
+}
+_DISCOVER_MAX_KEYWORDS = 5
+_DISCOVER_KNOWLEDGE_CAP = 3
+_DISCOVER_CACHE_TTL = 90.0
+_DISCOVER_CACHE_MAX = 256
+_discover_cache: dict = {}
+_discover_cache_lock = threading.Lock()
+
+
+def _discover_keywords(prompt: str) -> list[str]:
+    seen: list[str] = []
+    for t in re.findall(r"[a-zA-ZÀ-ÿ]{3,}", (prompt or "").lower()):
+        if t in _DISCOVER_STOPWORDS or t in seen:
+            continue
+        seen.append(t)
+        if len(seen) >= _DISCOVER_MAX_KEYWORDS:
+            break
+    return seen
+
+
+def _discover_compute(prompt: str, keywords: list[str], context: str, max_hits: int) -> dict:
+    """Hybrid: lexikalische Exakt-Treffer zuerst (Präzision für Tool-Namen),
+    dann semantische Top-K (Recall für Paraphrasen) füllen die Slots auf."""
+    tools: list[dict] = []
+    playbooks: list[dict] = []
+    knowledge: list[dict] = []
+    seen: set = set()
+
+    def consider(h: dict) -> None:
+        name = h["name"]
+        if name in seen:
+            return
+        item = {"type": h["type"], "name": name, "summary": h["descr"][:160].rstrip()}
+        if h["type"] == "Tool" and name.startswith("tool_"):
+            if len(tools) < max_hits:
+                tools.append(item); seen.add(name)
+        elif name.startswith("playbook_"):
+            if len(playbooks) < max_hits:
+                playbooks.append(item); seen.add(name)
+        elif len(knowledge) < _DISCOVER_KNOWLEDGE_CAP:
+            knowledge.append(item); seen.add(name)
+
+    # 1) Lexikalisch: Volltext-Query, dann pro-Token-Fallback.
+    for q in [" ".join(keywords)] + keywords:
+        for h in _lexical_hits(q, context=context, limit=10):
+            consider(h)
+    # 2) Semantisch über den rohen Prompt — füllt, was die Lexik verpasst hat.
+    for h in _semantic_hits(prompt, context=context, limit=10):
+        consider(h)
+
+    return {"keywords": keywords, "tools": tools, "playbooks": playbooks, "knowledge": knowledge}
+
+
+def _discover(prompt: str, context: str, max_hits: int) -> dict:
+    keywords = _discover_keywords(prompt)
+    if not keywords:
+        return {"keywords": [], "tools": [], "playbooks": [], "knowledge": [], "cached": False}
+    # Cache auf den normalisierten Prompt (deckt Debug-Schleifen mit identischem
+    # Prompt ab; semantischer Pfad hängt am vollen Prompt, nicht nur an Keywords).
+    norm = " ".join(prompt.lower().split())
+    cache_key = (context, norm, max_hits)
+    now = time.monotonic()
+    with _discover_cache_lock:
+        hit = _discover_cache.get(cache_key)
+        if hit and now - hit[0] < _DISCOVER_CACHE_TTL:
+            return {**hit[1], "cached": True}
+    payload = _discover_compute(prompt, keywords, context, max_hits)
+    with _discover_cache_lock:
+        if len(_discover_cache) >= _DISCOVER_CACHE_MAX:
+            oldest = min(_discover_cache, key=lambda k: _discover_cache[k][0])
+            del _discover_cache[oldest]
+        _discover_cache[cache_key] = (now, payload)
+    return {**payload, "cached": False}
+
+
+@mcp.custom_route("/discover", methods=["POST"])
+async def discover_route(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    prompt = (body.get("prompt") or "").strip()
+    if len(prompt) < 5:
+        return JSONResponse({"keywords": [], "tools": [], "playbooks": [],
+                             "knowledge": [], "cached": False})
+    context = body.get("context", "private")
+    max_hits = int(body.get("max_hits", 5))
+    payload = await asyncio.to_thread(_discover, prompt, context, max_hits)
+    return JSONResponse(payload)
 
 
 @mcp.tool()
@@ -2724,13 +3018,16 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
         if _ensure_rel(yid, rname, cid, ts):
             repointed += 1
 
+    new_c_descr = c_descr
     if d_descr and d_descr not in c_descr:
-        merged = (c_descr + f"\n\n[gefaltet aus '{duplicate_name}']: {d_descr}").strip()
+        new_c_descr = (c_descr + f"\n\n[gefaltet aus '{duplicate_name}']: {d_descr}").strip()[:4000]
         db_exec("MATCH (e:Entity {id:$id}) SET e.descr = $descr, e.updated_at = $ts",
-                {"id": cid, "descr": merged[:4000], "ts": ts})
+                {"id": cid, "descr": new_c_descr, "ts": ts})
+        _store_embedding(cid, canonical_name, new_c_descr)
 
     _set_archived(did, ts)
     _ensure_rel(did, "DUPLIKAT_VON", cid, ts)
+    _invalidate_embed_cache()  # archivierte Dublette aus der Matrix nehmen
     return (f"Gemergt: '{duplicate_name}' → '{canonical_name}' "
             f"({repointed} Relationen umgehängt, Dublette archiviert + DUPLIKAT_VON)")
 
@@ -3060,6 +3357,7 @@ def _cleanup_run(triggered_by: str = "scheduler") -> dict:
     _save_cleanup_cfg(cfg)
     log.info("Cleanup done: %d applied, %d pending added (ollama=%s)",
              len(applied), pending_added, ollama)
+    _embed_backfill()  # neue/gemergte Entities ohne Vektor nachziehen
     return log_obj
 
 
@@ -3087,6 +3385,9 @@ def _cleanup_scheduler_loop() -> None:
 
 
 threading.Thread(target=_cleanup_scheduler_loop, daemon=True, name="cleanup-scheduler").start()
+
+# Embeddings nach dem Start im Hintergrund nachziehen (lädt Modell, embedded fehlende).
+threading.Thread(target=_embed_backfill, daemon=True, name="embed-backfill").start()
 
 
 # ─── entry point ────────────────────────────────────────────────────────────
