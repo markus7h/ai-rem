@@ -85,6 +85,26 @@ class MCPClient:
             raise MCPError("Did not receive mcp-session-id")
         return self._sid
 
+    @property
+    def base_url(self) -> str:
+        """HTTP base (endpoint ohne /mcp) — fuer REST-Routen wie /export."""
+        if self.endpoint.endswith("/mcp"):
+            return self.endpoint[:-4]
+        return self.endpoint.rstrip("/")
+
+    def export(self) -> dict:
+        """Vollen Graph (Entities inkl. voller description + extra, Relations) holen.
+
+        Die MCP-Tools (search/context) kuerzen den Body und liefern kein extra;
+        /export gibt alles ungekuerzt zurueck.
+        """
+        url = self.base_url + "/export"
+        try:
+            resp = urllib.request.urlopen(url, timeout=self.timeout)
+        except urllib.error.URLError as e:
+            raise MCPError(f"export unreachable ({url}): {e}") from e
+        return json.loads(resp.read().decode())
+
     def call(self, tool: str, args: Optional[dict] = None) -> str:
         resp = self._post(
             {

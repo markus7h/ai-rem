@@ -94,6 +94,46 @@ def cmd_relations(c: MCPClient, a):
     _print(c.call("memory_get_relations", {"name": a.name}))
 
 
+def cmd_show(c: MCPClient, a):
+    """Voller Entity-Dump via /export: ungekuerzte description + extra + Relations.
+
+    Loest das Recall-Problem, dass search/context den Body kuerzen und kein extra
+    zeigen. Matcht per Teilstring auf Name (und ohne --name-only auch description).
+    """
+    graph = c.export()
+    ents = graph.get("entities", [])
+    rels = graph.get("relations", [])
+    by_id = {e["id"]: e for e in ents}
+    q = a.query.lower()
+    matches = [e for e in ents if q in e["name"].lower()]
+    if not matches and not a.name_only:
+        matches = [e for e in ents if q in (e.get("description", "") or "").lower()]
+    if not matches:
+        _print(f"Keine Entity passt zu '{a.query}'.")
+        return
+    out = []
+    for e in matches:
+        out.append("=" * 70)
+        out.append(f"[{e['type']}] {e['name']}  (ctx={e.get('context', '')})")
+        out.append("--- description ---")
+        out.append(e.get("description", "") or "")
+        extra = {k: v for k, v in (e.get("extra") or {}).items() if k != "context"}
+        if extra:
+            out.append("--- extra ---")
+            out.append(json.dumps(extra, ensure_ascii=False, indent=2))
+        outgoing = [(r["relation"], by_id.get(r["to_id"], {}).get("name", "?"))
+                    for r in rels if r["from_id"] == e["id"]]
+        incoming = [(by_id.get(r["from_id"], {}).get("name", "?"), r["relation"])
+                    for r in rels if r["to_id"] == e["id"]]
+        if outgoing or incoming:
+            out.append("--- relations ---")
+            for rel, to in outgoing:
+                out.append(f"  → {to}  via {rel}")
+            for frm, rel in incoming:
+                out.append(f"  ← {frm}  via {rel}")
+    _print("\n".join(out))
+
+
 def cmd_delete(c: MCPClient, a):
     if not a.yes:
         sys.stderr.write(f"Confirm delete '{a.name}' with --yes\n")
@@ -174,6 +214,16 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("relations", help="memory_get_relations")
     s.add_argument("name")
     s.set_defaults(func=cmd_relations)
+
+    s = sub.add_parser(
+        "show", help="voller Entity-Dump (descr+extra+relations, ungekuerzt) via /export"
+    )
+    s.add_argument("query", help="Teilstring von Name (oder description)")
+    s.add_argument(
+        "--name-only", action="store_true",
+        help="nur Name-Treffer, nicht in description suchen",
+    )
+    s.set_defaults(func=cmd_show)
 
     s = sub.add_parser("delete", help="memory_delete (needs --yes)")
     s.add_argument("name")

@@ -76,6 +76,7 @@ The built-in Claude Code auto-memory (markdown file) is replaced by a transcript
 ```bash
 ai-rem status
 ai-rem search "auto-memory"
+ai-rem show "<name>"   # full, untruncated description + extra + relations (via /export)
 ai-rem list --type Decision
 ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
 ```
