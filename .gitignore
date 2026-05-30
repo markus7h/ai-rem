@@ -6,3 +6,4 @@ __pycache__/
 deploy.sh
 setup-config.json
 .venv/
+.claude/settings.json

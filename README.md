@@ -179,16 +179,23 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && do
 
 ```
 ai-rem/
-├── server.py              # MCP server (FastMCP + Kuzu + web UI + backup)
-├── requirements.txt       # fastmcp, kuzu
+├── server.py                   # MCP server (FastMCP + Kuzu + web UI + backup + cleanup)
+├── bin/ai-rem                  # CLI (status/search/ingest/catchup, own .venv)
+├── lib/                        # extractor (+ md-fallback/catchup), heuristic, mcp_client
+├── requirements.txt            # fastmcp, kuzu
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env.example           # Configuration template
-├── .env                   # Configuration (not in repo, derived from .env.example)
-├── setup-config.json      # Personal configuration (gitignored; example in repo)
-├── README.md              # This file (English)
-└── README.de.md           # German documentation
+├── .env.example                # Configuration template
+├── .env                        # Configuration (not in repo, derived from .env.example)
+├── setup-config.json           # Personal configuration (gitignored; example in repo)
+├── .claude/settings.json.example  # Example repo-local Claude permissions
+├── .claude/settings.json       # Your local Claude permissions (gitignored; copy from .example)
+├── README.md                   # This file (English)
+└── README.de.md                # German documentation
 ```
+
+> `.claude/settings.json` is **gitignored** so personal/local permission tweaks never land in
+> the repo. Copy the template to get started: `cp .claude/settings.json.example .claude/settings.json`.
 
 ---
 
