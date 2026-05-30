@@ -159,10 +159,11 @@ The script automatically handles:
 2. `~/.claude/settings-template.json` — (re)generate base template for permissions, deny rules and hooks from the live setup config
 3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count)
 4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → Ollama-Extraktor → structured entities)
-5. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks; remove old hooks; set `autoMemoryEnabled: false`
-6. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
-7. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`)
-8. Create preferences & tool entities directly in the knowledge graph via MCP API
+5. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md
+6. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook; remove old hooks; set `autoMemoryEnabled: false`
+7. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
+8. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`)
+9. Create preferences & tool entities directly in the knowledge graph via MCP API
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`.
 
@@ -213,6 +214,8 @@ Usage rules come via MCP Server Instructions, behavioural rules from ai-rem Pref
 The actual rules come from two sources loaded automatically at session start:
 - **MCP Server Instructions** — what to store, what not to, how to link entities (built into the server)
 - **ai-rem Preferences** (`memory_get_context`) — personal behaviour rules, feedback, working styles (dynamic, in the graph)
+
+A **PreToolUse guard hook** (`claude-md-guard.py`, deployed by the setup script) reinforces this invariant: whenever `~/.claude/CLAUDE.md` is edited, it injects a non-blocking reminder to put rules/knowledge into ai-rem rather than letting them silently accumulate in CLAUDE.md. This replaces relying on a pinned preference for the same purpose.
 
 Project-specific CLAUDE.md files set the default context:
 

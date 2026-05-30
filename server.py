@@ -25,7 +25,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, R
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
@@ -557,6 +557,49 @@ if __name__ == "__main__":
     sys.exit(0)
 '''
 
+CLAUDE_MD_GUARD_PY = r'''#!/usr/bin/env python3
+"""PreToolUse-Hook: warnt (non-blocking) bei Schreibzugriff auf ~/.claude/CLAUDE.md.
+
+Zweck: verhindert das stille Ansammeln von Regeln/Wissen in CLAUDE.md statt in
+ai-rem. CLAUDE.md soll nur den minimalen ai-rem-Pointer enthalten. Der Hook blockt
+NICHT — er injiziert nur einen Reminder (additionalContext), der Edit laeuft normal.
+"""
+import json
+import os
+import sys
+
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        return
+    if data.get("tool_name", "") not in ("Write", "Edit", "MultiEdit"):
+        return
+    fp = (data.get("tool_input") or {}).get("file_path", "") or ""
+    if not fp:
+        return
+    target = os.path.realpath(os.path.expanduser(fp))
+    claude_md = os.path.realpath(os.path.expanduser("~/.claude/CLAUDE.md"))
+    if target != claude_md:
+        return
+    msg = (
+        "Reminder: ~/.claude/CLAUDE.md soll nur den minimalen ai-rem-Pointer "
+        "enthalten. Falls hier Regeln/Praeferenzen/Wissen hinzukommen, gehoeren "
+        "die nach ai-rem (memory_add), nicht in CLAUDE.md. Ist es nur der "
+        "Pointer/@-Import, kann dieser Hinweis ignoriert werden."
+    )
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": msg,
+    }}))
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0)
+'''
+
 SETUP_SCRIPT = r"""#!/usr/bin/env bash
 # ai-rem Setup - plattformunabhaengig (macOS + Linux).
 # Abhaengigkeiten: bash, curl, python3, claude CLI.
@@ -629,6 +672,7 @@ tmpl = {
     'hooks': {
         'SessionStart': ['system-check.py (ai-rem, SMB, MCP, settings-sync, tools)'],
         'UserPromptSubmit': ['Tool-Discovery'],
+        'PreToolUse': ['claude-md-guard.py (warnt bei CLAUDE.md-Edits → ai-rem)'],
     },
     'additional_directories_templates': ['{HOME}/.claude', '{HOME}'],
     'path_mappings': cfg.get('path_mappings', {}),
@@ -651,8 +695,15 @@ if fetch_to "$KG_URL/hooks/auto-memory.py" "$AUTO_MEM_HOOK"; then
     echo "✓ Auto-Memory-Hook: $AUTO_MEM_HOOK"
 fi
 
+# PreToolUse Hook: claude-md-guard.py (warnt bei CLAUDE.md-Edits)
+GUARD_HOOK="$CLAUDE_HOME/hooks/claude-md-guard.py"
+if fetch_to "$KG_URL/hooks/claude-md-guard.py" "$GUARD_HOOK"; then
+    chmod +x "$GUARD_HOOK"
+    echo "✓ CLAUDE.md-Guard-Hook: $GUARD_HOOK"
+fi
+
 # settings.json: Permissions, konsolidierter Hook, alte Hooks entfernen
-HOOK_PATH="$HOOK_PATH" AUTO_MEM_HOOK="$AUTO_MEM_HOOK" python3 - << 'PYEOF'
+HOOK_PATH="$HOOK_PATH" AUTO_MEM_HOOK="$AUTO_MEM_HOOK" GUARD_HOOK="$GUARD_HOOK" python3 - << 'PYEOF'
 import json
 import os
 
@@ -729,11 +780,25 @@ if auto_mem_hook:
             g["hooks"].append({"type": "command", "command": auto_mem_hook, "timeout": 120})
             auto_mem_added.append(event)
 
+guard_hook = os.environ.get("GUARD_HOOK", "")
+guard_added = False
+if guard_hook:
+    pre = hooks.setdefault("PreToolUse", [])
+    g = next((x for x in pre if x.get("matcher") == "Write|Edit|MultiEdit"), None)
+    if g is None:
+        g = {"matcher": "Write|Edit|MultiEdit", "hooks": []}
+        pre.append(g)
+    g.setdefault("hooks", [])
+    if not any(h.get("command") == guard_hook for h in g["hooks"]):
+        g["hooks"].append({"type": "command", "command": guard_hook, "timeout": 10})
+        guard_added = True
+
 json.dump(data, open(path, "w"), indent=2, ensure_ascii=False)
 print("\n".join([p for p in ("" if not added else f"  +{len(added)} allow permissions",
                              "" if not added_deny else f"  +{len(added_deny)} deny rules",
                              "  SessionStart-Hook" if hook_added else "",
                              f"  Auto-Memory-Hooks: {', '.join(auto_mem_added)}" if auto_mem_added else "",
+                             "  CLAUDE.md-Guard-Hook" if guard_added else "",
                              "  autoMemoryEnabled=false") if p]))
 print("✓ settings.json aktualisiert")
 PYEOF
@@ -1593,6 +1658,11 @@ async def system_check_hook_route(request: Request) -> PlainTextResponse:
 @mcp.custom_route("/hooks/auto-memory.py", methods=["GET"])
 async def auto_memory_hook_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(AUTO_MEMORY_HOOK_PY, media_type="text/x-python")
+
+
+@mcp.custom_route("/hooks/claude-md-guard.py", methods=["GET"])
+async def claude_md_guard_hook_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(CLAUDE_MD_GUARD_PY, media_type="text/x-python")
 
 
 @mcp.custom_route("/setup-config", methods=["GET"])
