@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.1.2](https://github.com/markus7h/ai-rem/releases/tag/v0.1.2)**.
+> This documentation describes **[v0.1.3](https://github.com/markus7h/ai-rem/releases/tag/v0.1.3)**.
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
 Claude has no memory across sessions by default. This project solves that: relevant information — open tasks, decisions made, solved problems, projects, tools used — is stored in a knowledge graph and automatically loaded at the start of each conversation.
@@ -65,6 +65,42 @@ The context can be set per CLAUDE.md: e.g. `context="work"` for work repositorie
 
 ---
 
+## Auto-Memory (PreCompact + SessionEnd → ai-rem)
+
+The built-in Claude Code auto-memory (markdown file) is replaced by a transcript extractor that writes **structured entities and relations** into ai-rem.
+
+**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://192.168.2.11:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
+
+**CLI** (`bin/ai-rem`, own `.venv`):
+
+```bash
+ai-rem status
+ai-rem search "auto-memory"
+ai-rem list --type Decision
+ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
+```
+
+**Anti-recursion:** transcripts under 500 chars are skipped, `/tmp/ai-rem-ingest.lock` prevents nested runs.
+
+**Failure-mode (md-fallback + catch-up):** if Ollama is unreachable, the session is not lost — a heuristic extraction is appended to `~/.claude/auto-memory/fallback.md` (imported into `CLAUDE.md` via `@`-import, so it stays in context) and the transcript is queued in `pending.jsonl`. As soon as Ollama is reachable again, `ai-rem catchup` (run by the SessionStart and PreCompact/SessionEnd hooks) re-ingests the queued sessions properly into ai-rem and **empties the md**. The hook never breaks `/compact` or session end; hard errors go to `~/.claude/auto-memory/errors.log`.
+
+**Visibility:** each successful run writes `~/.claude/auto-memory/last-run.json`; the SessionStart check surfaces a line like `🧠 N Entities, M Rel` (with `(md-Fallback)` when Ollama was down).
+
+**Configuration env:**
+- `AI_REM_ENDPOINT` — MCP URL (default `http://192.168.2.15:3456/mcp`)
+- `AI_REM_OLLAMA_URL` — Ollama base URL (default `http://192.168.2.11:11434`)
+- `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`)
+
+---
+
+## Nightly cleanup (non-destructive: archive, don't delete)
+
+A daemon thread in the container runs a daily maintenance pass (default 03:00, configurable in the `/cleanup` web UI). It detects duplicate and outdated entries (heuristics + Ollama when reachable) and **archives** them instead of deleting: the entry is tagged `archived`, optionally compressed (with the original preserved in `extra.original_descr`), and linked via `DUPLIKAT_VON` / `VERALTET_DURCH`. Archived entries are hidden from `memory_get_context`/`search`/`list` by default (opt in with `include_archived=true`) but remain reachable for history via `memory_get_relations`. **Preferences, pinned and already-archived entries are never touched.** Every run backs up first; the log is viewable in the `/cleanup` web UI.
+
+Ambiguous cases (and everything when Ollama was down at night) land in a review queue. The `/memory-cleanup` slash command — auto-triggered silently at session start when the queue is non-empty — has Claude resolve them with judgment via the non-destructive `memory_merge` / `memory_archive` MCP tools.
+
+---
+
 ## Requirements
 
 - Docker on the target server
@@ -119,12 +155,12 @@ Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
 
 The script automatically handles:
 1. `claude mcp add` — register ai-rem as a user-scoped HTTP MCP server
-2. `~/.claude/settings-template.json` — create base template for permissions, deny rules and hooks (if not present)
+2. `~/.claude/settings-template.json` — (re)generate base template for permissions, deny rules and hooks from the live setup config
 3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count)
-4. `~/.claude/settings.json` — add permissions, deny rules and hook; remove old hooks; set `autoMemoryEnabled: false`
-5. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
-6. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`)
-7. `~/.claude/ai-rem/pref-tui.py` — install terminal preferences manager
+4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → Ollama-Extraktor → structured entities)
+5. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks; remove old hooks; set `autoMemoryEnabled: false`
+6. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
+7. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`)
 8. Create preferences & tool entities directly in the knowledge graph via MCP API
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`.

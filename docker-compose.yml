@@ -1,6 +1,7 @@
 services:
   ai-rem:
     image: magic3arkus/ai-rem:latest
+    build: .
     container_name: ai-rem
     restart: unless-stopped
     ports:

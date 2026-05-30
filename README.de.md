@@ -117,13 +117,12 @@ Führe aus: bash <(curl -s http://<SERVER_IP>:3456/setup)
 
 Das Skript erledigt automatisch:
 1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren
-2. `~/.claude/settings-template.json` — Basis-Template für Permissions, Deny-Rules und Hooks anlegen (falls nicht vorhanden)
+2. `~/.claude/settings-template.json` — Basis-Template für Permissions, Deny-Rules und Hooks aus der Live-Setup-Config (neu) schreiben
 3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl)
 4. `~/.claude/settings.json` — Permissions, Deny-Rules und Hook eintragen; alte Hooks entfernen; `autoMemoryEnabled: false`
 5. `~/.claude/CLAUDE.md` — minimalen 3-Zeilen-Pointer auf ai-rem anlegen oder aktualisieren
 6. Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`)
-7. `~/.claude/ai-rem/pref-tui.py` — Terminal-Preferences-Manager installieren
-8. Preferences & Tool-Entities direkt via MCP API im Knowledge Graph anlegen
+7. Preferences & Tool-Entities direkt via MCP API im Knowledge Graph anlegen
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`.
 

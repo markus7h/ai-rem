@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""ai-rem CLI — thin HTTP client over the ai-rem MCP endpoint.
+
+Endpoint: $AI_REM_ENDPOINT (default http://192.168.2.15:3456/mcp)
+
+Subcommands map 1:1 onto MCP tools; `upsert` and `ingest` add convenience
+on top.
+"""
+import os
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+_VENV_PY = REPO / ".venv" / "bin" / "python3"
+if _VENV_PY.exists() and Path(sys.executable).resolve() != _VENV_PY.resolve():
+    os.execv(str(_VENV_PY), [str(_VENV_PY), __file__, *sys.argv[1:]])
+
+import argparse
+import json
+
+sys.path.insert(0, str(REPO))
+
+from lib.mcp_client import MCPClient, MCPError  # noqa: E402
+
+
+def _print(out: str) -> None:
+    print(out.rstrip())
+
+
+def cmd_status(c: MCPClient, _):
+    _print(c.call("memory_status"))
+
+
+def cmd_add(c: MCPClient, a):
+    args = {"name": a.name, "type": a.type, "description": a.description or ""}
+    if a.context:
+        args["context"] = a.context
+    if a.pinned:
+        args["pinned"] = True
+    if a.extra:
+        args["extra"] = json.loads(a.extra)
+    _print(c.call("memory_add", args))
+
+
+def cmd_upsert(c: MCPClient, a):
+    existing = c.call("memory_search", {"query": a.name, "limit": 10})
+    name_lower = a.name.lower()
+    matched = any(name_lower in line.lower() for line in existing.splitlines())
+    args = {"name": a.name, "type": a.type, "description": a.description or ""}
+    if a.context:
+        args["context"] = a.context
+    if a.pinned:
+        args["pinned"] = True
+    if a.extra:
+        args["extra"] = json.loads(a.extra)
+    result = c.call("memory_add", args)
+    prefix = "[exists] " if matched else "[new]    "
+    _print(prefix + result)
+
+
+def cmd_relate(c: MCPClient, a):
+    args = {"from_name": a.from_name, "relation": a.relation, "to_name": a.to_name}
+    if a.extra:
+        args["extra"] = json.loads(a.extra)
+    _print(c.call("memory_relate", args))
+
+
+def cmd_search(c: MCPClient, a):
+    args = {"query": a.query, "limit": a.limit}
+    if a.context:
+        args["context"] = a.context
+    _print(c.call("memory_search", args))
+
+
+def cmd_context(c: MCPClient, a):
+    args = {}
+    if a.topic:
+        args["topic"] = a.topic
+    if a.context:
+        args["context"] = a.context
+    _print(c.call("memory_get_context", args))
+
+
+def cmd_list(c: MCPClient, a):
+    args = {}
+    if a.type:
+        args["type"] = a.type
+    if a.context:
+        args["context"] = a.context
+    _print(c.call("memory_list", args))
+
+
+def cmd_relations(c: MCPClient, a):
+    _print(c.call("memory_get_relations", {"name": a.name}))
+
+
+def cmd_delete(c: MCPClient, a):
+    if not a.yes:
+        sys.stderr.write(f"Confirm delete '{a.name}' with --yes\n")
+        sys.exit(2)
+    _print(c.call("memory_delete", {"name": a.name}))
+
+
+def cmd_ingest(c: MCPClient, a):
+    from lib.extractor import ingest_transcript
+
+    ingest_transcript(
+        client=c,
+        transcript_path=Path(a.transcript),
+        dry_run=a.dry_run,
+        model=a.model,
+    )
+
+
+def cmd_catchup(c: MCPClient, a):
+    from lib.extractor import catchup
+
+    print(json.dumps(catchup(client=c), ensure_ascii=False))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="ai-rem", description="ai-rem MCP CLI")
+    p.add_argument(
+        "--endpoint",
+        default=None,
+        help="MCP endpoint URL (default: $AI_REM_ENDPOINT)",
+    )
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("status", help="memory_status")
+    s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("add", help="memory_add")
+    s.add_argument("type")
+    s.add_argument("name")
+    s.add_argument("--description", "--body", "-d", default="")
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default="")
+    s.add_argument("--pinned", action="store_true")
+    s.add_argument("--extra", default=None, help="JSON object")
+    s.set_defaults(func=cmd_add)
+
+    s = sub.add_parser("upsert", help="add with dedup-check (search→add)")
+    s.add_argument("type")
+    s.add_argument("name")
+    s.add_argument("--description", "--body", "-d", default="")
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default="")
+    s.add_argument("--pinned", action="store_true")
+    s.add_argument("--extra", default=None, help="JSON object")
+    s.set_defaults(func=cmd_upsert)
+
+    s = sub.add_parser("relate", help="memory_relate")
+    s.add_argument("from_name")
+    s.add_argument("relation")
+    s.add_argument("to_name")
+    s.add_argument("--extra", default=None, help="JSON object")
+    s.set_defaults(func=cmd_relate)
+
+    s = sub.add_parser("search", help="memory_search")
+    s.add_argument("query")
+    s.add_argument("--limit", "-n", type=int, default=15)
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default="")
+    s.set_defaults(func=cmd_search)
+
+    s = sub.add_parser("context", help="memory_get_context")
+    s.add_argument("--topic", default="")
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default="")
+    s.set_defaults(func=cmd_context)
+
+    s = sub.add_parser("list", help="memory_list")
+    s.add_argument("--type", default="")
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default="")
+    s.set_defaults(func=cmd_list)
+
+    s = sub.add_parser("relations", help="memory_get_relations")
+    s.add_argument("name")
+    s.set_defaults(func=cmd_relations)
+
+    s = sub.add_parser("delete", help="memory_delete (needs --yes)")
+    s.add_argument("name")
+    s.add_argument("--yes", action="store_true")
+    s.set_defaults(func=cmd_delete)
+
+    s = sub.add_parser("ingest", help="extract+upsert from transcript")
+    s.add_argument("--transcript", required=True)
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--model", default="qwen3:14b")
+    s.set_defaults(func=cmd_ingest)
+
+    s = sub.add_parser("catchup", help="re-ingest md-fallback queue once Ollama is back")
+    s.set_defaults(func=cmd_catchup)
+
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
+    client = MCPClient(endpoint=args.endpoint)
+    try:
+        args.func(client, args)
+    except MCPError as e:
+        sys.stderr.write(f"ai-rem: {e}\n")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

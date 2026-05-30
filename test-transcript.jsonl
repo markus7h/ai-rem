@@ -1,0 +1,6 @@
+{"type":"user","message":{"content":"Ich denke, wir sollten Redis für Caching verwenden statt in-memory, weil das zwischen Prozessen funktioniert"}}
+{"type":"assistant","message":{"content":"Decision: Redis statt In-Memory Cache, Begründung: cross-process Konsistenz wichtig für Microservices."}}
+{"type":"user","message":{"content":"Genau, und wir haben gestern bemerkt dass das alte Event-System bei hohen Lasten Duplikate erzeugt"}}
+{"type":"assistant","message":{"content":"Problem+Solution: Event-Duplikate unter Last → neue Dedup-Logik mit idempotency-Keys eingefügt"}}
+{"type":"user","message":{"content":"Arbeite bitte mit Feedback um die Session beim Neustarten nicht zu verlieren"}}
+{"type":"assistant","message":{"content":"Preference notiert: Auto-Memory für Session-Kontinuität aktiviert"}}
