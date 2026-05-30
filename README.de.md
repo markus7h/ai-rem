@@ -4,7 +4,7 @@
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 
 **ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
-Claude hat von Haus aus kein Gedächtnis über Sessions hinaus. Dieses Projekt löst das Problem: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – werden in einem Knowledge Graph gespeichert und beim nächsten Gespräch automatisch geladen.
+Statische Memory-Dateien wie `CLAUDE.md` liegen vollständig im Kontext und sind an einzelne Projekte und Rechner gebunden. ai-rem geht effizienter vor: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – liegen in einem Knowledge Graph auf dem Heimserver, werden gezielt statt komplett geladen und sind rechnerunabhängig von jeder Maschine aus verfügbar.
 
 ---
 
