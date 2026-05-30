@@ -25,7 +25,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, R
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
@@ -1627,7 +1627,9 @@ mcp = FastMCP(
         "memory_add + memory_relate. Vor neuem Eintrag prüfen ob Entity schon existiert — updaten statt duplizieren.\n\n"
         "Entity-Typen: Person | Project | Task | Tool | Problem | Solution | Decision | Preference | Topic\n"
         "- Preference: User-Präferenzen, Arbeitsweisen, Feedback. Feedback-Einträge mit Präfix 'Feedback: …'. "
-        "Body bei Regeln: Regel + Why: + How to apply:.\n"
+        "Body bei Regeln: Regel + Why: + How to apply: — die Kern-Regel MUSS in die "
+        "ERSTEN ~120 Zeichen (vor 'Why:'), da get_context auf descr[:120] kürzt und alles "
+        "dahinter passiv unsichtbar bleibt.\n"
         "- Project: laufende Arbeit, Ziele. Relative Daten → absolute.\n"
         "- Topic: Pointer auf externe Systeme/Referenzen.\n"
         "- Task/Decision/Problem/Solution/Tool: offene Aufgaben, Architektur, Bugs, Lösungen, Tools.\n\n"
