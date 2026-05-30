@@ -54,12 +54,51 @@ The context can be set per CLAUDE.md: e.g. `context="work"` for work repositorie
 
 ---
 
+## Token savings
+
+ai-rem doesn't add knowledge to every prompt — it **lazy-loads** only the relevant subgraph on demand instead of carrying everything in `CLAUDE.md` all session long. The per-session footprint stays roughly constant (~1–3k tokens) no matter how large the graph grows, while the alternative — stuffing all knowledge into `CLAUDE.md` — costs ~20k tokens loaded into *every* session.
+
+**Worked estimate — assuming an average of 5 sessions/day:**
+
+| Parameter | Value | Source |
+|---|---|---|
+| Sessions / month | 5 × 30 = **150** | assumption |
+| Sessions with real recall | ~72 % → **~108** | measured (90/125 sessions used ai-rem) |
+| Trivial sessions | ~42 | derived |
+| Savings per recall session | ~12k tokens | modelled (avoided re-discovery / no permanent `CLAUDE.md` ballast) |
+| Hook + retrieval overhead | ~300 tokens/injection | measured (~2.4 injections/session) |
+
+```
+Gain:      108 recall sessions × 12,000  = 1,296,000
+Cost:       42 trivial sessions ×    300 =     12,600
+Overhead:  ~360 injections     ×    300 =    108,000
+────────────────────────────────────────────────────
+Net ≈ 1,175,000 tokens / month saved
+```
+
+**Result: ~1.2 million tokens/month** at 5 sessions/day — roughly **6 full 200k context windows** you don't burn on re-explaining context, re-discovering infrastructure, or permanent `CLAUDE.md` bloat. Per day that's ~39k tokens; per year ~14M.
+
+**Range** (depending on how knowledge-heavy your sessions are):
+
+| Scenario | Recall sessions | Tokens/session | Net / month |
+|---|---|---|---|
+| Conservative | 90 (60 %) | 8k | **~0.6M** |
+| Typical | 108 (72 %) | 12k | **~1.2M** |
+| Intensive | 120 (80 %) | 16k | **~1.8M** |
+
+**The savings grow as the graph grows.** This is the decisive long-term property: the per-session footprint stays roughly constant (~1–3k tokens) regardless of graph size, because only the *relevant* subgraph is loaded on demand. The naive alternative — keeping knowledge in `CLAUDE.md` — scales **linearly**: every new fact is paid for in *every* session forever. So as months pass and the graph accumulates hundreds of entities, the gap widens — the `CLAUDE.md` approach gets steadily more expensive while ai-rem's cost stays flat. The numbers above (146 entities) are an early-stage snapshot; at 500+ entities the same 5-sessions/day pattern saves substantially more, since the avoided always-on ballast is far larger.
+
+> The session count and recall rate are **measured** from real usage (125 sessions over ~28 days). The per-session savings (8–16k) is a model, not a measurement — the "what it would have cost without ai-rem" can't be observed directly. Treat the totals as an informed estimate, not a benchmark.
+
+---
+
 ## Web UI
 
 | URL | Function |
 |---|---|
 | `/ui` | Backup management: manual, schedule, download, restore |
 | `/prefs` | Preferences manager: pin, context, sort order, delete |
+| `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log |
 
 **`/prefs`** — Full preferences manager in the browser: pin/unpin, context dropdown, manual sort order, delete. Click on the name to expand the full description inline. Accessible via the slash command `/ai-rem:prefedit`.
 
