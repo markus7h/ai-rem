@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.1.3](https://github.com/markus7h/ai-rem/releases/tag/v0.1.3)**.
+> Diese Dokumentation bezieht sich auf **[v0.1.5](https://github.com/markus7h/ai-rem/releases/tag/v0.1.5)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 
 **ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
@@ -226,6 +226,6 @@ Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-c
 }
 ```
 
-Im Docker-Image wird die Datei zur Buildzeit kopiert (`COPY setup-config*.json ./`). Ein Dummy `setup-config.json` im Repo dient als öffentliches Beispiel ohne private Daten; die echte persönliche Version ist gitignored.
+Im Docker-Image wird die Datei zur Buildzeit kopiert (`COPY setup-config*.json ./`). Die persönliche `setup-config.json` ist gitignored und landet daher nie im öffentlichen Image. Stattdessen liegt eine generische **`setup-config.example.json`** im Repo: Fehlt eine persönliche Config, fällt `/setup-config` darauf zurück — ein frisches Deployment seedet so ein sinnvolles Starter-Set an Verhaltens-Preferences (Plan-first, knapp antworten, ai-rem vor Rückfragen prüfen, Halluzinationen vermeiden, Wissen proaktiv speichern) plus generische Permission-/Deny-Regeln. Eine eigene `setup-config.json` überschreibt das Template komplett.
 
 Der `system-check.py`-Hook liest seine Konfiguration aus `~/.claude/settings-template.json`, das beim ersten Setup angelegt wird und u.a. SMB-Pfad, MCP-stdio-Server-Pfade und tools-Verzeichnis enthält.

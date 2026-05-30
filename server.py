@@ -25,7 +25,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, R
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
@@ -37,6 +37,9 @@ _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 _KG_URL = os.getenv("KG_PUBLIC_URL", "http://localhost:3456")
 
 _SETUP_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup-config.json")
+# Generisches Starter-Template; greift, wenn keine persoenliche setup-config.json existiert
+# (z. B. im oeffentlichen Image, da setup-config.json gitignored ist).
+_SETUP_CONFIG_EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup-config.example.json")
 
 SYSTEM_CHECK_PY = r'''#!/usr/bin/env python3
 """Unified SessionStart system check for Claude Code.
@@ -1594,9 +1597,11 @@ async def auto_memory_hook_route(request: Request) -> PlainTextResponse:
 
 @mcp.custom_route("/setup-config", methods=["GET"])
 async def setup_config_route(request: Request) -> JSONResponse:
-    if os.path.exists(_SETUP_CONFIG_PATH):
-        with open(_SETUP_CONFIG_PATH) as f:
-            return JSONResponse(json.load(f))
+    # Persoenliche Config bevorzugen, sonst generisches Starter-Template ausliefern.
+    for path in (_SETUP_CONFIG_PATH, _SETUP_CONFIG_EXAMPLE_PATH):
+        if os.path.exists(path):
+            with open(path) as f:
+                return JSONResponse(json.load(f))
     return JSONResponse({})
 
 

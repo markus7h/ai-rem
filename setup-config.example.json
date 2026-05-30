@@ -1,0 +1,65 @@
+{
+  "_comment": "Generisches Starter-Template. Wird von /setup-config ausgeliefert, wenn keine eigene setup-config.json vorhanden ist. Eine eigene setup-config.json (gitignored) ueberschreibt dieses Template komplett. Frei anpassen.",
+  "permissions_allow_portable": [
+    "Bash",
+    "Skill(update-config)",
+    "Skill(update-config:*)",
+    "mcp__ai-rem__memory_status",
+    "mcp__ai-rem__memory_get_context",
+    "mcp__ai-rem__memory_search",
+    "mcp__ai-rem__memory_add",
+    "mcp__ai-rem__memory_list",
+    "mcp__ai-rem__memory_get_relations",
+    "mcp__ai-rem__memory_relate",
+    "mcp__ai-rem__memory_delete"
+  ],
+  "permissions_deny": [
+    "Read(**/.env)",
+    "Read(**/*.pem)",
+    "Read(**/*secret*)",
+    "Read(**/id_rsa)",
+    "Read(**/id_ed25519)"
+  ],
+  "entities": [
+    {
+      "name": "Plan-first bei nicht-trivialen Aufgaben",
+      "type": "Preference",
+      "description": "Regel: Bei jeder Aufgabe, die mehr als eine triviale Aenderung umfasst, zuerst einen Plan erstellen und ihn vom User bestaetigen lassen, bevor Code geaendert wird. Why: Verhindert Fehlrichtungen und unnoetige Token-/Zeitkosten durch Nacharbeit. How to apply: Bei mehrstufigen oder mehrdateiigen Aenderungen den Planmodus nutzen; bei Einzeiler/Tippfehler direkt umsetzen."
+    },
+    {
+      "name": "Knapp antworten, Token sparen",
+      "type": "Preference",
+      "description": "Regel: Kurze, praezise Antworten ohne Wiederholungen, Mehrfachfassungen oder Fuellsaetze. Why: Spart Token und Lesezeit, haelt den Fokus. How to apply: Direkt zur Sache, Aufzaehlungen statt Prosa, keine Zusammenfassung des gerade Gesagten."
+    },
+    {
+      "name": "ai-rem vor Rueckfragen pruefen",
+      "type": "Preference",
+      "description": "Regel: Wenn eine Information fehlt, erst in ai-rem nachsehen (memory_get_context, memory_search), bevor der User gefragt wird. Why: Die Info ist oft schon gespeichert; unnoetige Rueckfragen nerven und kosten Zeit. How to apply: Bei jeder offenen Frage zuerst memory_search mit passenden Keywords; nur wenn nichts gefunden, den User fragen."
+    },
+    {
+      "name": "ai-rem Recall-Vorgehen",
+      "type": "Preference",
+      "description": "Regel: Kontext in dieser Reihenfolge holen: zuerst memory_get_context (offene Tasks/Projekte/letzte Eintraege), dann memory_search fuer gezielte Themen. Why: get_context liefert den breiten Ueberblick, search die Tiefe. How to apply: Zu Sitzungsbeginn bzw. bei neuem Thema get_context; fuer ein konkretes Detail anschliessend search."
+    },
+    {
+      "name": "Halluzinationen vermeiden",
+      "type": "Preference",
+      "description": "Regel: Datei-Pfade, Funktionsnamen und Fakten aus dem Gedaechtnis vor jeder Empfehlung am echten Code/System verifizieren statt zu raten. Why: Memory ist eine Behauptung ueber damals, nicht ueber jetzt; Geraten erzeugt falsche Empfehlungen. How to apply: Vor Empfehlung Pfad/Funktion pruefen (existiert noch?); bei Konflikt dem Code vertrauen und das Memory-Entity updaten."
+    },
+    {
+      "name": "Wissen proaktiv in ai-rem speichern",
+      "type": "Preference",
+      "description": "Regel: Sobald im Verlauf einer Aufgabe etwas Ueberraschendes oder Nicht-Offensichtliches gelernt wird (Infrastruktur, Entscheidungen, Loesungen), sofort via memory_add sichern und mit memory_relate verknuepfen. Why: Persistenter Kontext geht sonst beim Sitzungsende verloren. How to apply: Vor dem Anlegen pruefen ob die Entity schon existiert (updaten statt duplizieren); kein aus Code/git ableitbares Wissen speichern."
+    },
+    {
+      "name": "skill_setup_ai_rem",
+      "type": "Tool",
+      "description": "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf einer neuen Maschine einrichten (MCP registrieren, Hooks/Settings deployen, Starter-Preferences seeden)."
+    },
+    {
+      "name": "skill_ai_rem_prefedit",
+      "type": "Tool",
+      "description": "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager — pin/unpin, Context aendern, sort_order setzen, loeschen."
+    }
+  ]
+}

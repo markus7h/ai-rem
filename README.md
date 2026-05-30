@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.1.3](https://github.com/markus7h/ai-rem/releases/tag/v0.1.3)**.
+> This documentation describes **[v0.1.5](https://github.com/markus7h/ai-rem/releases/tag/v0.1.5)**.
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
 Claude has no memory across sessions by default. This project solves that: relevant information — open tasks, decisions made, solved problems, projects, tools used — is stored in a knowledge graph and automatically loaded at the start of each conversation.
@@ -239,4 +239,4 @@ The setup endpoint optionally loads a `setup-config.json` from the server (`/set
 }
 ```
 
-The Docker image copies this file at build time (`COPY setup-config*.json ./`). A dummy `setup-config.json` in the repo serves as a public example without private data; the real personal version is gitignored.
+The Docker image copies this file at build time (`COPY setup-config*.json ./`). The personal `setup-config.json` is gitignored, so it never ships in the public image. Instead the repo includes a generic **`setup-config.example.json`**: when no personal config is present, `/setup-config` falls back to it, so a fresh deployment seeds a useful starter set of behavioural preferences (plan-first, answer concisely, check ai-rem before asking, avoid hallucinations, store knowledge proactively) plus generic permission/deny rules. Drop in your own `setup-config.json` to override the template entirely.
