@@ -33,6 +33,7 @@ At the start of each session, Claude loads the relevant context from the graph v
 | `memory_preference_update(name, context, pinned, sort_order)` | Update preference fields without overwriting the description |
 | `memory_relate(from, relation, to)` | Create a relationship between two entities |
 | `memory_search(query, context)` | Full-text search across name and description |
+| `memory_search_full(query, context)` | Like `memory_search`, but returns the full description without the 400-char truncation |
 | `memory_get_context(topic, context)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
 | `memory_list(type, context)` | List all entities |
 | `memory_get_relations(name)` | Show all relationships of an entity |
