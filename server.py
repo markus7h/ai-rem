@@ -2413,6 +2413,29 @@ def memory_search(query: str, limit: int = 15, context: str = "", include_archiv
     return "\n".join(lines)
 
 
+@mcp.tool()
+def memory_search_full(query: str, limit: int = 15, context: str = "", include_archived: bool = False) -> str:
+    """Wie memory_search, aber zeigt die VOLLE Beschreibung ohne Kürzung.
+
+    Nutzen, wenn der gekürzte Treffer (memory_search via _smart_truncate auf 400
+    Zeichen) nicht ausreicht und der komplette Body gebraucht wird.
+
+    context: "work" | "private" | "" (kein Filter, default)
+    include_archived: True → auch archivierte (alte/überholte) Einträge zeigen (default: aus)
+    """
+    hits = _lexical_hits(query, context, include_archived, limit)
+    if not hits:
+        return "Keine Ergebnisse."
+    lines = []
+    for h in hits:
+        ctx_str = f" `[{h['context']}]`" if h["context"] else ""
+        lines.append(
+            f"[{h['type']}] **{h['name']}**{ctx_str}: {h['descr']}  "
+            f"_(aktualisiert {h['updated_at'][:10]})_"
+        )
+    return "\n".join(lines)
+
+
 # ─── Embeddings (semantische Suche, in-container via fastembed/ONNX) ───────────
 # Vektoren liegen als JSON-Float-Liste in Entity.embedding, Suche per Brute-Force-
 # Cosine über eine in-memory numpy-Matrix (bei <~10k Entities <1ms, kein Index nötig).
