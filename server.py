@@ -26,7 +26,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, R
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
