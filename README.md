@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.1.7](https://github.com/markus7h/ai-rem/releases/tag/v0.1.7)**.
+> This documentation describes **[v0.3.0](https://github.com/markus7h/ai-rem/releases/tag/v0.3.0)**.
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
 Static memory files like `CLAUDE.md` sit in context in full and are tied to individual projects and machines. ai-rem takes a more efficient approach: relevant information — open tasks, decisions made, solved problems, projects, tools used — lives in a knowledge graph on your home server, is loaded selectively instead of wholesale, and is available from any machine, independent of where you work.
