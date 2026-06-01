@@ -109,7 +109,7 @@ Net ≈ 1,175,000 tokens / month saved
 
 The built-in Claude Code auto-memory (markdown file) is replaced by a transcript extractor that writes **structured entities and relations** into ai-rem.
 
-**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://192.168.2.11:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
+**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://localhost:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, own `.venv`):
 
@@ -128,8 +128,8 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
 **Visibility:** each successful run writes `~/.claude/auto-memory/last-run.json`; the SessionStart check surfaces a line like `🧠 N Entities, M Rel` (with `(md-Fallback)` when Ollama was down).
 
 **Configuration env:**
-- `AI_REM_ENDPOINT` — MCP URL (default `http://192.168.2.15:3456/mcp`)
-- `AI_REM_OLLAMA_URL` — Ollama base URL (default `http://192.168.2.11:11434`)
+- `AI_REM_ENDPOINT` — MCP URL (default `http://localhost:3456/mcp`)
+- `AI_REM_OLLAMA_URL` — Ollama base URL (default `http://localhost:11434`)
 - `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`)
 
 ---
@@ -274,7 +274,7 @@ The setup endpoint optionally loads a `setup-config.json` from the server (`/set
 {
   "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
   "permissions_deny": ["Bash(bw get *)", ...],
-  "smb": {"mount": "/Volumes/markus", "url": "smb://server/share"},
+  "smb": {"mount": "/path/to/mount", "url": "smb://server/share"},
   "mcp_stdio_servers": {"paperless": "/path/to/index.js"},
   "tools_scripts_dir": "/path/to/tools-mcp/scripts",
   "old_hooks": ["legacy-hook.sh"],

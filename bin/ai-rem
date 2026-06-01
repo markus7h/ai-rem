@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ai-rem CLI — thin HTTP client over the ai-rem MCP endpoint.
 
-Endpoint: $AI_REM_ENDPOINT (default http://192.168.2.15:3456/mcp)
+Endpoint: $AI_REM_ENDPOINT (default http://localhost:3456/mcp)
 
 Subcommands map 1:1 onto MCP tools; `upsert` and `ingest` add convenience
 on top.

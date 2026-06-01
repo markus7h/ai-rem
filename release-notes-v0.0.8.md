@@ -62,7 +62,7 @@ Alle Aktionen die als Script ausführbar sind, laufen als Script — kein Token-
 Server:
 
 ```bash
-cd /home/markus/mydocker/compose-files/ai-rem
+cd /path/to/ai-rem
 docker compose up -d --build
 ```
 

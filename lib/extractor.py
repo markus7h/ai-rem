@@ -2,12 +2,12 @@
 
 Liest eine Claude-Code-Session-JSONL, flattened sie auf eine Konversation
 (User-Texte + Assistant-Texte, ohne Tool-Calls/Results), schickt sie an
-Ollama auf myubuntu mit format=json und bulk-upsert per MCPClient.
+Ollama (lokal oder auf einem GPU-Host) mit format=json und bulk-upsert per MCPClient.
 
 Backend-Wahl: Ollama statt `claude -p`, weil
 - deterministisches `format: json` (kein Skill/Agent-Override-Risiko)
 - kein Rate-Limit / kein API-Stress
-- läuft eh schon auf myubuntu (paperless-ollama Container, GPU)
+- ein lokaler/Remote-Ollama-Container (GPU) ist oft ohnehin vorhanden
 
 Anti-Rekursion:
 - MIN_TRANSCRIPT_CHARS: kleine Sessions skippen (verhindert dass der
@@ -35,7 +35,7 @@ LAST_RUN = LOG_DIR / "last-run.json"         # Sichtbarkeit: was zuletzt gespeic
 MAX_CHARS_PER_MSG = 4000
 MAX_TOTAL_CHARS = 80_000
 MIN_TRANSCRIPT_CHARS = 500
-OLLAMA_URL = os.environ.get("AI_REM_OLLAMA_URL", "http://192.168.2.11:11434")
+OLLAMA_URL = os.environ.get("AI_REM_OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL_DEFAULT = "qwen3:14b"
 OLLAMA_TIMEOUT_S = 300
 
@@ -47,8 +47,8 @@ Leer: {"entities":[],"relations":[]}
 
 SPEICHERN NUR wenn wörtlich im Transcript + (neuer Insight oder Muster). Types: Decision (mit Why+How), Problem→Solution, neue Tools/Infra, Feedback (Präfix "Feedback: "), Projekte, externe Topic-Pointer.
 
-context="private" für: ai-rem, tools-mcp, myubuntu, mykeyvault, paperless-ai, mystorage, mydns, myM1Pro, evcc, ollama, chromadb, Finanzanalyse, zigbee2mqtt, openhab, photoprism, tvheadend, oscam, mosquitto, caddy, ~/.claude
-context="work" nur: b-imtec Beratung/Kunden
+context="private" für: persönliche/Heim-Infrastruktur — eigene Hosts, selbst-gehostete Dienste/Container, Home-Lab, Heimautomation, private Tools/Repos, ~/.claude
+context="work" nur: berufliche Beratung/Kunden
 
 NICHT speichern: Code-Pfade, git-log, Funktionsnamen, Rezepte, Smalltalk, triviale sofort-behobene Fehler.
 

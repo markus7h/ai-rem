@@ -18,7 +18,7 @@ class MCPError(RuntimeError):
 class MCPClient:
     def __init__(self, endpoint: Optional[str] = None, timeout: float = 15.0):
         self.endpoint = endpoint or os.environ.get(
-            "AI_REM_ENDPOINT", "http://192.168.2.15:3456/mcp"
+            "AI_REM_ENDPOINT", "http://localhost:3456/mcp"
         )
         self.timeout = timeout
         self._sid: Optional[str] = None

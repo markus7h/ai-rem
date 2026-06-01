@@ -54,7 +54,7 @@ Die bisherige Hilfsfunktion `_entity_has_context_column` wurde auf eine generisc
 Server-Seite:
 
 ```bash
-cd /home/markus/mydocker/compose-files/ai-rem
+cd /path/to/ai-rem
 docker compose up -d --build
 ```
 

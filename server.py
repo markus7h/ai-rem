@@ -79,7 +79,7 @@ AI_REM_ENDPOINT = os.environ.get(
 )
 AI_REM_TIMEOUT = 5
 AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://192.168.2.11:11434")
+    "AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://localhost:11434")
 )
 
 SMB_CFG = TMPL.get("smb", {})
@@ -340,9 +340,8 @@ def check_tools():
 def _ai_rem_cli():
     import shutil
     for p in [os.environ.get("AI_REM_CLI", ""),
-              "/Volumes/markus/myCode/github/ai-rem/bin/ai-rem",
-              os.path.expanduser("~/mystorage/b-imtec-work/github/ai-rem/bin/ai-rem"),
-              os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem")]:
+              os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
+              os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem")]:
         if p and os.path.isfile(p) and os.access(p, os.X_OK):
             return p
     return shutil.which("ai-rem") or ""
@@ -461,8 +460,6 @@ TIMEOUT_S = 120
 
 CANDIDATE_CLI_PATHS = [
     os.environ.get("AI_REM_CLI", ""),
-    "/Volumes/markus/myCode/github/ai-rem/bin/ai-rem",
-    os.path.expanduser("~/mystorage/b-imtec-work/github/ai-rem/bin/ai-rem"),
     os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
     os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem"),
 ]
@@ -2400,8 +2397,8 @@ def _combined_hits(query: str, context: str = "", include_archived: bool = False
     (mit echtem updated_at) gewinnen, da sie zuerst eingesammelt werden.
 
     Behebt die Schwäche der reinen Substring-Suche (_lexical_hits): Mehrwort-Queries,
-    deren Wörter nicht zusammenhängend in name/descr stehen — z.B. 'Auswahl privat
-    b-imtec' gegen 'Git-Account-Auswahl (privat vs. b-imtec)' — finden jetzt trotzdem.
+    deren Wörter nicht zusammenhängend in name/descr stehen — z.B. 'Backup Web UI'
+    gegen 'Web-UI: Backup-Verwaltung und Restore' — finden jetzt trotzdem.
     Spiegelt die Strategie von _discover_compute für das benutzerseitige Such-Tool.
     """
     out: list[dict] = []
@@ -3136,7 +3133,7 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-AI_REM_OLLAMA_URL = os.getenv("AI_REM_OLLAMA_URL", "http://192.168.2.11:11434")
+AI_REM_OLLAMA_URL = os.getenv("AI_REM_OLLAMA_URL", "http://localhost:11434")
 CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "qwen3:14b")
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "30"))

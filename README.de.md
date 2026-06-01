@@ -257,7 +257,7 @@ Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-c
 {
   "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
   "permissions_deny": ["Bash(bw get *)", ...],
-  "smb": {"mount": "/Volumes/markus", "url": "smb://server/share"},
+  "smb": {"mount": "/path/to/mount", "url": "smb://server/share"},
   "mcp_stdio_servers": {"paperless": "/path/to/index.js"},
   "tools_scripts_dir": "/path/to/tools-mcp/scripts",
   "old_hooks": ["legacy-hook.sh"],
