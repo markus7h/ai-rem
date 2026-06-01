@@ -31,7 +31,7 @@ Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontex
 | `memory_add(name, type, description, context, pinned)` | Entity anlegen oder aktualisieren. `pinned=True` → Preference erscheint immer ganz oben in `get_context` |
 | `memory_preference_update(name, context, pinned, sort_order)` | Felder einer Preference gezielt ändern ohne `description` zu überschreiben |
 | `memory_relate(from, relation, to)` | Beziehung zwischen zwei Entities erstellen |
-| `memory_search(query, context)` | Volltextsuche über Name + Beschreibung |
+| `memory_search(query, context)` | Hybridsuche über Name + Beschreibung: pro-Token-Lexik plus semantischer Vektor-Recall (findet Mehrwort-Queries auch, wenn die Wörter nicht zusammenhängend stehen) |
 | `memory_search_full(query, context)` | Wie `memory_search`, aber ungekürzte Beschreibung (keine 400-Zeichen-Kürzung) |
 | `memory_get_context(topic, context)` | Relevanten Subgraph laden (Tasks, Projekte, Decisions, Preferences) |
 | `memory_list(type, context)` | Alle Entities auflisten |

@@ -32,7 +32,7 @@ At the start of each session, Claude loads the relevant context from the graph v
 | `memory_add(name, type, description, context, pinned)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context` |
 | `memory_preference_update(name, context, pinned, sort_order)` | Update preference fields without overwriting the description |
 | `memory_relate(from, relation, to)` | Create a relationship between two entities |
-| `memory_search(query, context)` | Full-text search across name and description |
+| `memory_search(query, context)` | Hybrid search over name + description: per-token lexical matching plus semantic vector recall (finds multi-word queries even when the words aren't contiguous) |
 | `memory_search_full(query, context)` | Like `memory_search`, but returns the full description without the 400-char truncation |
 | `memory_get_context(topic, context)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
 | `memory_list(type, context)` | List all entities |
