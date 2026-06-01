@@ -2393,6 +2393,37 @@ def _lexical_hits(query: str, context: str = "", include_archived: bool = False,
              "updated_at": r[3] or "", "context": r[4] or ""} for r in rows]
 
 
+def _combined_hits(query: str, context: str = "", include_archived: bool = False,
+                   limit: int = 15) -> list[dict]:
+    """Hybride Treffer: lexikalisch (Volltext + pro-Token) zuerst, dann semantischer
+    Vektor-Recall füllt auf. Dedupliziert nach Entity-Name; lexikalische Metadaten
+    (mit echtem updated_at) gewinnen, da sie zuerst eingesammelt werden.
+
+    Behebt die Schwäche der reinen Substring-Suche (_lexical_hits): Mehrwort-Queries,
+    deren Wörter nicht zusammenhängend in name/descr stehen — z.B. 'Auswahl privat
+    b-imtec' gegen 'Git-Account-Auswahl (privat vs. b-imtec)' — finden jetzt trotzdem.
+    Spiegelt die Strategie von _discover_compute für das benutzerseitige Such-Tool.
+    """
+    out: list[dict] = []
+    seen: set = set()
+
+    def take(h: dict) -> None:
+        if h["name"] in seen:
+            return
+        seen.add(h["name"])
+        out.append(h)
+
+    # 1) Lexikalisch: erst die volle Query (höchste Präzision), dann pro Token.
+    for q in [query] + [t for t in _discover_keywords(query) if t != query.lower()]:
+        for h in _lexical_hits(q, context, include_archived, limit):
+            take(h)
+    # 2) Semantisch: füllt Paraphrasen/Wortstellungen, die die Lexik verpasst hat.
+    if len(out) < limit:
+        for h in _semantic_hits(query, context=context, limit=limit):
+            take(h)
+    return out[:limit]
+
+
 @mcp.tool()
 def memory_search(query: str, limit: int = 15, context: str = "", include_archived: bool = False) -> str:
     """Entities nach Name oder Beschreibung durchsuchen.
@@ -2400,15 +2431,15 @@ def memory_search(query: str, limit: int = 15, context: str = "", include_archiv
     context: "work" | "private" | "" (kein Filter, default)
     include_archived: True → auch archivierte (alte/überholte) Einträge zeigen (default: aus)
     """
-    hits = _lexical_hits(query, context, include_archived, limit)
+    hits = _combined_hits(query, context, include_archived, limit)
     if not hits:
         return "Keine Ergebnisse."
     lines = []
     for h in hits:
         ctx_str = f" `[{h['context']}]`" if h["context"] else ""
+        upd = f" _(aktualisiert {h['updated_at'][:10]})_" if h.get("updated_at") else ""
         lines.append(
-            f"[{h['type']}] **{h['name']}**{ctx_str}: {_smart_truncate(h['descr'])}  "
-            f"_(aktualisiert {h['updated_at'][:10]})_"
+            f"[{h['type']}] **{h['name']}**{ctx_str}: {_smart_truncate(h['descr'])} {upd}"
         )
     return "\n".join(lines)
 
@@ -2423,15 +2454,15 @@ def memory_search_full(query: str, limit: int = 15, context: str = "", include_a
     context: "work" | "private" | "" (kein Filter, default)
     include_archived: True → auch archivierte (alte/überholte) Einträge zeigen (default: aus)
     """
-    hits = _lexical_hits(query, context, include_archived, limit)
+    hits = _combined_hits(query, context, include_archived, limit)
     if not hits:
         return "Keine Ergebnisse."
     lines = []
     for h in hits:
         ctx_str = f" `[{h['context']}]`" if h["context"] else ""
+        upd = f" _(aktualisiert {h['updated_at'][:10]})_" if h.get("updated_at") else ""
         lines.append(
-            f"[{h['type']}] **{h['name']}**{ctx_str}: {h['descr']}  "
-            f"_(aktualisiert {h['updated_at'][:10]})_"
+            f"[{h['type']}] **{h['name']}**{ctx_str}: {h['descr']} {upd}"
         )
     return "\n".join(lines)
 
@@ -2515,16 +2546,17 @@ def _ensure_embed_matrix():
     rows = _rows(db_exec(
         "MATCH (e:Entity) WHERE e.embedding IS NOT NULL AND e.embedding <> '' "
         "AND (e.archived IS NULL OR e.archived <> 'true') "
-        "RETURN e.name, e.type, e.descr, e.context, e.embedding"))
+        "RETURN e.name, e.type, e.descr, e.context, e.updated_at, e.embedding"))
     names, vecs, meta = [], [], {}
-    for nm, typ, descr, ctx, emb in rows:
+    for nm, typ, descr, ctx, upd, emb in rows:
         try:
             v = json.loads(emb)
         except (json.JSONDecodeError, TypeError):
             continue
         names.append(nm)
         vecs.append(v)
-        meta[nm] = {"type": typ, "descr": descr or "", "context": ctx or ""}
+        meta[nm] = {"type": typ, "descr": descr or "", "context": ctx or "",
+                    "updated_at": upd or ""}
     matrix = np.asarray(vecs, dtype="float32") if vecs else None
     with _embed_cache_lock:
         _embed_names, _embed_meta, _embed_matrix, _embed_dirty = names, meta, matrix, False
@@ -2553,7 +2585,8 @@ def _semantic_hits(query: str, context: str = "", limit: int = 10) -> list[dict]
             if context and m.get("context") not in (context, ""):
                 continue
             out.append({"type": m.get("type", ""), "name": nm, "descr": m.get("descr", ""),
-                        "updated_at": "", "context": m.get("context", ""), "score": score})
+                        "updated_at": m.get("updated_at", ""), "context": m.get("context", ""),
+                        "score": score})
             if len(out) >= limit:
                 break
         return out
