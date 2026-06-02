@@ -155,6 +155,7 @@ Ambiguous cases (and everything when Ollama was down at night) land in a review 
 Environment variables are loaded from a `.env` file in the Compose directory:
 
 ```env
+AI_REM_API_TOKEN=...                     # REQUIRED — API token (fail-closed, see Authentication)
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Public URL of the server
 PORT=3456                                # TCP port (default: 3456)
 KUZU_DB_PATH=/data/kg.db                 # Path to the database
@@ -162,6 +163,29 @@ BACKUP_DIR=/backups                      # Path for backup files
 MAX_BACKUPS=10                           # Maximum number of backups to keep
 KUZU_POOL_SIZE=4                         # Connection pool size
 ```
+
+---
+
+## Authentication
+
+All sensitive routes (`/mcp`, `/api/*`, `/export`, `/import`) require a Bearer
+token. The server is **fail-closed**: without `AI_REM_API_TOKEN` it refuses to
+start. A request is authorized if **any** of these holds:
+
+1. the path is public — `/health`, `/setup`, `/setup-config`, `/hooks/*`, `/cmd*` (onboarding only, no private data);
+2. it originates from **loopback** (the local Web UI / an SSH tunnel) — so the browser UI needs no token scheme;
+3. it carries `Authorization: Bearer <AI_REM_API_TOKEN>` (constant-time compared).
+
+**Token source — [mykeyvault](https://github.com/markus7h/mykeyvault):** the token
+is stored once in the vault as item `ai-rem-api-token` (single source of truth).
+- **Server:** `deploy.sh` pulls it from the vault at deploy time and writes it into the remote `.env` — server startup stays independent of the vault's runtime state.
+- **Clients:** the `system-check.py` SessionStart hook fetches the token from the vault each session (vault-api coordinates already live in `~/.claude.json` → `mcpServers.mykeyvault.env`) and writes it into `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization`, which is how Claude's `/mcp` channel carries it. If the vault is down/locked, ai-rem returns `401`.
+
+> **Docker note:** in a bridge network the container sees tunneled browser
+> requests as the gateway IP, not loopback — so for pure local Web-UI use either
+> run with `network_mode: host`/access from the host, or use the token.
+
+Generate a token manually (if not using the vault): `openssl rand -hex 32`.
 
 ---
 
@@ -178,9 +202,11 @@ cd ~/mydocker/compose-files/ai-rem
 curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/docker-compose.yml
 curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/.env.example
 
-# Create .env and set your server IP
+# Create .env and configure
 cp .env.example .env
-# → set KG_PUBLIC_URL in .env to your actual server IP
+# → set KG_PUBLIC_URL to your actual server IP
+# → set AI_REM_API_TOKEN (required) — e.g. `openssl rand -hex 32`, or use deploy.sh
+#   to pull it from mykeyvault automatically (see Authentication)
 
 # Pull image and start container
 docker compose pull && docker compose up -d

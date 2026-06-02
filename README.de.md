@@ -142,6 +142,7 @@ Mehrdeutiges (und alles bei Ollama-Ausfall) landet in einer Review-Queue, die de
 Umgebungsvariablen werden aus einer `.env`-Datei im Compose-Verzeichnis geladen:
 
 ```env
+AI_REM_API_TOKEN=...                     # PFLICHT — API-Token (fail-closed, siehe Authentifizierung)
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Öffentliche URL des Servers
 PORT=3456                                # TCP-Port (Standard: 3456)
 KUZU_DB_PATH=/data/kg.db                 # Pfad zur Datenbank
@@ -149,6 +150,29 @@ BACKUP_DIR=/backups                      # Pfad für Backup-Dateien
 MAX_BACKUPS=10                           # Maximale Anzahl aufbewahrter Backups
 KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 ```
+
+---
+
+## Authentifizierung
+
+Alle sensiblen Routen (`/mcp`, `/api/*`, `/export`, `/import`) verlangen einen
+Bearer-Token. Der Server ist **fail-closed**: ohne `AI_REM_API_TOKEN` startet er
+nicht. Ein Request ist autorisiert, wenn **eine** Bedingung gilt:
+
+1. Der Pfad ist public — `/health`, `/setup`, `/setup-config`, `/hooks/*`, `/cmd*` (nur Onboarding, keine privaten Daten);
+2. die Herkunft ist **Loopback** (lokale Web-UI / SSH-Tunnel) — die Browser-UI braucht so kein Token-Schema;
+3. er trägt `Authorization: Bearer <AI_REM_API_TOKEN>` (konstant-zeitlicher Vergleich).
+
+**Token-Quelle — [mykeyvault](https://github.com/markus7h/mykeyvault):** der Token
+liegt einmalig im Vault als Item `ai-rem-api-token` (Single Source of Truth).
+- **Server:** `deploy.sh` zieht ihn beim Deploy aus dem Vault und schreibt ihn in die Remote-`.env` — der Serverstart bleibt unabhängig vom Laufzeitzustand des Vaults.
+- **Clients:** der SessionStart-Hook `system-check.py` holt den Token jede Session frisch aus dem Vault (vault-api-Koordinaten stehen bereits in `~/.claude.json` → `mcpServers.mykeyvault.env`) und schreibt ihn in `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization` — darüber trägt Claudes `/mcp`-Kanal den Token. Ist der Vault down/locked, antwortet ai-rem mit `401`.
+
+> **Docker-Hinweis:** im Bridge-Netz sieht der Container getunnelte Browser-Requests
+> als Gateway-IP, nicht als Loopback — für reine lokale Web-UI-Nutzung daher
+> `network_mode: host`/Zugriff vom Host, oder den Token verwenden.
+
+Token manuell erzeugen (ohne Vault): `openssl rand -hex 32`.
 
 ---
 
@@ -165,9 +189,11 @@ cd ~/mydocker/compose-files/ai-rem
 curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/docker-compose.yml
 curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/.env.example
 
-# .env anlegen und anpassen
+# .env anlegen und konfigurieren
 cp .env.example .env
-# → KG_PUBLIC_URL in .env auf die echte Server-IP setzen
+# → KG_PUBLIC_URL auf die echte Server-IP setzen
+# → AI_REM_API_TOKEN setzen (Pflicht) — z. B. `openssl rand -hex 32`, oder via
+#   deploy.sh automatisch aus mykeyvault ziehen (siehe Authentifizierung)
 
 # Image pullen und Container starten
 docker compose pull && docker compose up -d
