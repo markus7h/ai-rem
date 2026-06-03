@@ -155,22 +155,32 @@ KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 
 ## Authentifizierung
 
-Alle sensiblen Routen (`/mcp`, `/api/*`, `/export`, `/import`) verlangen einen
-Bearer-Token. Der Server ist **fail-closed**: ohne `AI_REM_API_TOKEN` startet er
-nicht. Ein Request ist autorisiert, wenn **eine** Bedingung gilt:
+Alle sensiblen Routen (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) verlangen
+Authentifizierung. Der Server ist **fail-closed**: ohne `AI_REM_API_TOKEN` startet
+er nicht. Ein Request ist autorisiert, wenn **eine** Bedingung gilt:
 
-1. Der Pfad ist public — `/health`, `/setup`, `/setup-config`, `/hooks/*`, `/cmd*` (nur Onboarding, keine privaten Daten);
-2. die Herkunft ist **Loopback** *und der Request ist nicht proxied* (kein `X-Forwarded-For`) — deckt die lokale Web-UI / einen SSH-Tunnel ab, die Browser-UI braucht so kein Token-Schema. Hinter einem Same-Host-Reverse-Proxy (z. B. Caddy) ist die Peer-IP zwar `127.0.0.1`, aber `X-Forwarded-For` ist gesetzt → der Token wird trotzdem verlangt;
-3. er trägt `Authorization: Bearer <AI_REM_API_TOKEN>` (konstant-zeitlicher Vergleich).
+1. Der Pfad ist public — `/health`, `/setup`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (nur Onboarding/Login, keine privaten Daten);
+2. die Herkunft ist **Loopback** *und der Request ist nicht proxied* (kein `X-Forwarded-For`). Im Bridge-Netz deckt das faktisch nur containerinternen Verkehr ab (z. B. den Healthcheck): getunnelte/proxied Requests kommen als Docker-Gateway-IP an, nicht als Loopback. Hinter einem Same-Host-Reverse-Proxy (z. B. Caddy) ist die Peer-IP zwar `127.0.0.1`, aber `X-Forwarded-For` ist gesetzt → der Token wird trotzdem verlangt;
+3. er trägt `Authorization: Bearer <AI_REM_API_TOKEN>` (konstant-zeitlicher Vergleich) — von MCP-Clients (Claudes `/mcp`-Kanal);
+4. er trägt ein gültiges `ai_rem_session`-Cookie — von der Browser-Web-UI (siehe unten).
+
+### Web-UI-Login
+
+Ein Browser kann beim Navigieren keinen `Authorization`-Header setzen, daher nutzt
+die Web-UI ein Cookie. `/login` öffnen, den API-Token einmal eingeben — der Server
+setzt ein **HttpOnly-, Secure-, SameSite=Strict-**Cookie, das `/ui` und dessen
+`/api/*`-Calls autorisiert; `/logout` löscht es. Der Cookie-Wert ist **nicht** der
+rohe Token, sondern ein abgeleiteter, UI-gescopeter Wert
+(`HMAC-SHA256(token, "ai-rem-ui-session")`) — so liegt der `/mcp`-Bearer nie im
+Browser, und bei Token-Rotation wird die Session automatisch ungültig. Da das
+Cookie `Secure` ist, muss die UI über HTTPS erreicht werden (z. B. ein Caddy-`tls
+internal`-vHost). Lebensdauer standardmäßig 30 Tage (`AI_REM_UI_SESSION_TTL`, in
+Sekunden).
 
 **Token-Quelle — [mykeyvault](https://github.com/markus7h/mykeyvault):** der Token
 liegt einmalig im Vault als Item `ai-rem-api-token` (Single Source of Truth).
 - **Server:** `deploy.sh` zieht ihn beim Deploy aus dem Vault und schreibt ihn in die Remote-`.env` — der Serverstart bleibt unabhängig vom Laufzeitzustand des Vaults.
 - **Clients:** der SessionStart-Hook `system-check.py` holt den Token jede Session frisch aus dem Vault (vault-api-Koordinaten stehen bereits in `~/.claude.json` → `mcpServers.mykeyvault.env`) und schreibt ihn in `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization` — darüber trägt Claudes `/mcp`-Kanal den Token. Ist der Vault down/locked, antwortet ai-rem mit `401`.
-
-> **Docker-Hinweis:** im Bridge-Netz sieht der Container getunnelte Browser-Requests
-> als Gateway-IP, nicht als Loopback — für reine lokale Web-UI-Nutzung daher
-> `network_mode: host`/Zugriff vom Host, oder den Token verwenden.
 
 Token manuell erzeugen (ohne Vault): `openssl rand -hex 32`.
 

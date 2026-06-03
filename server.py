@@ -17,18 +17,25 @@ import re
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import datetime
 from typing import Optional
 
 import kuzu
 from fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from starlette.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
@@ -40,9 +47,21 @@ _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 # Fail-closed: ohne Token startet der Server nicht (siehe __main__).
 AI_REM_API_TOKEN = os.getenv("AI_REM_API_TOKEN", "")
 
-# Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck — keine
-# privaten Daten). Alles andere verlangt Bearer-Token ODER Loopback-Herkunft.
-_PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup-config", "/hooks/", "/cmd")
+# Browser-Login (Web-UI): /login setzt ein HttpOnly/Secure/SameSite=Strict-Cookie,
+# das die AuthMiddleware zusätzlich zum Bearer akzeptiert. Der Cookie-Wert ist NICHT
+# der rohe Token, sondern ein davon abgeleiteter, UI-gescopeter Wert — so liegt der
+# /mcp-Bearer nie im Browser, und bei Token-Rotation wird der Cookie automatisch
+# ungültig (Auto-Logout). Stateless: kein Session-Store, Vergleich konstant-zeitlich.
+_UI_COOKIE = "ai_rem_session"
+_UI_SESSION_VALUE = (
+    hmac.new(AI_REM_API_TOKEN.encode(), b"ai-rem-ui-session", hashlib.sha256).hexdigest()
+    if AI_REM_API_TOKEN else ""
+)
+_UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  # 30 Tage
+
+# Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck/Login — keine
+# privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
+_PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup-config", "/hooks/", "/cmd", "/login")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 # ─── Setup-Endpunkt Inhalte ──────────────────────────────────────────────────
@@ -1643,7 +1662,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </head>
 <body>
 <h1>ai-rem</h1>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a></p>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
 <div class="grid">
 
   <div class="card">
@@ -2076,6 +2095,82 @@ async def import_route(request: Request) -> JSONResponse:
 
     result = await asyncio.to_thread(_apply_import, body, mode)
     return JSONResponse(result)
+
+
+_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Login</title>
+<style>
+body{background:#0f1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.box{background:#1a1d27;border:1px solid #2a2d3e;border-radius:12px;padding:32px;width:340px}
+h1{font-size:20px;margin:0 0 4px}
+p.sub{color:#94a3b8;font-size:13px;margin:0 0 24px}
+label{display:block;font-size:12px;color:#94a3b8;margin-bottom:6px}
+input{width:100%;background:#0f1117;border:1px solid #2a2d3e;color:#e2e8f0;border-radius:6px;padding:10px;font-size:14px;margin:0 0 16px}
+button{width:100%;background:#6366f1;color:#fff;border:none;border-radius:6px;padding:10px;font-size:14px;font-weight:500;cursor:pointer}
+button:hover{background:#818cf8}
+.err{color:#ef4444;font-size:13px;margin-bottom:14px;min-height:18px}
+</style></head>
+<body>
+<form class="box" method="POST" action="/login">
+<h1>ai-rem</h1>
+<p class="sub">Knowledge Graph Memory</p>
+<div class="err">__ERROR__</div>
+<label for="token">API-Token</label>
+<input type="password" id="token" name="token" autofocus autocomplete="current-password">
+<button type="submit">Anmelden</button>
+</form>
+</body></html>"""
+
+
+def _login_page(error: str = "") -> str:
+    return _LOGIN_HTML.replace("__ERROR__", error)
+
+
+def _request_authed(request: Request) -> bool:
+    """Wie AuthMiddleware._authorized, aber auf Request-Ebene (für /login-Redirect):
+    gültiger Bearer ODER gültiges Session-Cookie."""
+    auth = request.headers.get("authorization", "")
+    if auth:
+        tok = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+        return bool(AI_REM_API_TOKEN) and hmac.compare_digest(tok, AI_REM_API_TOKEN)
+    cookie = request.cookies.get(_UI_COOKIE)
+    if cookie is not None:
+        return bool(_UI_SESSION_VALUE) and hmac.compare_digest(cookie, _UI_SESSION_VALUE)
+    return False
+
+
+@mcp.custom_route("/login", methods=["GET"])
+async def login_get(request: Request) -> Response:
+    if _request_authed(request):
+        return RedirectResponse("/ui", status_code=302)
+    return Response(content=_login_page(), media_type="text/html")
+
+
+@mcp.custom_route("/login", methods=["POST"])
+async def login_post(request: Request) -> Response:
+    body = (await request.body()).decode("utf-8", "ignore")
+    token = urllib.parse.parse_qs(body).get("token", [""])[0]
+    if AI_REM_API_TOKEN and hmac.compare_digest(token, AI_REM_API_TOKEN):
+        resp = RedirectResponse("/ui", status_code=302)
+        resp.set_cookie(
+            _UI_COOKIE, _UI_SESSION_VALUE, max_age=_UI_COOKIE_TTL,
+            path="/", httponly=True, secure=True, samesite="strict",
+        )
+        return resp
+    await asyncio.sleep(0.5)  # milde Brute-Force-Bremse (Token hat 256 Bit Entropie)
+    return Response(
+        content=_login_page("Falscher Token."),
+        media_type="text/html", status_code=401,
+    )
+
+
+@mcp.custom_route("/logout", methods=["GET"])
+async def logout_route(request: Request) -> Response:
+    resp = RedirectResponse("/login", status_code=302)
+    resp.delete_cookie(_UI_COOKIE, path="/")
+    return resp
 
 
 @mcp.custom_route("/ui", methods=["GET"])
@@ -3657,6 +3752,14 @@ class AuthMiddleware:
                 if token.lower().startswith("bearer "):
                     token = token[7:].strip()
                 return bool(AI_REM_API_TOKEN) and hmac.compare_digest(token, AI_REM_API_TOKEN)
+        # Kein Authorization-Header → Browser-Session-Cookie prüfen (Web-UI-Login).
+        # Cookie kann Trust nur gewähren, wenn der Wert exakt passt; sonst 401.
+        for name, value in scope.get("headers", []):
+            if name == b"cookie":
+                for part in value.decode("latin-1", "ignore").split(";"):
+                    k, _, v = part.strip().partition("=")
+                    if k == _UI_COOKIE:
+                        return bool(_UI_SESSION_VALUE) and hmac.compare_digest(v, _UI_SESSION_VALUE)
         return False
 
     async def __call__(self, scope, receive, send):
