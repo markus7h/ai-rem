@@ -160,7 +160,7 @@ Bearer-Token. Der Server ist **fail-closed**: ohne `AI_REM_API_TOKEN` startet er
 nicht. Ein Request ist autorisiert, wenn **eine** Bedingung gilt:
 
 1. Der Pfad ist public — `/health`, `/setup`, `/setup-config`, `/hooks/*`, `/cmd*` (nur Onboarding, keine privaten Daten);
-2. die Herkunft ist **Loopback** (lokale Web-UI / SSH-Tunnel) — die Browser-UI braucht so kein Token-Schema;
+2. die Herkunft ist **Loopback** *und der Request ist nicht proxied* (kein `X-Forwarded-For`) — deckt die lokale Web-UI / einen SSH-Tunnel ab, die Browser-UI braucht so kein Token-Schema. Hinter einem Same-Host-Reverse-Proxy (z. B. Caddy) ist die Peer-IP zwar `127.0.0.1`, aber `X-Forwarded-For` ist gesetzt → der Token wird trotzdem verlangt;
 3. er trägt `Authorization: Bearer <AI_REM_API_TOKEN>` (konstant-zeitlicher Vergleich).
 
 **Token-Quelle — [mykeyvault](https://github.com/markus7h/mykeyvault):** der Token

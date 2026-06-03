@@ -3644,7 +3644,13 @@ class AuthMiddleware:
             return True
         client = scope.get("client")
         if client and client[0] in _LOOPBACK_HOSTS:
-            return True
+            # Loopback nur vertrauen, wenn der Request NICHT durch einen Reverse-Proxy
+            # kommt: hinter Caddy (same-host) ist die Peer-IP zwar 127.0.0.1, aber
+            # X-Forwarded-For ist gesetzt → dann Token verlangen, sonst tokenloser
+            # Bypass über den Proxy (#9). Direkter SSH-Tunnel zur lokalen Web-UI
+            # (kein XFF) bleibt tokenfrei. XFF kann Trust nur entziehen, nie gewähren.
+            if not any(name == b"x-forwarded-for" for name, _ in scope.get("headers", [])):
+                return True
         for name, value in scope.get("headers", []):
             if name == b"authorization":
                 token = value.decode("latin-1", "ignore")
