@@ -142,6 +142,26 @@ Ambiguous cases (and everything when Ollama was down at night) land in a review 
 
 ---
 
+## Plan saving (ExitPlanMode → ai-rem)
+
+A `PostToolUse` hook on `ExitPlanMode` (`hooks/save-plan.py`) stores every finalized plan as an **open `Task`** in ai-rem, so plans become a central, cross-machine list instead of just slug files under `~/.claude/plans/`. Ask *"any open plans?"* in a new session, get a list (name + short description), pick one.
+
+**Fields** come from a small frontmatter block Claude writes at the top of each plan file (no prose guessing):
+
+```
+---
+name: "Plan: <title>"
+description: "<one short sentence>"
+status: offen
+---
+```
+
+The hook reads the newest plan file's frontmatter and upserts via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert is keyed by `name`, so re-finalizing a plan never duplicates. Completed plans are archived (`memory_archive`) — the status lives in ai-rem, so it stays consistent across machines. Fail-silent: never blocks `ExitPlanMode`.
+
+**Install:** copy `hooks/save-plan.py` to `~/.claude/hooks/`, `chmod +x`, and register the `PostToolUse: ExitPlanMode` hook in `~/.claude/settings.json` (see the file header).
+
+---
+
 ## Requirements
 
 - Docker on the target server
