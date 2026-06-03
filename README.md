@@ -138,7 +138,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
 
 A daemon thread in the container runs a daily maintenance pass (default 03:00, configurable in the `/cleanup` web UI). It detects duplicate and outdated entries (heuristics + Ollama when reachable) and **archives** them instead of deleting: the entry is tagged `archived`, optionally compressed (with the original preserved in `extra.original_descr`), and linked via `DUPLIKAT_VON` / `VERALTET_DURCH`. Archived entries are hidden from `memory_get_context`/`search`/`list` by default (opt in with `include_archived=true`) but remain reachable for history via `memory_get_relations`. **Preferences, pinned and already-archived entries are never touched.** Every run backs up first; the log is viewable in the `/cleanup` web UI.
 
-Ambiguous cases (and everything when Ollama was down at night) land in a review queue. The `/memory-cleanup` slash command — auto-triggered silently at session start when the queue is non-empty — has Claude resolve them with judgment via the non-destructive `memory_merge` / `memory_archive` MCP tools.
+Ambiguous cases (and everything when Ollama was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution); run the `/memory-cleanup` slash command to have Claude resolve the entries with judgment via the non-destructive `memory_merge` / `memory_archive` MCP tools.
 
 ---
 
