@@ -173,7 +173,7 @@ token. The server is **fail-closed**: without `AI_REM_API_TOKEN` it refuses to
 start. A request is authorized if **any** of these holds:
 
 1. the path is public — `/health`, `/setup`, `/setup-config`, `/hooks/*`, `/cmd*` (onboarding only, no private data);
-2. it originates from **loopback** (the local Web UI / an SSH tunnel) — so the browser UI needs no token scheme;
+2. it originates from **loopback** *and the request is not proxied* (no `X-Forwarded-For`) — covers the local Web UI / an SSH tunnel, so the browser UI needs no token scheme. Behind a same-host reverse proxy (e.g. Caddy) the peer is `127.0.0.1` but `X-Forwarded-For` is set, so the token is still required;
 3. it carries `Authorization: Bearer <AI_REM_API_TOKEN>` (constant-time compared).
 
 **Token source — [mykeyvault](https://github.com/markus7h/mykeyvault):** the token
