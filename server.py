@@ -3134,7 +3134,10 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
 AI_REM_OLLAMA_URL = os.getenv("AI_REM_OLLAMA_URL", "http://localhost:11434")
-CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "qwen3:14b")
+# Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
+# geladene Chat-Modell (siehe _cleanup_model), sonst CLEANUP_OLLAMA_MODEL_FALLBACK.
+CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "").strip()
+CLEANUP_OLLAMA_MODEL_FALLBACK = os.getenv("CLEANUP_OLLAMA_MODEL_FALLBACK", "mistral-small3.2:24b").strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "30"))
 CLEANUP_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "cleanup")
@@ -3274,10 +3277,34 @@ def _ollama_up() -> bool:
         return False
 
 
+def _cleanup_model() -> str:
+    """Modell für den Cleanup wählen, ohne ein festes Modell zu erzwingen: das
+    bereits in Ollama geladene Chat-Modell (GET /api/ps) nutzen, damit wir kein
+    anderes Modell aus dem VRAM verdrängen. Embedding-Modelle (family enthält
+    'bert') überspringen. Reihenfolge: Env-Override > geladenes Chat-Modell >
+    CLEANUP_OLLAMA_MODEL_FALLBACK."""
+    if CLEANUP_OLLAMA_MODEL:
+        return CLEANUP_OLLAMA_MODEL
+    import urllib.request
+    try:
+        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/api/ps", timeout=3) as r:
+            data = json.loads(r.read().decode())
+        for m in data.get("models", []):
+            fam = ((m.get("details") or {}).get("family") or "").lower()
+            if "bert" in fam:  # Embedding-Modelle (bge-m3, mxbai, nomic) ignorieren
+                continue
+            name = m.get("model") or m.get("name")
+            if name:
+                return name
+    except Exception:
+        pass
+    return CLEANUP_OLLAMA_MODEL_FALLBACK
+
+
 def _ollama_chat(system: str, user: str, *, as_json: bool, timeout: int = 60) -> Optional[str]:
     import urllib.request
     body = json.dumps({
-        "model": CLEANUP_OLLAMA_MODEL,
+        "model": _cleanup_model(),
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
         "stream": False,

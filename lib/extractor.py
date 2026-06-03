@@ -36,7 +36,10 @@ MAX_CHARS_PER_MSG = 4000
 MAX_TOTAL_CHARS = 80_000
 MIN_TRANSCRIPT_CHARS = 500
 OLLAMA_URL = os.environ.get("AI_REM_OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL_DEFAULT = "qwen3:14b"
+# Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
+# geladene Chat-Modell (siehe pick_loaded_model), sonst OLLAMA_MODEL_FALLBACK.
+OLLAMA_MODEL_ENV = os.environ.get("AI_REM_OLLAMA_MODEL", "").strip()
+OLLAMA_MODEL_FALLBACK = os.environ.get("AI_REM_OLLAMA_MODEL_FALLBACK", "mistral-small3.2:24b").strip()
 OLLAMA_TIMEOUT_S = 300
 
 SYSTEM_PROMPT_BASE = """OUTPUT: JSON nur. Kein Text.
@@ -171,6 +174,28 @@ def _ollama_up() -> bool:
             return getattr(r, "status", 200) == 200
     except Exception:
         return False
+
+
+def pick_loaded_model(fallback: str = OLLAMA_MODEL_FALLBACK) -> str:
+    """Modell wählen, das bereits in Ollama geladen ist (GET /api/ps), statt ein
+    festes Modell anzufragen — so verdrängen wir kein anderes Modell aus dem VRAM.
+    Embedding-Modelle (family enthält 'bert') werden übersprungen. Reihenfolge:
+    Env-Override > geladenes Chat-Modell > fallback."""
+    if OLLAMA_MODEL_ENV:
+        return OLLAMA_MODEL_ENV
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/ps", timeout=3) as r:
+            data = json.loads(r.read().decode())
+        for m in data.get("models", []):
+            fam = ((m.get("details") or {}).get("family") or "").lower()
+            if "bert" in fam:  # Embedding-Modelle (bge-m3, mxbai, nomic) ignorieren
+                continue
+            name = m.get("model") or m.get("name")
+            if name:
+                return name
+    except Exception:
+        pass
+    return fallback
 
 
 def call_ollama(transcript: str, model: str, system_prompt: str) -> dict:
@@ -349,8 +374,7 @@ def catchup(client: MCPClient, log_dir: Optional[Path] = None) -> dict:
         if not tp.exists():
             continue  # verwaist → still verwerfen
         try:
-            ingest_transcript(client, tp, dry_run=False,
-                              model=OLLAMA_MODEL_DEFAULT, log_dir=log_dir)
+            ingest_transcript(client, tp, dry_run=False, log_dir=log_dir)
             processed.append(e.get("session_id"))
         except Exception as ex:
             print(f"catchup: {tp} failed: {ex}", file=sys.stderr)
@@ -377,11 +401,14 @@ def ingest_transcript(
     client: MCPClient,
     transcript_path: Path,
     dry_run: bool = False,
-    model: str = OLLAMA_MODEL_DEFAULT,
+    model: Optional[str] = None,
     log_dir: Optional[Path] = None,
 ) -> dict:
     if not transcript_path.exists():
         raise FileNotFoundError(transcript_path)
+
+    # Kein festes Modell erzwingen: das bereits geladene Chat-Modell nutzen.
+    model = model or pick_loaded_model()
 
     log_dir = log_dir or LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
