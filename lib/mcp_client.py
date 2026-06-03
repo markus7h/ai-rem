@@ -15,19 +15,54 @@ class MCPError(RuntimeError):
     pass
 
 
+_CLAUDE_JSON = os.path.expanduser("~/.claude.json")
+
+
+def _resolve_token(timeout: float = 15.0) -> str:
+    """ai-rem-API-Token beziehen: Env AI_REM_TOKEN → bereits in ~/.claude.json
+    hinterlegter Bearer-Header (vom system-check-Hook geschrieben) → Runtime-Fetch
+    aus mykeyvault (vault-api-Koordinaten ebenfalls aus ~/.claude.json)."""
+    tok = os.environ.get("AI_REM_TOKEN", "")
+    if tok:
+        return tok
+    try:
+        with open(_CLAUDE_JSON) as f:
+            servers = json.load(f).get("mcpServers", {})
+    except Exception:
+        return ""
+    hdr = (servers.get("ai-rem", {}).get("headers", {}) or {}).get("Authorization", "")
+    if hdr.lower().startswith("bearer "):
+        return hdr[7:].strip()
+    try:
+        env = servers["mykeyvault"]["env"]
+        req = urllib.request.Request(
+            env["VAULT_API_URL"].rstrip("/") + "/secret/ai-rem-api-token",
+            headers={"Authorization": f"Bearer {env['VAULT_API_TOKEN']}"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode()).get("password", "")
+    except Exception:
+        return ""
+
+
 class MCPClient:
     def __init__(self, endpoint: Optional[str] = None, timeout: float = 15.0):
         self.endpoint = endpoint or os.environ.get(
             "AI_REM_ENDPOINT", "http://localhost:3456/mcp"
         )
         self.timeout = timeout
+        self.token = _resolve_token(timeout)
         self._sid: Optional[str] = None
+
+    def _auth_header(self) -> dict:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
     def _post(self, body: dict, sid: Optional[str] = None):
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        headers.update(self._auth_header())
         if sid:
             headers["mcp-session-id"] = sid
         req = urllib.request.Request(
@@ -100,7 +135,8 @@ class MCPClient:
         """
         url = self.base_url + "/export"
         try:
-            resp = urllib.request.urlopen(url, timeout=self.timeout)
+            req = urllib.request.Request(url, headers=self._auth_header())
+            resp = urllib.request.urlopen(req, timeout=self.timeout)
         except urllib.error.URLError as e:
             raise MCPError(f"export unreachable ({url}): {e}") from e
         return json.loads(resp.read().decode())

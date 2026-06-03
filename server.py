@@ -8,11 +8,13 @@ import atexit
 import fcntl
 import glob
 import hashlib
+import hmac
 import json
 import logging
 import os
 import queue
 import re
+import sys
 import threading
 import time
 from datetime import datetime
@@ -32,6 +34,16 @@ BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
 KUZU_POOL_SIZE = max(1, int(os.getenv("KUZU_POOL_SIZE", "4")))
 _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
+
+# API-Token für alle sensiblen HTTP-Routen (/mcp, /api/*, /export, /import …).
+# Quelle: mykeyvault (Vault-Item ai-rem-api-token), beim Deploy ins Env injiziert.
+# Fail-closed: ohne Token startet der Server nicht (siehe __main__).
+AI_REM_API_TOKEN = os.getenv("AI_REM_API_TOKEN", "")
+
+# Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck — keine
+# privaten Daten). Alles andere verlangt Bearer-Token ODER Loopback-Herkunft.
+_PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup-config", "/hooks/", "/cmd")
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 # ─── Setup-Endpunkt Inhalte ──────────────────────────────────────────────────
 
@@ -82,6 +94,60 @@ AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://localhost:11434")
 )
 
+CLAUDE_JSON = os.path.expanduser("~/.claude.json")
+
+
+def _resolve_ai_rem_token():
+    """ai-rem-API-Token beziehen. Quelle (in dieser Reihenfolge):
+    1) Env AI_REM_TOKEN. 2) Runtime aus mykeyvault: vault-api-Koordinaten stehen
+    bereits in ~/.claude.json (mcpServers.mykeyvault.env), Item 'ai-rem-api-token'.
+    Bei Vault down/locked → '' (ai-rem antwortet dann 401)."""
+    tok = os.environ.get("AI_REM_TOKEN", "")
+    if tok:
+        return tok
+    try:
+        with open(CLAUDE_JSON) as f:
+            env = json.load(f)["mcpServers"]["mykeyvault"]["env"]
+        base = env["VAULT_API_URL"].rstrip("/")
+        vtok = env["VAULT_API_TOKEN"]
+        req = urllib.request.Request(
+            base + "/secret/ai-rem-api-token",
+            headers={"Authorization": f"Bearer {vtok}"},
+        )
+        with urllib.request.urlopen(req, timeout=AI_REM_TIMEOUT) as r:
+            return json.loads(r.read().decode()).get("password", "")
+    except Exception:
+        return ""
+
+
+AI_REM_TOKEN = _resolve_ai_rem_token()
+
+
+def _sync_ai_rem_header(token):
+    """Bearer-Header in ~/.claude.json mcpServers."ai-rem".headers schreiben —
+    die einzige Mechanik, über die Claudes primärer /mcp-Tool-Kanal den Token
+    erhält (Header werden aus der Config gelesen). Atomar via temp + os.replace.
+    No-op, wenn kein Token oder ai-rem nicht registriert ist."""
+    if not token:
+        return
+    try:
+        with open(CLAUDE_JSON) as f:
+            cfg = json.load(f)
+        srv = cfg.get("mcpServers", {}).get("ai-rem")
+        if not srv:
+            return
+        desired = f"Bearer {token}"
+        if srv.get("headers", {}).get("Authorization") == desired:
+            return
+        srv.setdefault("headers", {})["Authorization"] = desired
+        tmp = CLAUDE_JSON + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, CLAUDE_JSON)
+    except Exception:
+        pass
+
 SMB_CFG = TMPL.get("smb", {})
 SMB_MOUNT = SMB_CFG.get("mount", "")
 SMB_URL = SMB_CFG.get("url", "")
@@ -117,6 +183,8 @@ def check_ai_rem():
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        if AI_REM_TOKEN:
+            headers["Authorization"] = f"Bearer {AI_REM_TOKEN}"
         if sid:
             headers["mcp-session-id"] = sid
         req = urllib.request.Request(
@@ -404,8 +472,10 @@ def check_cleanup_pending():
     if not AI_REM_ENDPOINT:
         return ""
     base = AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp") else AI_REM_ENDPOINT.rstrip("/")
+    headers = {"Authorization": f"Bearer {AI_REM_TOKEN}"} if AI_REM_TOKEN else {}
     try:
-        with urllib.request.urlopen(base + "/api/cleanup/pending", timeout=3) as r:
+        req = urllib.request.Request(base + "/api/cleanup/pending", headers=headers)
+        with urllib.request.urlopen(req, timeout=3) as r:
             items = json.loads(r.read().decode())
     except Exception:
         return ""
@@ -420,6 +490,7 @@ def check_cleanup_pending():
     )
 
 
+_sync_ai_rem_header(AI_REM_TOKEN)
 check_ai_rem()
 check_smb()
 check_mcp_servers()
@@ -684,6 +755,32 @@ else
     claude mcp add --transport http --scope user ai-rem "$KG_URL/mcp"
     echo "✓ MCP registriert (ai-rem)"
 fi
+
+# Initialen Bearer-Header in ~/.claude.json schreiben, damit bereits die ERSTE
+# Session nicht 401t (danach refresht ihn der SessionStart-Hook). Token kommt aus
+# mykeyvault (vault-api-Koordinaten stehen in ~/.claude.json mcpServers.mykeyvault.env).
+python3 - << 'PYEOF' || echo "⚠ ai-rem-Token nicht gesetzt (Vault?) — erste Session ggf. 401 bis Hook läuft"
+import json, os, urllib.request
+cj = os.path.expanduser("~/.claude.json")
+cfg = json.load(open(cj))
+servers = cfg.get("mcpServers", {})
+if "ai-rem" not in servers:
+    raise SystemExit(1)
+tok = os.environ.get("AI_REM_TOKEN", "")
+if not tok:
+    env = servers["mykeyvault"]["env"]
+    req = urllib.request.Request(
+        env["VAULT_API_URL"].rstrip("/") + "/secret/ai-rem-api-token",
+        headers={"Authorization": "Bearer " + env["VAULT_API_TOKEN"]})
+    tok = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())["password"]
+if not tok:
+    raise SystemExit(1)
+servers["ai-rem"].setdefault("headers", {})["Authorization"] = "Bearer " + tok
+tmp = cj + ".tmp"
+json.dump(cfg, open(tmp, "w"), indent=2, ensure_ascii=False)
+os.replace(tmp, cj)
+print("✓ ai-rem Bearer-Header gesetzt")
+PYEOF
 
 mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
 
@@ -1702,6 +1799,12 @@ mcp = FastMCP(
         "Verwandte Entities verlinken via memory_relate."
     ),
 )
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_route(request: Request) -> PlainTextResponse:
+    # Public (kein Token) — vom Docker-Healthcheck und Reachability-Probes genutzt.
+    return PlainTextResponse("ok")
 
 
 @mcp.custom_route("/setup", methods=["GET"])
@@ -3516,10 +3619,71 @@ threading.Thread(target=_cleanup_scheduler_loop, daemon=True, name="cleanup-sche
 threading.Thread(target=_embed_backfill, daemon=True, name="embed-backfill").start()
 
 
+# ─── auth ─────────────────────────────────────────────────────────────────────
+
+
+class AuthMiddleware:
+    """Pure-ASGI Bearer-Token-Gate vor allen HTTP-Routen (auch /mcp).
+
+    Pure-ASGI statt BaseHTTPMiddleware, damit der SSE-/Streaming-Response von
+    /mcp nicht gepuffert wird. Ein Request passiert, wenn EINE Bedingung gilt:
+      1) Pfad-Prefix ist public (_PUBLIC_PATH_PREFIXES),
+      2) Herkunft ist Loopback (lokale Web-UI / SSH-Tunnel),
+      3) gültiger `Authorization: Bearer <token>` (konstant-zeitlicher Vergleich).
+    Sonst 401.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    def _authorized(self, scope) -> bool:
+        path = scope.get("path", "")
+        # Exakter Treffer oder echtes Pfad-Segment darunter — nicht bloßes
+        # String-Präfix, damit z. B. /setup nicht /setup-internal mit freigibt.
+        if any(path == p or path.startswith(p.rstrip("/") + "/") for p in _PUBLIC_PATH_PREFIXES):
+            return True
+        client = scope.get("client")
+        if client and client[0] in _LOOPBACK_HOSTS:
+            return True
+        for name, value in scope.get("headers", []):
+            if name == b"authorization":
+                token = value.decode("latin-1", "ignore")
+                if token.lower().startswith("bearer "):
+                    token = token[7:].strip()
+                return bool(AI_REM_API_TOKEN) and hmac.compare_digest(token, AI_REM_API_TOKEN)
+        return False
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or self._authorized(scope):
+            return await self.app(scope, receive, send)
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b'{"error":"unauthorized"}',
+        })
+
+
 # ─── entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    if not AI_REM_API_TOKEN:
+        log.error(
+            "AI_REM_API_TOKEN ist nicht gesetzt — Start abgebrochen (fail-closed). "
+            "Token aus mykeyvault (Item ai-rem-api-token) ins Env injizieren, "
+            "z. B. via deploy.sh, oder in .env setzen."
+        )
+        sys.exit(1)
+
+    import uvicorn
+
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "3456"))
-    log.info("Starting ai-rem MCP server on %s:%d", host, port)
-    mcp.run(transport="http", host=host, port=port)
+    log.info("Starting ai-rem MCP server on %s:%d (auth: token+loopback)", host, port)
+
+    app = mcp.http_app()
+    app.add_middleware(AuthMiddleware)
+    uvicorn.run(app, host=host, port=port)
