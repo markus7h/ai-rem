@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
@@ -1947,6 +1947,7 @@ button{background:var(--accent);border:none;color:#fff;border-radius:6px;padding
 button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid var(--border);color:var(--muted)}button.ghost:hover{border-color:var(--accent);color:var(--text)}
 .muted{color:var(--muted);font-size:12px}
 .item{border-bottom:1px solid var(--border);padding:9px 0;font-size:13px}.item:last-child{border-bottom:none}
+.det{color:var(--muted);font-size:12px;white-space:pre-wrap;margin-top:7px;padding-left:2px;max-height:160px;overflow:auto}
 .tag{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--muted);margin-right:6px}
 .tag.merge{color:var(--accent);border-color:var(--accent)}.tag.archive{color:var(--warn);border-color:var(--warn)}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
@@ -1968,6 +1969,7 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
 </div>
 
 <h2>Offene Reviews (Pending)</h2>
+<p class="sub" style="margin:-4px 0 10px">Hier direkt abarbeiten — <b>Mergen/Archivieren</b> wendet den Vorschlag an, <b>Verwerfen</b> behält beide Einträge. Ersetzt das manuelle <code>/memory-cleanup</code>.</p>
 <div class="card" id="pending"><span class="muted">—</span></div>
 
 <h2>Letzte Läufe</h2>
@@ -1983,8 +1985,13 @@ async function load(){
   $('lr').textContent=cfg.last_run?('letzter Lauf: '+cfg.last_run.replace('T',' ')):'noch kein Lauf';
   const pend=await (await fetch('/api/cleanup/pending')).json();
   $('pending').innerHTML=pend.length?pend.map(p=>{
-    const d=p.kind==='merge'?`<b>${esc(p.duplicate)}</b> → <b>${esc(p.canonical)}</b>`:`<b>${esc(p.target)}</b>`;
-    return `<div class="item"><span class="tag ${p.kind}">${p.kind}</span>${d} <span class="muted">${esc(p.reason||'')}</span></div>`;
+    const isM=p.kind==='merge';
+    const head=isM?`<b>${esc(p.duplicate)}</b> → <b>${esc(p.canonical)}</b>`:`<b>${esc(p.target)}</b>`;
+    const det=p.detail?`<div class="det">A) ${esc((p.detail.a||{}).descr||'')}\n\nB) ${esc((p.detail.b||{}).descr||'')}</div>`:'';
+    return `<div class="item"><div class="row"><span class="tag ${p.kind}">${p.kind}</span>${head} <span class="muted">${esc(p.reason||'')}</span>`+
+      `<span style="margin-left:auto"></span>`+
+      `<button onclick="resolve('${p.id}','apply')">${isM?'Mergen':'Archivieren'}</button>`+
+      `<button class="ghost" onclick="resolve('${p.id}','dismiss')">Verwerfen</button></div>${det}</div>`;
   }).join(''):'<span class="muted">keine offenen Reviews</span>';
   const logs=await (await fetch('/api/cleanup/log')).json();
   $('log').innerHTML=logs.length?logs.map(l=>{
@@ -2005,6 +2012,13 @@ async function saveCfg(){
 async function runNow(){
   toast('Läuft…');const r=await fetch('/api/cleanup/now',{method:'POST'});const j=await r.json();
   toast(j.error?('Fehler: '+j.error):(`${(j.applied||[]).length} angewandt, ${j.pending_added||0} pending`),!j.error);load();
+}
+async function resolve(id,action){
+  if(action==='apply'&&!confirm('Vorschlag jetzt ausführen? (nicht-destruktiv: archivieren/falten)'))return;
+  const r=await fetch('/api/cleanup/resolve',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id,action})});
+  const j=await r.json();
+  toast(j.error?('Fehler: '+j.error):(action==='apply'?(j.result||'Angewandt'):'Verworfen'),!j.error);load();
 }
 load();
 </script>
@@ -2074,6 +2088,21 @@ async def api_cleanup_pending_post(request: Request) -> JSONResponse:
         return JSONResponse({"error": "resolved must be a list of ids"}, status_code=400)
     n = await asyncio.to_thread(_resolve_pending, ids)
     return JSONResponse({"status": "ok", "resolved": n})
+
+
+@mcp.custom_route("/api/cleanup/resolve", methods=["POST"])
+async def api_cleanup_resolve(request: Request) -> JSONResponse:
+    """Einzelnes Pending-Item aus der Web-UI abarbeiten (apply|dismiss)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    pid = body.get("id")
+    action = (body.get("action") or "").lower()
+    if not pid or action not in ("apply", "dismiss"):
+        return JSONResponse({"error": "id und action (apply|dismiss) erforderlich"}, status_code=400)
+    result = await asyncio.to_thread(_resolve_pending_action, pid, action)
+    return JSONResponse(result, status_code=404 if result.get("error") == "not found" else 200)
 
 
 @mcp.custom_route("/export", methods=["GET"])
@@ -3453,6 +3482,33 @@ def _resolve_pending(ids: list) -> int:
         keep = [it for it in existing if it.get("id") not in set(ids)]
         _save_pending(keep)
         return len(existing) - len(keep)
+
+
+def _resolve_pending_action(pid: str, action: str) -> dict:
+    """Ein einzelnes Pending-Item aus der Web-UI abarbeiten — ersetzt /memory-cleanup.
+
+    action='apply' führt die vorgeschlagene Aktion aus (merge → memory_merge,
+    archive → memory_archive), 'dismiss' verwirft den Vorschlag nur. In beiden
+    Fällen wird das Item aus der Queue entfernt. Nicht-destruktiv (kein delete).
+    """
+    with _cleanup_lock:
+        items = _load_pending()
+        item = next((it for it in items if it.get("id") == pid), None)
+        if item is None:
+            return {"error": "not found"}
+        msg = ""
+        if action == "apply":
+            kind = item.get("kind")
+            if kind == "merge":
+                msg = memory_merge(item["canonical"], item["duplicate"])
+            elif kind == "archive":
+                msg = memory_archive(item["target"])
+            else:
+                return {"error": f"unbekannte kind: {kind}"}
+        _save_pending([it for it in items if it.get("id") != pid])
+    if action == "apply":
+        _embed_backfill()  # gemergte/archivierte Entity aus der Vektor-Matrix nachziehen
+    return {"status": "ok", "action": action, "result": msg}
 
 
 def _write_cleanup_log(obj: dict) -> str:
