@@ -101,7 +101,7 @@ Net ≈ 1,175,000 tokens / month saved
 | `/prefs` | Preferences manager: pin, context, sort order, delete |
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log |
 
-**`/prefs`** — Full preferences manager in the browser: pin/unpin, context dropdown, manual sort order, delete. Click on the name to expand the full description inline. Accessible via the slash command `/ai-rem:prefedit`.
+**`/prefs`** — Full preferences manager in the browser: pin/unpin, context dropdown, manual sort order, delete. Click on the name to expand the full description inline. A dashed **context-limit line** marks how many preferences `memory_get_context` actually loads into the session (top `CONTEXT_PREF_LIMIT`, default 15 — pinned first, then sort order / recency); rows below it are dimmed. Accessible via the slash command `/ai-rem:prefedit`.
 
 ---
 

@@ -35,8 +35,12 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
+
+# Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
+# höchstens in den Session-Kontext lädt. In der /prefs-Web-UI als Schnittlinie sichtbar.
+CONTEXT_PREF_LIMIT = int(os.getenv("CONTEXT_PREF_LIMIT", "15"))
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
 KUZU_POOL_SIZE = max(1, int(os.getenv("KUZU_POOL_SIZE", "4")))
@@ -1521,11 +1525,13 @@ input[type=number]{width:60px}
 .date{font-size:11px;color:var(--muted)}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
+tr.below{opacity:.5}
+tr.ctxcut td{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--pin);border-top:2px dashed var(--pin);border-bottom:2px dashed var(--pin);background:rgba(245,158,11,.07)}
 </style>
 </head>
 <body>
 <h1>Preferences</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext</p>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext &nbsp;·&nbsp; Top <b>__CTX_LIMIT__</b> werden in den Kontext geladen</p>
 <table>
   <thead><tr>
     <th style="width:32px">📌</th>
@@ -1546,8 +1552,10 @@ async function load(){
   document.getElementById('cnt').textContent=prefs.length;
   const tb=document.getElementById('rows');
   if(!prefs.length){tb.innerHTML='<tr><td colspan="6" style="color:var(--muted);padding:20px 10px">Keine Preferences.</td></tr>';return;}
-  tb.innerHTML=prefs.map((p,i)=>`
-    <tr>
+  const LIMIT=__CTX_LIMIT__;
+  tb.innerHTML=prefs.map((p,i)=>{
+    const row=`
+    <tr class="${i>=LIMIT?'below':''}">
       <td><button class="pin-btn ${p.pinned?'active':''}" onclick="togglePin(${i})" title="${p.pinned?'Unpin':'Pin'}">📌</button></td>
       <td><div class="name" onclick="toggleDescr(${i})" title="Klicken zum Aufklappen">${esc(p.name)}</div><div class="descr">${esc(p.descr)}</div><div class="full-descr" id="fd${i}">${esc(p.descr)}</div></td>
       <td>
@@ -1561,7 +1569,12 @@ async function load(){
            onchange="setPos(${i},this.value)" onblur="setPos(${i},this.value)"></td>
       <td class="date">${p.updated_at?p.updated_at.slice(0,10):'—'}</td>
       <td><button class="del" onclick="del(${i})">Löschen</button></td>
-    </tr>`).join('');
+    </tr>`;
+    const cut=(i===LIMIT-1&&prefs.length>LIMIT)
+      ?`<tr class="ctxcut"><td colspan="6">✂ Kontext-Grenze · die oberen ${LIMIT} werden in den Session-Kontext geladen, alles darunter nicht</td></tr>`
+      :'';
+    return row+cut;
+  }).join('');
 }
 
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
@@ -1922,7 +1935,8 @@ async def api_preferences_delete(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/prefs", methods=["GET"])
 async def prefs_route(request: Request) -> Response:
-    return Response(content=_PREFS_HTML, media_type="text/html")
+    html = _PREFS_HTML.replace("__CTX_LIMIT__", str(CONTEXT_PREF_LIMIT))
+    return Response(content=html, media_type="text/html")
 
 
 _CLEANUP_HTML = """<!DOCTYPE html>
@@ -3028,7 +3042,7 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
                 ord_key = (1, 0)
             return (pin_key, ord_key, r[4] or "")
 
-        pref_rows = sorted(pref_rows, key=_pref_sort_key, reverse=False)[:12]
+        pref_rows = sorted(pref_rows, key=_pref_sort_key, reverse=False)[:CONTEXT_PREF_LIMIT]
         lines = [
             f"- {'📌 ' if r[2] == 'true' else ''}**{r[0]}**: {r[1][:120]}"
             for r in pref_rows
