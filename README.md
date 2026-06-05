@@ -138,7 +138,9 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
 
 A daemon thread in the container runs a daily maintenance pass (default 03:00, configurable in the `/cleanup` web UI). It detects duplicate and outdated entries (heuristics + Ollama when reachable) and **archives** them instead of deleting: the entry is tagged `archived`, optionally compressed (with the original preserved in `extra.original_descr`), and linked via `DUPLIKAT_VON` / `VERALTET_DURCH`. Archived entries are hidden from `memory_get_context`/`search`/`list` by default (opt in with `include_archived=true`) but remain reachable for history via `memory_get_relations`. **Preferences, pinned and already-archived entries are never touched.** Every run backs up first; the log is viewable in the `/cleanup` web UI.
 
-Ambiguous cases (and everything when Ollama was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution); run the `/memory-cleanup` slash command to have Claude resolve the entries with judgment via the non-destructive `memory_merge` / `memory_archive` MCP tools.
+Ambiguous cases (and everything when Ollama was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution). You can resolve it two ways: **(a)** in the `/cleanup` web UI, where each pending item shows both descriptions with **Mergen/Archivieren** (apply) and **Verwerfen** (keep both) buttons (`POST /api/cleanup/resolve`); or **(b)** the `/memory-cleanup` slash command, which has Claude resolve the entries with judgment. Both use the same non-destructive `memory_merge` / `memory_archive` operations — nothing is deleted.
+
+> **Ollama reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable Ollama. In the bundled `docker-compose.yml` it defaults to `http://192.168.2.11:11434` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
 
 ---
 
