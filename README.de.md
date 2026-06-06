@@ -200,7 +200,7 @@ Sekunden).
 **Token-Quelle — [mykeyvault](https://github.com/markus7h/mykeyvault):** der Token
 liegt einmalig im Vault als Item `ai-rem-api-token` (Single Source of Truth).
 - **Server:** `deploy.sh` zieht ihn beim Deploy aus dem Vault und schreibt ihn in die Remote-`.env` — der Serverstart bleibt unabhängig vom Laufzeitzustand des Vaults.
-- **Clients:** der SessionStart-Hook `system-check.py` holt den Token jede Session frisch aus dem Vault (vault-api-Koordinaten stehen bereits in `~/.claude.json` → `mcpServers.mykeyvault.env`) und schreibt ihn in `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization` — darüber trägt Claudes `/mcp`-Kanal den Token. Ist der Vault down/locked, antwortet ai-rem mit `401`.
+- **Clients:** der SessionStart-Hook `system-check.py` nutzt für die laufende Session den bereits in `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization` gespeicherten Bearer-Token (schnell, kein Vault-Roundtrip — darüber trägt auch Claudes `/mcp`-Kanal den Token) und frischt ihn in einem **detached Hintergrundprozess** für die nächste Session aus dem Vault auf (vault-api-Koordinaten in `~/.claude.json` → `mcpServers.mykeyvault.env`; das `bw`-Backend ist ~8 s, zu langsam für den synchronen Startpfad). Nur der allererste Lauf ohne gespeicherten Header liest synchron aus dem Vault. Liefert weder Header noch Vault einen Token, antwortet ai-rem mit `401`.
 
 Token manuell erzeugen (ohne Vault): `openssl rand -hex 32`.
 

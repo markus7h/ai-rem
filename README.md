@@ -214,7 +214,7 @@ token rotates. Because the cookie is `Secure`, the UI must be reached over HTTPS
 **Token source — [mykeyvault](https://github.com/markus7h/mykeyvault):** the token
 is stored once in the vault as item `ai-rem-api-token` (single source of truth).
 - **Server:** `deploy.sh` pulls it from the vault at deploy time and writes it into the remote `.env` — server startup stays independent of the vault's runtime state.
-- **Clients:** the `system-check.py` SessionStart hook fetches the token from the vault each session (vault-api coordinates already live in `~/.claude.json` → `mcpServers.mykeyvault.env`) and writes it into `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization`, which is how Claude's `/mcp` channel carries it. If the vault is down/locked, ai-rem returns `401`.
+- **Clients:** the `system-check.py` SessionStart hook uses the bearer token already stored in `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization` for the current session (fast, no vault roundtrip — that is also how Claude's `/mcp` channel carries it) and refreshes it from the vault in a **detached background process** for the next session (vault-api coordinates live in `~/.claude.json` → `mcpServers.mykeyvault.env`; the `bw` backend is ~8 s, too slow for the synchronous startup path). Only the first run without a stored header reads the vault synchronously. If neither a header nor the vault yields a token, ai-rem returns `401`.
 
 Generate a token manually (if not using the vault): `openssl rand -hex 32`.
 
