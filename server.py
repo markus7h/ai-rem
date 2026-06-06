@@ -182,6 +182,35 @@ MCP_STDIO_TIMEOUT = 3
 TOOLS_SCRIPTS = TMPL.get("tools_scripts_dir", "")
 
 results = []
+open_tasks_md = ""  # gefuellt von check_ai_rem(): offene Tasks/Plaene fuer die Anzeige
+
+# Erledigte Eintraege ausblenden — am Session-Start zaehlt nur, was noch offen ist.
+DONE_TAGS = {"abgeschlossen", "erledigt", "done", "fertig"}
+
+
+def offene_tasks_section(ctx):
+    """Aus dem memory_get_context-Markdown die '## Offene Tasks'-Sektion ziehen und
+    abgeschlossene Zeilen filtern. Enthaelt auch die per ExitPlanMode gespeicherten
+    Plaene (als Task-Entities). Gibt formatierten Block oder '' zurueck."""
+    in_sec = False
+    out = []
+    for line in ctx.splitlines():
+        if line.startswith("## "):
+            if line.strip() == "## Offene Tasks":
+                in_sec = True
+                continue
+            if in_sec:
+                break  # naechste Sektion -> Ende
+            continue
+        if not in_sec:
+            continue
+        m = re.match(r"^- \[([^\]]*)\]", line)
+        if m and m.group(1).strip().lower() in DONE_TAGS:
+            continue
+        if line.strip():
+            out.append(line)
+    return "## Offene Tasks\n" + "\n".join(out) if out else ""
+
 
 INIT_MSG = json.dumps({
     "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -235,16 +264,23 @@ def check_ai_rem():
         except Exception:
             pass
 
-        resp = post({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": "memory_status", "arguments": {}},
-        }, sid=sid)
-        raw = resp.read().decode()
-        m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
-        body = m.group(1) if m else raw
-        obj = json.loads(body)
-        text = obj.get("result", {}).get("content", [{}])[0].get("text", "")
+        def call_text(name, args=None):
+            raw = post({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": name, "arguments": args or {}},
+            }, sid=sid).read().decode()
+            m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
+            o = json.loads(m.group(1) if m else raw)
+            return o.get("result", {}).get("content", [{}])[0].get("text", "")
+
+        text = call_text("memory_status")
         results.append(text if text else "ai-rem: nicht erreichbar")
+        # Offene Tasks/Plaene fuer die Anzeige nachladen (best effort, blockiert nie).
+        try:
+            global open_tasks_md
+            open_tasks_md = offene_tasks_section(call_text("memory_get_context"))
+        except Exception:
+            pass
     except Exception:
         results.append("ai-rem: nicht erreichbar")
 
@@ -524,12 +560,15 @@ check_auto_memory()
 _extra_ctx = check_cleanup_pending()
 
 _out = {"suppressOutput": True}
-if results:
-    _out["systemMessage"] = " | ".join(results)
+_msg = " | ".join(results) if results else ""
+if open_tasks_md:  # offene Tasks/Plaene als eigener Block unter die Status-Zeile
+    _msg = (_msg + "\n\n" + open_tasks_md) if _msg else open_tasks_md
+if _msg:
+    _out["systemMessage"] = _msg
 if _extra_ctx:
     _out["hookSpecificOutput"] = {
         "hookEventName": "SessionStart", "additionalContext": _extra_ctx}
-if results or _extra_ctx:
+if _msg or _extra_ctx:
     print(json.dumps(_out))
 sys.exit(0)
 '''

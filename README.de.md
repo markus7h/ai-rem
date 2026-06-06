@@ -131,7 +131,7 @@ Mehrdeutiges (und alles bei Ollama-Ausfall) landet in einer Review-Queue, die de
 
 ## Plan-Speicherung (ExitPlanMode → ai-rem)
 
-Ein `PostToolUse`-Hook auf `ExitPlanMode` (`hooks/save-plan.py`) speichert jeden finalisierten Plan als **offenen `Task`** in ai-rem — so werden Pläne eine zentrale, maschinenübergreifende Liste statt nur Slug-Dateien unter `~/.claude/plans/`. In einer neuen Session *„gibt es offene Pläne?"* fragen → Liste (Name + Kurzbeschreibung) → auswählen.
+Ein `PostToolUse`-Hook auf `ExitPlanMode` (`hooks/save-plan.py`) speichert jeden finalisierten Plan als **offenen `Task`** in ai-rem — so werden Pläne eine zentrale, maschinenübergreifende Liste statt nur Slug-Dateien unter `~/.claude/plans/`. Der SessionStart-Hook `system-check.py` zeigt diese offenen `Task`s (inkl. Pläne) automatisch an — eine neue Session startet direkt mit der Liste; alternativ *„gibt es offene Pläne?"* fragen und auswählen.
 
 **Felder** kommen aus einem kleinen Frontmatter-Block, den Claude oben in jede Plan-Datei schreibt (kein Raten aus dem Fließtext):
 
@@ -240,7 +240,7 @@ Führe aus: bash <(curl -s http://<SERVER_IP>:3456/setup)
 Das Skript erledigt automatisch:
 1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren
 2. `~/.claude/settings-template.json` — Basis-Template für Permissions, Deny-Rules und Hooks aus der Live-Setup-Config (neu) schreiben
-3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl)
+3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl, offene Tasks/Pläne)
 4. `~/.claude/settings.json` — Permissions, Deny-Rules und Hook eintragen; alte Hooks entfernen; `autoMemoryEnabled: false`
 5. `~/.claude/CLAUDE.md` — minimalen 3-Zeilen-Pointer auf ai-rem anlegen oder aktualisieren
 6. Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`)
