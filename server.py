@@ -120,30 +120,32 @@ AI_REM_OLLAMA_URL = os.environ.get(
 CLAUDE_JSON = os.path.expanduser("~/.claude.json")
 
 
-def _resolve_ai_rem_token():
-    """ai-rem-API-Token beziehen. Quelle (in dieser Reihenfolge):
-    1) Env AI_REM_TOKEN. 2) Runtime aus mykeyvault: vault-api-Koordinaten stehen
-    bereits in ~/.claude.json (mcpServers.mykeyvault.env), Item 'ai-rem-api-token'.
-    Bei Vault down/locked → '' (ai-rem antwortet dann 401)."""
-    tok = os.environ.get("AI_REM_TOKEN", "")
-    if tok:
-        return tok
+def _header_token():
+    """Zuletzt gespeicherten Bearer-Token aus ~/.claude.json lesen — schnell, kein
+    Vault-Roundtrip. Das ist die Quelle fuer die laufende Session."""
     try:
         with open(CLAUDE_JSON) as f:
-            env = json.load(f)["mcpServers"]["mykeyvault"]["env"]
-        base = env["VAULT_API_URL"].rstrip("/")
-        vtok = env["VAULT_API_TOKEN"]
-        req = urllib.request.Request(
-            base + "/secret/ai-rem-api-token",
-            headers={"Authorization": f"Bearer {vtok}"},
-        )
-        with urllib.request.urlopen(req, timeout=AI_REM_TIMEOUT) as r:
-            return json.loads(r.read().decode()).get("password", "")
+            auth = json.load(f)["mcpServers"]["ai-rem"]["headers"]["Authorization"]
+        return auth.split()[-1] if auth else ""
     except Exception:
         return ""
 
 
-AI_REM_TOKEN = _resolve_ai_rem_token()
+def _vault_token(timeout):
+    """ai-rem-API-Token frisch aus mykeyvault holen (vault-api-Koordinaten in
+    ~/.claude.json → mcpServers.mykeyvault.env, Item 'ai-rem-api-token'). Das
+    bw-Backend ist ~8s langsam — daher NICHT im synchronen SessionStart-Pfad."""
+    try:
+        with open(CLAUDE_JSON) as f:
+            env = json.load(f)["mcpServers"]["mykeyvault"]["env"]
+        req = urllib.request.Request(
+            env["VAULT_API_URL"].rstrip("/") + "/secret/ai-rem-api-token",
+            headers={"Authorization": f"Bearer {env['VAULT_API_TOKEN']}"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode()).get("password", "")
+    except Exception:
+        return ""
 
 
 def _sync_ai_rem_header(token):
@@ -170,6 +172,34 @@ def _sync_ai_rem_header(token):
         os.replace(tmp, CLAUDE_JSON)
     except Exception:
         pass
+
+
+# Detached-Modus: Token frisch aus dem Vault holen und Header aktualisieren, dann raus.
+# Haelt den /mcp-Header bei Token-Rotation aktuell (greift ab naechster Session), ohne
+# den ~8s langsamen Vault-Read in den synchronen SessionStart zu legen.
+if "--refresh" in sys.argv:
+    _sync_ai_rem_header(_vault_token(15))
+    sys.exit(0)
+
+# Refresh detached anstossen (kein Startup-Delay trotz ~8s bw).
+try:
+    subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__), "--refresh"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+except Exception:
+    pass
+
+
+def _resolve_ai_rem_token():
+    """Token fuer diese Session: 1) Env AI_REM_TOKEN. 2) zuletzt gespeicherter Header
+    (schnell). 3) Vault (nur Erststart ohne Header). Rotation zieht der detached
+    --refresh fuer die naechste Session nach — kein synchroner Vault-Block."""
+    return os.environ.get("AI_REM_TOKEN", "") or _header_token() or _vault_token(15)
+
+
+AI_REM_TOKEN = _resolve_ai_rem_token()
 
 SMB_CFG = TMPL.get("smb", {})
 SMB_MOUNT = SMB_CFG.get("mount", "")
