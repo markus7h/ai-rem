@@ -7,3 +7,4 @@ deploy.sh
 setup-config.json
 .venv/
 .claude/settings.json
+.superpowers/

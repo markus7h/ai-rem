@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.6"
+VERSION = "0.4.7"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1689,10 +1689,12 @@ _PREFS_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ai-rem · Preferences</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3e;--accent:#6366f1;--ah:#818cf8;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--err:#ef4444;--pin:#f59e0b}
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333;--pin:#808080}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
 h1{font-size:22px;font-weight:700;margin-bottom:4px}
 .sub{color:var(--muted);font-size:13px;margin-bottom:28px}
 a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
@@ -1700,7 +1702,7 @@ table{width:100%;border-collapse:collapse}
 th{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
 td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
 tr:last-child td{border-bottom:none}
-tr:hover td{background:rgba(255,255,255,.02)}
+tr:hover td{background:rgba(0,0,0,.02)}
 .pin-btn{background:none;border:none;font-size:16px;cursor:pointer;opacity:.35;transition:opacity .15s;padding:0 4px}
 .pin-btn.active{opacity:1}
 .pin-btn:hover{opacity:.8}
@@ -1716,7 +1718,7 @@ input[type=number]{width:60px}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
 tr.below{opacity:.5}
-tr.ctxcut td{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--pin);border-top:2px dashed var(--pin);border-bottom:2px dashed var(--pin);background:rgba(245,158,11,.07)}
+tr.ctxcut td{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--pin);border-top:2px dashed var(--pin);border-bottom:2px dashed var(--pin);background:rgba(128,128,128,.07)}
 </style>
 </head>
 <body>
@@ -1827,15 +1829,17 @@ _UI_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ai-rem</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3e;--accent:#6366f1;--ah:#818cf8;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--err:#ef4444}
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;padding:28px;max-width:820px;margin:0 auto}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:820px;margin:0 auto}
 h1{font-size:22px;font-weight:700;margin-bottom:4px}
 h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
 .sub{color:var(--muted);font-size:13px;margin-bottom:32px}
 .grid{display:grid;gap:16px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:22px}
+.card{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:22px}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 select,input[type=file]{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px}
 button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
@@ -2135,15 +2139,17 @@ _CLEANUP_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ai-rem · Cleanup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3e;--accent:#6366f1;--ah:#818cf8;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--err:#ef4444;--warn:#f59e0b}
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333;--warn:#808080}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
 h1{font-size:22px;font-weight:700;margin-bottom:4px}
 h2{font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:26px 0 10px}
 .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
 a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
-.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:16px;margin-bottom:14px}
 .row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 label{font-size:13px}
 input[type=number]{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 7px;width:64px}
@@ -2334,16 +2340,18 @@ _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ai-rem · Login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-body{background:#0f1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
-.box{background:#1a1d27;border:1px solid #2a2d3e;border-radius:12px;padding:32px;width:340px}
-h1{font-size:20px;margin:0 0 4px}
-p.sub{color:#94a3b8;font-size:13px;margin:0 0 24px}
-label{display:block;font-size:12px;color:#94a3b8;margin-bottom:6px}
-input{width:100%;background:#0f1117;border:1px solid #2a2d3e;color:#e2e8f0;border-radius:6px;padding:10px;font-size:14px;margin:0 0 16px}
-button{width:100%;background:#6366f1;color:#fff;border:none;border-radius:6px;padding:10px;font-size:14px;font-weight:500;cursor:pointer}
-button:hover{background:#818cf8}
-.err{color:#ef4444;font-size:13px;margin-bottom:14px;min-height:18px}
+body{background:#fafafa;color:#333;font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.box{background:#fff;border:1px solid #ececec;border-left:3px solid #388e3c;border-radius:12px;padding:32px;width:340px}
+h1{font-size:20px;margin:0 0 4px;color:#000}
+p.sub{color:#666;font-size:13px;margin:0 0 24px}
+label{display:block;font-size:12px;color:#666;margin-bottom:6px}
+input{width:100%;background:#fafafa;border:1px solid #d0d0d0;color:#333;border-radius:6px;padding:10px;font-size:14px;margin:0 0 16px}
+button{width:100%;background:#388e3c;color:#fff;border:none;border-radius:6px;padding:10px;font-size:14px;font-weight:500;cursor:pointer}
+button:hover{background:#2e7d32}
+.err{color:#dd3333;font-size:13px;margin-bottom:14px;min-height:18px}
 </style></head>
 <body>
 <form class="box" method="POST" action="/login">
