@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.5"
+VERSION = "0.4.6"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -878,6 +878,21 @@ mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
 SETUP_CFG=$(curl -sf "$KG_URL/setup-config" 2>/dev/null || echo '{}')
 export SETUP_CFG
 
+# ── Runtime-MCP-Endpoint waehlen: TLS (https) bevorzugt, sonst http-Fallback ──
+# Der Bootstrap-Fetch oben laeuft bewusst weiter ueber http://IP (kein Cert noetig).
+# Den /mcp-Kanal (traegt den Bearer bei JEDEM Call) auf https umstellen, ABER nur
+# wenn der TLS-Host auf DIESER Maschine erreichbar UND vertraut ist (curl ohne -k) —
+# sonst Fallback auf $KG_URL/mcp, damit ein Host ohne Caddy-Root-CA nicht 401/Cert-bricht.
+MCP_ENDPOINT="$KG_URL/mcp"
+HTTPS_BASE="$(printf '%s' "$SETUP_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ai_rem_https_url",""))' 2>/dev/null || true)"
+if [ -n "$HTTPS_BASE" ] && curl -sf --max-time 6 "$HTTPS_BASE/health" >/dev/null 2>&1; then
+    MCP_ENDPOINT="$HTTPS_BASE/mcp"
+    echo "✓ TLS-Endpoint nutzbar: $MCP_ENDPOINT"
+else
+    [ -n "$HTTPS_BASE" ] && echo "ℹ TLS-Endpoint $HTTPS_BASE nicht erreichbar/vertraut — bleibe bei $MCP_ENDPOINT"
+fi
+export MCP_ENDPOINT
+
 # ── Bootstrap-Secrets per SSH von mystorage ziehen ───────────────────────────
 # /setup ist oeffentlich (anonymes curl), Secrets liegen also NICHT im Script-Body.
 # Stattdessen zieht der bereits per SSH-Key vertraute Host die Tokens direkt aus
@@ -912,6 +927,12 @@ scfg = json.loads(os.environ.get("SETUP_CFG", "{}"))
 reg = scfg.get("mcp_register", {}).get("mykeyvault", {})
 vault_url = os.environ.get("VAULT_API_URL") or reg.get("vault_url", "http://mystorage:8223")
 vault_tok = os.environ.get("VAULT_API_TOKEN", "")
+
+# Runtime-Endpoint setzen (https-mit-Fallback aus dem Bash-Teil) — migriert auch
+# bestehende http-Registrierungen bei Re-Run auf TLS.
+mcp_endpoint = os.environ.get("MCP_ENDPOINT", "")
+if mcp_endpoint:
+    servers["ai-rem"]["url"] = mcp_endpoint
 
 
 def _from_vault(url, vt):
@@ -973,7 +994,7 @@ import json, os
 cfg = json.loads(os.environ.get('SETUP_CFG', '{}'))
 tmpl = {
     'version': '2026-05-25',
-    'ai_rem_endpoint': '$KG_URL/mcp',
+    'ai_rem_endpoint': os.environ.get('MCP_ENDPOINT', '$KG_URL/mcp'),
     'smb': cfg.get('smb', {}),
     'mcp_stdio_servers': cfg.get('mcp_stdio_servers', {}),
     'tools_scripts_dir': cfg.get('tools_scripts_dir', ''),

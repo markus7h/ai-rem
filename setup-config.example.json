@@ -1,6 +1,8 @@
 {
   "_comment": "Generisches Starter-Template. Wird von /setup-config ausgeliefert, wenn keine eigene setup-config.json vorhanden ist. Eine eigene setup-config.json (gitignored) ueberschreibt dieses Template komplett. Frei anpassen.",
   "ssh_host": "your-server",
+  "_comment_tls": "Optional: TLS-Basis-URL fuer den /mcp-Kanal (z.B. hinter Caddy 'tls internal'). Das Setup nutzt sie nur, wenn <url>/health auf der Maschine erreichbar UND vertraut ist (curl ohne -k), sonst Fallback auf den http-KG_URL. Bootstrap-Fetch laeuft weiter ueber http.",
+  "ai_rem_https_url": "https://your-server",
   "_comment_mcp_register": "Optional: Das Setup zieht ai-rem-/Vault-Token per SSH von ssh_host (aus dessen .env-Dateien) und registriert die hier gelisteten stdio-MCP-Server, sobald command im PATH ist UND args[0] als Datei existiert. Fehlt node/dist, werden nur die Vault-Koordinaten nach ~/.claude/ai-rem-vault.env geschrieben (Token-Refresh-Fallback).",
   "mcp_register": {
     "mykeyvault": {
