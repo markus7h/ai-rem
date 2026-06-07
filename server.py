@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -131,16 +131,40 @@ def _header_token():
         return ""
 
 
-def _vault_token(timeout):
-    """ai-rem-API-Token frisch aus mykeyvault holen (vault-api-Koordinaten in
-    ~/.claude.json → mcpServers.mykeyvault.env, Item 'ai-rem-api-token'). Das
-    bw-Backend ist ~8s langsam — daher NICHT im synchronen SessionStart-Pfad."""
+def _vault_coords():
+    """vault-api-Koordinaten (URL, Token): 1) ~/.claude.json mcpServers.mykeyvault.env,
+    2) Fallback ~/.claude/ai-rem-vault.env — die legt das Setup auf node-losen Hosts an,
+    wo kein mykeyvault-MCP registriert wurde, damit der Token-Refresh trotzdem läuft."""
     try:
         with open(CLAUDE_JSON) as f:
             env = json.load(f)["mcpServers"]["mykeyvault"]["env"]
+        return env["VAULT_API_URL"], env["VAULT_API_TOKEN"]
+    except Exception:
+        pass
+    try:
+        d = {}
+        with open(os.path.expanduser("~/.claude/ai-rem-vault.env")) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    d[k] = v
+        return d["VAULT_API_URL"], d["VAULT_API_TOKEN"]
+    except Exception:
+        return "", ""
+
+
+def _vault_token(timeout):
+    """ai-rem-API-Token frisch aus mykeyvault holen (Koordinaten via _vault_coords,
+    Item 'ai-rem-api-token'). Das bw-Backend ist langsam — daher NICHT im synchronen
+    SessionStart-Pfad."""
+    url, vt = _vault_coords()
+    if not (url and vt):
+        return ""
+    try:
         req = urllib.request.Request(
-            env["VAULT_API_URL"].rstrip("/") + "/secret/ai-rem-api-token",
-            headers={"Authorization": f"Bearer {env['VAULT_API_TOKEN']}"},
+            url.rstrip("/") + "/secret/ai-rem-api-token",
+            headers={"Authorization": f"Bearer {vt}"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode()).get("password", "")
@@ -848,37 +872,98 @@ else
     echo "✓ MCP registriert (ai-rem)"
 fi
 
-# Initialen Bearer-Header in ~/.claude.json schreiben, damit bereits die ERSTE
-# Session nicht 401t (danach refresht ihn der SessionStart-Hook). Token kommt aus
-# mykeyvault (vault-api-Koordinaten stehen in ~/.claude.json mcpServers.mykeyvault.env).
-python3 - << 'PYEOF' || echo "⚠ ai-rem-Token nicht gesetzt (Vault?) — erste Session ggf. 401 bis Hook läuft"
-import json, os, urllib.request
+mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
+
+# Setup-Config laden (persoenliche Entities, Permissions, mcp_register — nicht im Repo)
+SETUP_CFG=$(curl -sf "$KG_URL/setup-config" 2>/dev/null || echo '{}')
+export SETUP_CFG
+
+# ── Bootstrap-Secrets per SSH von mystorage ziehen ───────────────────────────
+# /setup ist oeffentlich (anonymes curl), Secrets liegen also NICHT im Script-Body.
+# Stattdessen zieht der bereits per SSH-Key vertraute Host die Tokens direkt aus
+# den .env-Dateien auf dem Server — ai-rem bleibt damit KEIN Secret-Verteiler.
+# Override: AI_REM_TOKEN / VAULT_API_TOKEN im Env haben Vorrang vor dem SSH-Pull.
+SSH_HOST="${AI_REM_SSH_HOST:-$(printf '%s' "$SETUP_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ssh_host","mystorage"))' 2>/dev/null || echo mystorage)}"
+ssh_ok=0
+if ssh -o BatchMode=yes -o ConnectTimeout=5 "$SSH_HOST" true 2>/dev/null; then ssh_ok=1; fi
+if [ "$ssh_ok" != 1 ]; then echo "⚠ SSH zu $SSH_HOST nicht erreichbar — Secrets nur aus Env"; fi
+
+if [ -z "${AI_REM_TOKEN:-}" ] && [ "$ssh_ok" = 1 ]; then
+    AI_REM_TOKEN=$(ssh "$SSH_HOST" "grep -h '^AI_REM_API_TOKEN=' mydocker/compose-files/ai-rem/.env 2>/dev/null | head -1 | cut -d= -f2-" 2>/dev/null | tr -d '\r\n' || true)
+fi
+export AI_REM_TOKEN
+if [ -z "${VAULT_API_TOKEN:-}" ] && [ "$ssh_ok" = 1 ]; then
+    VAULT_API_TOKEN=$(ssh "$SSH_HOST" "grep -h '^VAULT_API_TOKEN=' mydocker/compose-files/mykeyvault/.env 2>/dev/null | head -1 | cut -d= -f2-" 2>/dev/null | tr -d '\r\n' || true)
+fi
+export VAULT_API_TOKEN
+
+# ── ai-rem Bearer setzen + mykeyvault bootstrappen (atomar in ~/.claude.json) ─
+# Damit die ERSTE Session nicht 401t; danach refresht der SessionStart-Hook.
+KG_URL="$KG_URL" CLAUDE_HOME="$CLAUDE_HOME" SSH_HOST="$SSH_HOST" python3 - << 'PYEOF' || true
+import json, os, shutil, urllib.request
+
 cj = os.path.expanduser("~/.claude.json")
 cfg = json.load(open(cj))
-servers = cfg.get("mcpServers", {})
+servers = cfg.setdefault("mcpServers", {})
 if "ai-rem" not in servers:
-    raise SystemExit(1)
+    raise SystemExit("ai-rem nicht registriert")
+
+scfg = json.loads(os.environ.get("SETUP_CFG", "{}"))
+reg = scfg.get("mcp_register", {}).get("mykeyvault", {})
+vault_url = os.environ.get("VAULT_API_URL") or reg.get("vault_url", "http://mystorage:8223")
+vault_tok = os.environ.get("VAULT_API_TOKEN", "")
+
+
+def _from_vault(url, vt):
+    req = urllib.request.Request(url.rstrip("/") + "/secret/ai-rem-api-token",
+                                 headers={"Authorization": "Bearer " + vt})
+    return json.loads(urllib.request.urlopen(req, timeout=10).read().decode()).get("password", "")
+
+
+# (1) ai-rem Bearer: AI_REM_TOKEN (SSH-Pull/Env) > frischer Vault-Read > bestehende Koordinaten
 tok = os.environ.get("AI_REM_TOKEN", "")
+if not tok and vault_tok:
+    try:
+        tok = _from_vault(vault_url, vault_tok)
+    except Exception:
+        pass
 if not tok and "mykeyvault" in servers:
-    env = servers["mykeyvault"]["env"]
-    req = urllib.request.Request(
-        env["VAULT_API_URL"].rstrip("/") + "/secret/ai-rem-api-token",
-        headers={"Authorization": "Bearer " + env["VAULT_API_TOKEN"]})
-    tok = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())["password"]
-if not tok:
-    raise SystemExit(1)
-servers["ai-rem"].setdefault("headers", {})["Authorization"] = "Bearer " + tok
+    try:
+        e = servers["mykeyvault"]["env"]
+        tok = _from_vault(e["VAULT_API_URL"], e["VAULT_API_TOKEN"])
+    except Exception:
+        pass
+
+if tok:
+    servers["ai-rem"].setdefault("headers", {})["Authorization"] = "Bearer " + tok
+    print("✓ ai-rem Bearer-Header gesetzt")
+else:
+    print("✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:" % os.environ.get("SSH_HOST", "mystorage"))
+    print("  AI_REM_TOKEN=<token> bash <(curl -s %s/setup)" % os.environ.get("KG_URL", ""))
+
+# (2) mykeyvault registrieren (falls noch nicht da und Koordinaten vorhanden)
+if "mykeyvault" not in servers and vault_tok:
+    cmd = os.environ.get("MYKEYVAULT_CMD") or reg.get("command", "node")
+    args_env = os.environ.get("MYKEYVAULT_ARGS")
+    args = args_env.split() if args_env else reg.get("args", [])
+    dist_ok = bool(args) and os.path.isfile(os.path.expanduser(args[0]))
+    if shutil.which(cmd) and dist_ok:
+        servers["mykeyvault"] = {"command": cmd, "args": args,
+                                 "env": {"VAULT_API_URL": vault_url, "VAULT_API_TOKEN": vault_tok}}
+        print("✓ mykeyvault registriert")
+    else:
+        # Kein lauffaehiger node/dist → keinen kaputten MCP-Eintrag anlegen, nur die
+        # Koordinaten fuer den Token-Refresh des Hooks ablegen (chmod 600).
+        vf = os.path.join(os.environ["CLAUDE_HOME"], "ai-rem-vault.env")
+        fd = os.open(vf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write("VAULT_API_URL=%s\nVAULT_API_TOKEN=%s\n" % (vault_url, vault_tok))
+        print("⚠ mykeyvault-MCP übersprungen (node/dist fehlt) — Koordinaten in ~/.claude/ai-rem-vault.env")
+
 tmp = cj + ".tmp"
 json.dump(cfg, open(tmp, "w"), indent=2, ensure_ascii=False)
 os.replace(tmp, cj)
-print("✓ ai-rem Bearer-Header gesetzt")
 PYEOF
-
-mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
-
-# Setup-Config laden (persoenliche Entities, Permissions — nicht im Repo)
-SETUP_CFG=$(curl -sf "$KG_URL/setup-config" 2>/dev/null || echo '{}')
-export SETUP_CFG
 
 # settings-template.json: immer aus SETUP_CFG neu schreiben, damit Config-
 # Aenderungen (Permissions, Deny, SMB, …) bei jedem Re-Run propagieren.
