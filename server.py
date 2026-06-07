@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.3"
+VERSION = "0.4.4"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -859,7 +859,7 @@ servers = cfg.get("mcpServers", {})
 if "ai-rem" not in servers:
     raise SystemExit(1)
 tok = os.environ.get("AI_REM_TOKEN", "")
-if not tok:
+if not tok and "mykeyvault" in servers:
     env = servers["mykeyvault"]["env"]
     req = urllib.request.Request(
         env["VAULT_API_URL"].rstrip("/") + "/secret/ai-rem-api-token",
@@ -1096,9 +1096,24 @@ BASE    = os.environ["KG_URL"]
 MCP_URL = BASE + "/mcp"
 _SID    = None
 
+def _token():
+    t = os.environ.get("AI_REM_TOKEN", "")
+    if t:
+        return t
+    try:
+        with open(os.path.expanduser("~/.claude.json")) as f:
+            auth = json.load(f)["mcpServers"]["ai-rem"]["headers"]["Authorization"]
+        return auth.split()[-1] if auth else ""
+    except Exception:
+        return ""
+
+_TOKEN = _token()
+
 def _post(body, sid=None):
     hdrs = {"Content-Type": "application/json",
             "Accept": "application/json, text/event-stream"}
+    if _TOKEN:
+        hdrs["Authorization"] = "Bearer " + _TOKEN
     if sid:
         hdrs["mcp-session-id"] = sid
     req = urllib.request.Request(
