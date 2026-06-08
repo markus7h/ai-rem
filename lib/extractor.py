@@ -35,7 +35,7 @@ LAST_RUN = LOG_DIR / "last-run.json"         # Sichtbarkeit: was zuletzt gespeic
 MAX_CHARS_PER_MSG = 4000
 MAX_TOTAL_CHARS = 80_000
 MIN_TRANSCRIPT_CHARS = 500
-OLLAMA_URL = os.environ.get("AI_REM_OLLAMA_URL", "http://localhost:11434")
+OLLAMA_URL = os.environ.get("AI_REM_OLLAMA_URL", "http://myubuntu:11434")
 # Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
 # geladene Chat-Modell (siehe pick_loaded_model), sonst OLLAMA_MODEL_FALLBACK.
 OLLAMA_MODEL_ENV = os.environ.get("AI_REM_OLLAMA_MODEL", "").strip()

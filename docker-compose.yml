@@ -17,7 +17,7 @@ services:
       # Ollama für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
       # Default zeigt auf das Ollama mit mistral auf myUbuntu; pro Deployment via .env überschreibbar.
       # Ohne Erreichbarkeit läuft der Cleanup weiter, schiebt aber unklare Fälle nur in die Review-Queue.
-      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://192.168.2.11:11434}
+      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://myubuntu:11434}
       - BACKUP_DIR=/backups
       - MAX_BACKUPS=${MAX_BACKUPS:-10}
       - KUZU_POOL_SIZE=${KUZU_POOL_SIZE:-4}

@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.8"
+VERSION = "0.4.9"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -114,7 +114,7 @@ AI_REM_ENDPOINT = os.environ.get(
 )
 AI_REM_TIMEOUT = 5
 AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://localhost:11434")
+    "AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myubuntu:11434")
 )
 
 CLAUDE_JSON = os.path.expanduser("~/.claude.json")
@@ -3609,7 +3609,7 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-AI_REM_OLLAMA_URL = os.getenv("AI_REM_OLLAMA_URL", "http://localhost:11434")
+AI_REM_OLLAMA_URL = os.getenv("AI_REM_OLLAMA_URL", "http://myubuntu:11434")
 # Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
 # geladene Chat-Modell (siehe _cleanup_model), sonst CLEANUP_OLLAMA_MODEL_FALLBACK.
 CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "").strip()
