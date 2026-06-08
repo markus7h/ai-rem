@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.9"
+VERSION = "0.4.10"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -519,12 +519,17 @@ def check_tools():
 
 
 def _ai_rem_cli():
-    import shutil
+    import shutil, glob
     for p in [os.environ.get("AI_REM_CLI", ""),
               os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
               os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem")]:
         if p and os.path.isfile(p) and os.access(p, os.X_OK):
             return p
+    # Nicht-Standard-Layouts (z.B. SMB-Mount /Volumes/<x>/myCode).
+    for pat in ("/Volumes/*/myCode/github/ai-rem/bin/ai-rem",):
+        for p in sorted(glob.glob(pat)):
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
     return shutil.which("ai-rem") or ""
 
 
@@ -632,6 +637,7 @@ sys.exit(0)
 # Bricht nie den Hook — Fehler nach ~/.claude/auto-memory/errors.log.
 AUTO_MEMORY_HOOK_PY = r'''#!/usr/bin/env python3
 """Claude Code Hook: PreCompact + SessionEnd → ai-rem ingest."""
+import glob
 import json
 import os
 import shutil
@@ -650,12 +656,18 @@ CANDIDATE_CLI_PATHS = [
     os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
     os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem"),
 ]
+# Zusätzliche Suchmuster für nicht-Standard-Layouts (z.B. SMB-Mount /Volumes/<x>/myCode).
+CLI_GLOBS = ["/Volumes/*/myCode/github/ai-rem/bin/ai-rem"]
 
 
 def _find_cli():
     for p in CANDIDATE_CLI_PATHS:
         if p and Path(p).is_file() and os.access(p, os.X_OK):
             return p
+    for pat in CLI_GLOBS:
+        for p in sorted(glob.glob(pat)):
+            if Path(p).is_file() and os.access(p, os.X_OK):
+                return p
     return shutil.which("ai-rem") or ""
 
 
@@ -1168,6 +1180,30 @@ if guard_hook:
     if not any(h.get("command") == guard_hook for h in g["hooks"]):
         g["hooks"].append({"type": "command", "command": guard_hook, "timeout": 10})
         guard_added = True
+
+# Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
+# - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
+# - AI_REM_CLI per Discovery (inkl. SMB-Mount /Volumes/<x>/myCode)
+# setdefault => bewusste manuelle Overrides bleiben erhalten.
+import glob as _glob
+env = data.setdefault("env", {})
+_mcp_ep = os.environ.get("MCP_ENDPOINT", "")
+if _mcp_ep:
+    env.setdefault("AI_REM_ENDPOINT", _mcp_ep)
+_cli = ""
+for _c in (os.environ.get("AI_REM_CLI", ""),
+           os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
+           os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem")):
+    if _c and os.path.isfile(_c) and os.access(_c, os.X_OK):
+        _cli = _c
+        break
+if not _cli:
+    for _p in sorted(_glob.glob("/Volumes/*/myCode/github/ai-rem/bin/ai-rem")):
+        if os.path.isfile(_p) and os.access(_p, os.X_OK):
+            _cli = _p
+            break
+if _cli:
+    env.setdefault("AI_REM_CLI", _cli)
 
 json.dump(data, open(path, "w"), indent=2, ensure_ascii=False)
 print("\n".join([p for p in ("" if not added else f"  +{len(added)} allow permissions",

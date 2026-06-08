@@ -45,10 +45,24 @@ def _resolve_token(timeout: float = 15.0) -> str:
         return ""
 
 
+def _endpoint_from_claude_json(server: str = "ai-rem") -> str:
+    """MCP-Endpoint-URL aus ~/.claude.json (mcpServers.<server>.url) lesen — derselbe
+    Ort, aus dem schon der Token kommt. So muss AI_REM_ENDPOINT nicht gesetzt sein."""
+    try:
+        with open(_CLAUDE_JSON) as f:
+            servers = json.load(f).get("mcpServers", {})
+        return (servers.get(server, {}) or {}).get("url", "") or ""
+    except Exception:
+        return ""
+
+
 class MCPClient:
     def __init__(self, endpoint: Optional[str] = None, timeout: float = 15.0):
-        self.endpoint = endpoint or os.environ.get(
-            "AI_REM_ENDPOINT", "http://localhost:3456/mcp"
+        self.endpoint = (
+            endpoint
+            or os.environ.get("AI_REM_ENDPOINT")
+            or _endpoint_from_claude_json()
+            or "http://localhost:3456/mcp"
         )
         self.timeout = timeout
         self.token = _resolve_token(timeout)
