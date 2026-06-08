@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.7"
+VERSION = "0.4.8"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -912,6 +912,37 @@ if [ -z "${VAULT_API_TOKEN:-}" ] && [ "$ssh_ok" = 1 ]; then
 fi
 export VAULT_API_TOKEN
 
+# == tools-mcp (stdio) klonen+bauen, falls in setup-config ====================
+TOOLS_MCP_ENTRY=""
+_t_get() { printf '%s' "$SETUP_CFG" | python3 -c "import json,sys;print(json.load(sys.stdin).get('mcp_register',{}).get('tools',{}).get('stdio',{}).get('$1',''))" 2>/dev/null || true; }
+TOOLS_REG_URL="$(_t_get registry_url)"
+if [ -n "$TOOLS_REG_URL" ]; then
+  if command -v node >/dev/null && command -v npm >/dev/null && command -v git >/dev/null; then
+    T_REPO="$(_t_get repo)"; T_ENTRY="$(_t_get entry)"; [ -n "$T_ENTRY" ] || T_ENTRY="dist/index.js"
+    T_DIR_RAW="$(_t_get install_dir)"; [ -n "$T_DIR_RAW" ] || T_DIR_RAW="$HOME/Code/tools-mcp"
+    T_DIR="${T_DIR_RAW/#\~/$HOME}"
+    if [ -d "$T_DIR/.git" ]; then git -C "$T_DIR" pull --ff-only >/dev/null 2>&1 || true
+    else mkdir -p "$(dirname "$T_DIR")" && git clone --depth 1 "$T_REPO" "$T_DIR" >/dev/null 2>&1 || true; fi
+    if [ -d "$T_DIR" ]; then ( cd "$T_DIR" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 ) || true; fi
+    if [ -f "$T_DIR/$T_ENTRY" ]; then TOOLS_MCP_ENTRY="$T_DIR/$T_ENTRY"; echo "OK tools-mcp gebaut: $TOOLS_MCP_ENTRY"; else echo "!! tools-mcp Build fehlgeschlagen - tools nicht registriert. Manuell pruefen: cd $T_DIR && npm install && npm run build"; fi
+  else
+    _miss=""
+    for _c in node npm git; do command -v "$_c" >/dev/null 2>&1 || _miss="$_miss $_c"; done
+    echo ""
+    echo "================================================================"
+    echo "!!  tools-MCP NICHT eingerichtet - npm/Node.js wird benoetigt."
+    echo "    Fehlende Programme:$_miss"
+    case "$(uname -s)" in
+      Darwin) echo "    Installieren:  brew install node git" ;;
+      Linux)  echo "    Installieren:  sudo apt install -y nodejs npm git   (bzw. Distro-Aequivalent)" ;;
+      *)      echo "    Installieren:  Node.js inkl. npm + git" ;;
+    esac
+    echo "    Danach erneut ausfuehren:  bash <(curl -s __KG_URL__/setup)"
+    echo "================================================================"
+  fi
+fi
+export TOOLS_MCP_ENTRY TOOLS_REG_URL
+
 # ── ai-rem Bearer setzen + mykeyvault bootstrappen (atomar in ~/.claude.json) ─
 # Damit die ERSTE Session nicht 401t; danach refresht der SessionStart-Hook.
 KG_URL="$KG_URL" CLAUDE_HOME="$CLAUDE_HOME" SSH_HOST="$SSH_HOST" python3 - << 'PYEOF' || true
@@ -962,24 +993,30 @@ else:
     print("✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:" % os.environ.get("SSH_HOST", "mystorage"))
     print("  AI_REM_TOKEN=<token> bash <(curl -s %s/setup)" % os.environ.get("KG_URL", ""))
 
-# (2) mykeyvault registrieren (falls noch nicht da und Koordinaten vorhanden)
-if "mykeyvault" not in servers and vault_tok:
-    cmd = os.environ.get("MYKEYVAULT_CMD") or reg.get("command", "node")
-    args_env = os.environ.get("MYKEYVAULT_ARGS")
-    args = args_env.split() if args_env else reg.get("args", [])
-    dist_ok = bool(args) and os.path.isfile(os.path.expanduser(args[0]))
-    if shutil.which(cmd) and dist_ok:
-        servers["mykeyvault"] = {"command": cmd, "args": args,
-                                 "env": {"VAULT_API_URL": vault_url, "VAULT_API_TOKEN": vault_tok}}
-        print("✓ mykeyvault registriert")
-    else:
-        # Kein lauffaehiger node/dist → keinen kaputten MCP-Eintrag anlegen, nur die
-        # Koordinaten fuer den Token-Refresh des Hooks ablegen (chmod 600).
-        vf = os.path.join(os.environ["CLAUDE_HOME"], "ai-rem-vault.env")
-        fd = os.open(vf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write("VAULT_API_URL=%s\nVAULT_API_TOKEN=%s\n" % (vault_url, vault_tok))
-        print("⚠ mykeyvault-MCP übersprungen (node/dist fehlt) — Koordinaten in ~/.claude/ai-rem-vault.env")
+# (2) mykeyvault als HTTP-MCP registrieren (kein SMB/node nötig)
+reg_http = reg.get("http") or {}
+_ai_https = servers.get("ai-rem", {}).get("url", "").startswith("https")
+mkv_url = os.environ.get("MYKEYVAULT_URL") or (reg_http.get("https_url") if (_ai_https and reg_http.get("https_url")) else reg_http.get("url"))
+if mkv_url and tok:
+    existed = "mykeyvault" in servers
+    servers["mykeyvault"] = {"type": "http", "url": mkv_url,
+                             "headers": {"Authorization": "Bearer " + tok}}
+    print("✓ mykeyvault " + ("migriert" if existed else "registriert") + (" (https)" if (mkv_url or "").startswith("https") else " (http)"))
+if vault_tok:
+    vf = os.path.join(os.environ["CLAUDE_HOME"], "ai-rem-vault.env")
+    fd = os.open(vf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("VAULT_API_URL=%s\nVAULT_API_TOKEN=%s\n" % (vault_url, vault_tok))
+
+# (3) tools als stdio-MCP registrieren (gebaut aus Registry-Repo)
+_tools_entry = os.environ.get("TOOLS_MCP_ENTRY", "")
+_tools_reg = os.environ.get("TOOLS_REG_URL", "")
+if _tools_entry and _tools_reg:
+    _existed = "tools" in servers
+    servers["tools"] = {"type": "stdio", "command": "node",
+                        "args": [_tools_entry],
+                        "env": {"TOOLS_MCP_REGISTRY_URL": _tools_reg}}
+    print("✓ tools " + ("migriert" if _existed else "registriert") + " (stdio)")
 
 tmp = cj + ".tmp"
 json.dump(cfg, open(tmp, "w"), indent=2, ensure_ascii=False)
