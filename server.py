@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.11"
+VERSION = "0.4.12"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1349,17 +1349,34 @@ echo "Auf jeder neuen Maschine: bash <(curl -s __KG_URL__/setup)"
 CMD_MD = """\
 # ai-rem einrichten
 
-Führe auf jeder neuen Maschine aus:
+Das Setup holt ein Skript vom ai-rem-Server und fuehrt es aus. Der Auto-Mode-Klassifizierer
+blockt „Remote-Code holen + ausfuehren" als harte Grenze — **der Agent darf `curl|bash`
+NICHT selbst ausfuehren** (und keine Permission-/Config-Umgehung dafuer bauen).
 
-```bash
+**Anweisung an den Agenten:** Versuche NICHT, den Befehl selbst auszufuehren oder den Block
+zu umgehen. Lege dem User stattdessen die Zeile zum Selbst-Ausfuehren hin und erklaere den
+`!`-Prefix. In der User-Shell laeuft sie ohne Klassifizierer — jedes Mal, ohne Block.
+
+Auf jeder Maschine im Terminal ausfuehren:
+
+```
 bash <(curl -s __KG_URL__/setup)
 ```
+
+…oder aus dem Claude-Code-Prompt mit vorangestelltem `!` (fuehrt es in deiner Shell aus):
+
+```
+! bash <(curl -s __KG_URL__/setup)
+```
+
+(Hinter Caddy/TLS stattdessen den https-Host nehmen, z. B. `https://airem.lan/setup`.)
 
 Das Skript erledigt automatisch:
 - MCP-Server registrieren
 - Konsolidiertes system-check.py Hook deployen (ai-rem, SMB, MCP, Settings-Sync, Tools)
 - auto-memory.py Hook deployen (PreCompact + SessionEnd → ai-rem ingest via Ollama)
-- settings-template.json + settings.json konfigurieren (Permissions, Deny-Rules, Hooks)
+- settings-template.json + settings.json konfigurieren (Permissions, Deny-Rules, Hooks,
+  inkl. AI_REM_ENDPOINT + AI_REM_CLI in env)
 - CLAUDE.md aktualisieren
 - Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`, `/memory-cleanup`)
 - Preferences & Tool-Entities im Knowledge Graph anlegen
