@@ -1,0 +1,53 @@
+flowchart TB
+  subgraph MAC["Mac - Claude Code Client"]
+    CC["Claude Code"]
+    HOOKS["Hooks: system-check / auto-memory<br/>claude-md-guard / save-plan"]
+    CLI["bin/ai-rem CLI"]
+    TMCP["tools-mcp (MCP stdio, lokal)"]
+    CACHE[("~/.cache/tools-mcp/scripts")]
+  end
+
+  subgraph UBU["myubuntu - 192.168.2.11"]
+    OLLAMA["Ollama :11434<br/>qwen3:14b / mistral-small"]
+  end
+
+  subgraph STORAGE["mystorage - 192.168.2.15 (Docker)"]
+    CADDY["Caddy - Reverse-Proxy<br/>TLS internal, *.lan"]
+    subgraph AIREM_C["Container: ai-rem :3456"]
+      AIREM["FastMCP-Server<br/>/mcp · /ui · /api · /health"]
+      KUZU[("Kuzu Graph-DB<br/>/data/kg.db + /backups")]
+    end
+    subgraph KV["mykeyvault-Verbund"]
+      KVMCP["mykeyvault-mcp :3458<br/>(MCP http)"]
+      VAPI["vault-api :8223 to 8000<br/>FastAPI + bw serve :8087"]
+      VW[("Vaultwarden :8222 to 80<br/>Secrets-Store")]
+    end
+    REG["tools-registry :3457<br/>HTTP Script-Verteiler<br/>/registry · /registry/file"]
+  end
+
+  %% MCP-Kanaele (Bearer-Token ai-rem-api-token)
+  CC -- "MCP https://airem.lan/mcp" --> CADDY
+  CC -- "MCP https://keyvault-mcp.lan/mcp" --> CADDY
+  CADDY -- "Bearer-Token" --> AIREM
+  CADDY -- "Bearer-Token" --> KVMCP
+  CADDY -. "https://keyvault-api.lan" .-> VAPI
+  CADDY -. "https://mykeyvault.lan" .-> VW
+
+  %% tools-mcp lokal
+  CC --> TMCP
+  TMCP -- "Poll /registry (HTTP :3457)" --> REG
+  TMCP --> CACHE
+  TMCP -. "ai_rem_token: liest ~/.claude.json" .-> CC
+
+  %% Hooks und CLI
+  HOOKS -- "auto-memory to ai-rem ingest" --> CADDY
+  CLI --> CADDY
+
+  %% ai-rem Abhaengigkeiten
+  AIREM --> KUZU
+  AIREM -- "Extraktion + Nightly-Cleanup" --> OLLAMA
+
+  %% Secrets-Fluss
+  KVMCP -- "http://vault-api:8000 (intern)" --> VAPI
+  VAPI -- "bw serve :8087" --> VW
+  AIREM -. "Token-Quelle: Item ai-rem-api-token" .-> VAPI
