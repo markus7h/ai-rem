@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.12"
+VERSION = "0.4.13"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -844,17 +844,55 @@ if __name__ == "__main__":
 '''
 
 SETUP_SCRIPT = r"""#!/usr/bin/env bash
-# ai-rem Setup - plattformunabhaengig (macOS + Linux).
-# Abhaengigkeiten: bash, curl, python3, claude CLI.
+# ai-rem Setup - plattformunabhaengig (macOS, Ubuntu/Linux, Windows-WSL).
+# Harte Abhaengigkeiten: bash, curl, python3, claude CLI.
+# Optional (nur tools-mcp): git, node >= 18, npm.
 set -e
 KG_URL="__KG_URL__"
 CLAUDE_HOME="$HOME/.claude"
 HOOK_PATH="$CLAUDE_HOME/hooks/system-check.py"
 
-echo "=== ai-rem Setup ==="
+# set -e bricht sonst still mittendrin ab - bei Fehler klar melden, wo es stand.
+trap 'rc=$?; echo ""; echo "✗ Setup abgebrochen (Exit $rc, Skript-Zeile $LINENO)."; echo "  Nach Behebung erneut ausfuehren:  bash <(curl -s '"$KG_URL"'/setup)"' ERR
 
-command -v python3 >/dev/null 2>&1 || { echo "✗ python3 fehlt - bitte installieren"; exit 1; }
-command -v curl    >/dev/null 2>&1 || { echo "✗ curl fehlt - bitte installieren"; exit 1; }
+# ── Plattform erkennen (steuert die Installations-Hinweise) ──────────────────
+case "$(uname -s)" in
+    Darwin) PLATFORM="macos" ;;
+    Linux)  if grep -qi microsoft /proc/version 2>/dev/null; then PLATFORM="wsl"; else PLATFORM="linux"; fi ;;
+    *)      PLATFORM="other" ;;
+esac
+
+# hint_install <apt-pakete> <brew-pakete>
+hint_install() {
+    case "$PLATFORM" in
+        macos) echo "    Installieren (macOS):          brew install $2" ;;
+        wsl)   echo "    Installieren (WSL/Ubuntu):     sudo apt update && sudo apt install -y $1"
+               echo "    Hinweis WSL: IN der WSL-Distribution installieren, nicht auf der Windows-Seite." ;;
+        linux) echo "    Installieren (Ubuntu/Debian):  sudo apt update && sudo apt install -y $1" ;;
+        *)     echo "    Installieren: $1" ;;
+    esac
+}
+
+echo "=== ai-rem Setup ($PLATFORM) ==="
+
+# ── Preflight: harte Abhaengigkeiten gesammelt pruefen ────────────────────────
+MISSING=""
+for _c in curl python3; do command -v "$_c" >/dev/null 2>&1 || MISSING="$MISSING $_c"; done
+if [ -n "$MISSING" ]; then
+    echo "✗ Fehlende Programme:$MISSING"
+    hint_install "${MISSING# }" "${MISSING# }"
+    echo "    Danach erneut ausfuehren:  bash <(curl -s $KG_URL/setup)"
+    exit 1
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+    echo "✗ claude CLI fehlt - ohne sie kann das Setup nichts registrieren."
+    echo "    Installieren (alle Plattformen):  curl -fsSL https://claude.ai/install.sh | bash"
+    echo "    …oder via npm:                    npm install -g @anthropic-ai/claude-code"
+    [ "$PLATFORM" = "wsl" ] && echo "    Hinweis WSL: claude muss IN der WSL-Distribution installiert sein ('which claude' in WSL pruefen)."
+    echo "    Danach erneut ausfuehren:  bash <(curl -s $KG_URL/setup)"
+    exit 1
+fi
 
 # Atomarer Download: erst in Temp-Datei, nur bei Erfolg + nicht-leer per mv ersetzen.
 # Verhindert, dass ein transienter Serverfehler eine bestehende Datei truncatet.
@@ -879,15 +917,19 @@ fi
 # Neue ai-rem Registrierung
 if claude mcp list 2>/dev/null | grep -q "ai-rem"; then
     echo "✓ MCP bereits registriert"
-else
-    claude mcp add --transport http --scope user ai-rem "$KG_URL/mcp"
+elif claude mcp add --transport http --scope user ai-rem "$KG_URL/mcp"; then
     echo "✓ MCP registriert (ai-rem)"
+else
+    echo "✗ 'claude mcp add' fehlgeschlagen - claude CLI zu alt? Aktualisieren mit:  claude update"
+    echo "  Danach erneut ausfuehren:  bash <(curl -s $KG_URL/setup)"
+    exit 1
 fi
 
 mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
 
 # Setup-Config laden (persoenliche Entities, Permissions, mcp_register — nicht im Repo)
 SETUP_CFG=$(curl -sf "$KG_URL/setup-config" 2>/dev/null || echo '{}')
+[ "$SETUP_CFG" = '{}' ] && echo "⚠ setup-config nicht ladbar - personalisierte Teile (tools-mcp, Vault, Entities) werden uebersprungen"
 export SETUP_CFG
 
 # ── Runtime-MCP-Endpoint waehlen: TLS (https) bevorzugt, sonst http-Fallback ──
@@ -897,11 +939,24 @@ export SETUP_CFG
 # sonst Fallback auf $KG_URL/mcp, damit ein Host ohne Caddy-Root-CA nicht 401/Cert-bricht.
 MCP_ENDPOINT="$KG_URL/mcp"
 HTTPS_BASE="$(printf '%s' "$SETUP_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ai_rem_https_url",""))' 2>/dev/null || true)"
-if [ -n "$HTTPS_BASE" ] && curl -sf --max-time 6 "$HTTPS_BASE/health" >/dev/null 2>&1; then
-    MCP_ENDPOINT="$HTTPS_BASE/mcp"
-    echo "✓ TLS-Endpoint nutzbar: $MCP_ENDPOINT"
-else
-    [ -n "$HTTPS_BASE" ] && echo "ℹ TLS-Endpoint $HTTPS_BASE nicht erreichbar/vertraut — bleibe bei $MCP_ENDPOINT"
+if [ -n "$HTTPS_BASE" ]; then
+    if curl -sf --max-time 6 "$HTTPS_BASE/health" >/dev/null 2>&1; then
+        MCP_ENDPOINT="$HTTPS_BASE/mcp"
+        echo "✓ TLS-Endpoint nutzbar: $MCP_ENDPOINT"
+    elif curl -skf --max-time 6 "$HTTPS_BASE/health" >/dev/null 2>&1; then
+        # Erreichbar, aber Handshake scheitert ohne -k => Root-CA fehlt auf dieser Maschine.
+        echo "⚠ TLS-Endpoint $HTTPS_BASE erreichbar, aber Zertifikat NICHT vertraut - bleibe bei $MCP_ENDPOINT"
+        echo "  Fuer TLS die Caddy-Root-CA dieser Maschine bekannt machen"
+        echo "  (liegt im Caddy-Container unter /data/caddy/pki/authorities/local/root.crt):"
+        case "$PLATFORM" in
+            macos) echo "    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt" ;;
+            *)     echo "    sudo cp root.crt /usr/local/share/ca-certificates/caddy-root.crt && sudo update-ca-certificates"
+                   [ "$PLATFORM" = "wsl" ] && echo "    (in der WSL-Distribution ausfuehren - der Windows-Zertifikatsspeicher zaehlt hier NICHT)" ;;
+        esac
+        echo "    Danach Setup erneut ausfuehren - der /mcp-Kanal migriert dann automatisch auf https."
+    else
+        echo "ℹ TLS-Endpoint $HTTPS_BASE nicht erreichbar - bleibe bei $MCP_ENDPOINT"
+    fi
 fi
 export MCP_ENDPOINT
 
@@ -929,25 +984,46 @@ TOOLS_MCP_ENTRY=""
 _t_get() { printf '%s' "$SETUP_CFG" | python3 -c "import json,sys;print(json.load(sys.stdin).get('mcp_register',{}).get('tools',{}).get('stdio',{}).get('$1',''))" 2>/dev/null || true; }
 TOOLS_REG_URL="$(_t_get registry_url)"
 if [ -n "$TOOLS_REG_URL" ]; then
-  if command -v node >/dev/null && command -v npm >/dev/null && command -v git >/dev/null; then
+  _miss=""
+  for _c in node npm git; do command -v "$_c" >/dev/null 2>&1 || _miss="$_miss $_c"; done
+  NODE_MAJOR=0
+  command -v node >/dev/null 2>&1 && NODE_MAJOR="$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+  case "$NODE_MAJOR" in (*[!0-9]*|'') NODE_MAJOR=0 ;; esac
+  if [ -z "$_miss" ] && [ "$NODE_MAJOR" -ge 18 ]; then
     T_REPO="$(_t_get repo)"; T_ENTRY="$(_t_get entry)"; [ -n "$T_ENTRY" ] || T_ENTRY="dist/index.js"
     T_DIR_RAW="$(_t_get install_dir)"; [ -n "$T_DIR_RAW" ] || T_DIR_RAW="$HOME/Code/tools-mcp"
     T_DIR="${T_DIR_RAW/#\~/$HOME}"
-    if [ -d "$T_DIR/.git" ]; then git -C "$T_DIR" pull --ff-only >/dev/null 2>&1 || true
-    else mkdir -p "$(dirname "$T_DIR")" && git clone --depth 1 "$T_REPO" "$T_DIR" >/dev/null 2>&1 || true; fi
-    if [ -d "$T_DIR" ]; then ( cd "$T_DIR" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 ) || true; fi
+    if [ -d "$T_DIR/.git" ]; then git -C "$T_DIR" pull --ff-only >/dev/null 2>&1 || echo "⚠ git pull in $T_DIR fehlgeschlagen - baue mit vorhandenem Stand"
+    else mkdir -p "$(dirname "$T_DIR")" && git clone --depth 1 "$T_REPO" "$T_DIR" >/dev/null 2>&1 || echo "✗ git clone $T_REPO fehlgeschlagen (Netz/Repo-Zugriff pruefen)"; fi
+    if [ -d "$T_DIR" ]; then
+      NPM_LOG="$(mktemp)"
+      if ! ( cd "$T_DIR" && npm install --no-audit --no-fund && npm run build ) >"$NPM_LOG" 2>&1; then
+        echo "✗ tools-mcp npm-Build fehlgeschlagen - letzte Log-Zeilen:"
+        tail -n 12 "$NPM_LOG" | sed 's/^/    | /'
+        if grep -qiE 'SELF_SIGNED_CERT|UNABLE_TO_GET_ISSUER|UNABLE_TO_VERIFY_LEAF|CERT_UNTRUSTED|certificate' "$NPM_LOG"; then
+          echo "  ↳ Zertifikatsproblem (Proxy/eigene Root-CA in der npm-Kette). Abhilfe:"
+          echo "      npm config set cafile /pfad/zur/root-ca.pem"
+          echo "      oder:  export NODE_EXTRA_CA_CERTS=/pfad/zur/root-ca.pem"
+        fi
+        grep -qi 'EACCES' "$NPM_LOG" && echo "  ↳ Rechteproblem (EACCES): Besitzer von $T_DIR und ~/.npm pruefen - npm nie mit sudo ausfuehren."
+      fi
+      rm -f "$NPM_LOG"
+    fi
     if [ -f "$T_DIR/$T_ENTRY" ]; then TOOLS_MCP_ENTRY="$T_DIR/$T_ENTRY"; echo "OK tools-mcp gebaut: $TOOLS_MCP_ENTRY"; else echo "!! tools-mcp Build fehlgeschlagen - tools nicht registriert. Manuell pruefen: cd $T_DIR && npm install && npm run build"; fi
   else
-    _miss=""
-    for _c in node npm git; do command -v "$_c" >/dev/null 2>&1 || _miss="$_miss $_c"; done
     echo ""
     echo "================================================================"
-    echo "!!  tools-MCP NICHT eingerichtet - npm/Node.js wird benoetigt."
-    echo "    Fehlende Programme:$_miss"
-    case "$(uname -s)" in
-      Darwin) echo "    Installieren:  brew install node git" ;;
-      Linux)  echo "    Installieren:  sudo apt install -y nodejs npm git   (bzw. Distro-Aequivalent)" ;;
-      *)      echo "    Installieren:  Node.js inkl. npm + git" ;;
+    echo "!!  tools-MCP NICHT eingerichtet - Node.js >= 18 inkl. npm + git wird benoetigt."
+    [ -n "$_miss" ] && echo "    Fehlende Programme:$_miss"
+    [ -z "$_miss" ] && [ "$NODE_MAJOR" -lt 18 ] && echo "    Node.js v$NODE_MAJOR ist zu alt (mindestens v18 noetig)."
+    case "$PLATFORM" in
+      macos) echo "    Installieren:  brew install node git" ;;
+      wsl|linux)
+        echo "    Ubuntu/Debian-apt liefert oft ein zu altes Node - aktuelles Node via NodeSource:"
+        echo "      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs git"
+        echo "    Alternativ nvm:  https://github.com/nvm-sh/nvm  (nvm install --lts)"
+        [ "$PLATFORM" = "wsl" ] && echo "    Hinweis WSL: Node IN der WSL-Distribution installieren; tools-mcp nicht unter /mnt/c ablegen (langsam, exec-Probleme)." ;;
+      *)     echo "    Installieren:  Node.js >= 18 inkl. npm + git" ;;
     esac
     echo "    Danach erneut ausfuehren:  bash <(curl -s __KG_URL__/setup)"
     echo "================================================================"
@@ -961,10 +1037,12 @@ KG_URL="$KG_URL" CLAUDE_HOME="$CLAUDE_HOME" SSH_HOST="$SSH_HOST" python3 - << 'P
 import json, os, shutil, urllib.request
 
 cj = os.path.expanduser("~/.claude.json")
+if not os.path.exists(cj):
+    raise SystemExit("⚠ ~/.claude.json fehlt - claude einmal interaktiv starten, dann Setup erneut ausfuehren")
 cfg = json.load(open(cj))
 servers = cfg.setdefault("mcpServers", {})
 if "ai-rem" not in servers:
-    raise SystemExit("ai-rem nicht registriert")
+    raise SystemExit("⚠ ai-rem nicht in ~/.claude.json registriert - Bearer/Vault-Bootstrap uebersprungen")
 
 scfg = json.loads(os.environ.get("SETUP_CFG", "{}"))
 reg = scfg.get("mcp_register", {}).get("mykeyvault", {})
@@ -1370,6 +1448,21 @@ bash <(curl -s __KG_URL__/setup)
 ```
 
 (Hinter Caddy/TLS stattdessen den https-Host nehmen, z. B. `https://airem.lan/setup`.)
+
+## Voraussetzungen (prueft das Skript selbst, mit Installations-Hinweisen)
+
+- **Pflicht:** `bash`, `curl`, `python3`, `claude` CLI — fehlt etwas, bricht das Setup
+  mit plattformspezifischem Installations-Hinweis ab (Ubuntu/WSL: apt, macOS: brew;
+  claude CLI: `curl -fsSL https://claude.ai/install.sh | bash`).
+- **Optional (nur tools-mcp):** `git`, Node.js >= 18 inkl. `npm`. Zu altes Node
+  (Ubuntu-apt!) wird erkannt; Hinweis auf NodeSource/nvm. npm-Build-Fehler werden
+  mit Log-Auszug gemeldet, inkl. Diagnose fuer Proxy-/Zertifikatsprobleme
+  (`npm config set cafile …` / `NODE_EXTRA_CA_CERTS`).
+- **TLS:** Ist der https-Endpoint erreichbar, aber das Zertifikat nicht vertraut,
+  bleibt das Setup bei http und zeigt, wie die Caddy-Root-CA installiert wird
+  (Ubuntu/WSL: `update-ca-certificates`, macOS: `security add-trusted-cert`).
+- **WSL:** Alles (claude, node, git) gehoert IN die WSL-Distribution, nicht auf die
+  Windows-Seite; der Windows-Zertifikatsspeicher gilt in WSL nicht.
 
 Das Skript erledigt automatisch:
 - MCP-Server registrieren
