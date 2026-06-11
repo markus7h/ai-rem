@@ -38,11 +38,11 @@ flowchart TB
 
   %% MCP-Kanaele (Bearer-Token ai-rem-api-token)
   CC -- "MCP https://airem.lan/mcp" --> CADDY
-  CC -- "MCP https://keyvault-mcp.lan/mcp" --> CADDY
+  CC -- "MCP https://mykeyvault.lan/mcp" --> CADDY
   CADDY -- "Bearer-Token" --> AIREM
   CADDY -- "Bearer-Token" --> KVMCP
-  CADDY -. "https://keyvault-api.lan" .-> VAPI
-  CADDY -. "https://mykeyvault.lan" .-> VW
+  CADDY -. "https://mykeyvault.lan/secret/* u. a. (pfadbasiert)" .-> VAPI
+  CADDY -. "https://mykeyvault.lan (Rest)" .-> VW
 
   %% tools-mcp lokal
   CC --> TMCP
@@ -70,9 +70,9 @@ flowchart TB
 |---|---|---|---|---|
 | ai-rem | mystorage | 3456 | HTTP-MCP via `https://airem.lan/mcp` (Caddy), Bearer | Knowledge-Graph-Gedächtnis (FastMCP + Kuzu), Web-UI, Backup/Cleanup |
 | Kuzu Graph-DB | mystorage | — | eingebettet in ai-rem | Entities/Relations (`/data/kg.db`), Backups (`/backups`) |
-| mykeyvault-mcp | mystorage | 3458 | HTTP-MCP via `https://keyvault-mcp.lan/mcp` (Caddy), Bearer | MCP-Frontend für die Vault-Tools (kein Secret-Leak in den Kontext) |
-| vault-api | mystorage | 8223→8000 | REST via `https://keyvault-api.lan` (Caddy), Bearer | Token-Gateway um die Bitwarden-CLI; hält `bw serve` (`:8087`) entsperrt |
-| Vaultwarden | mystorage | 8222→80 | `https://mykeyvault.lan` (Caddy) | Eigentlicher Secrets-Store |
+| mykeyvault-mcp | mystorage | 3458 | HTTP-MCP via `https://mykeyvault.lan/mcp` (Caddy, pfadbasiert), Bearer | MCP-Frontend für die Vault-Tools (kein Secret-Leak in den Kontext) |
+| vault-api | mystorage | 8223→8000 | REST via `https://mykeyvault.lan` (Caddy, pfadbasiert: `/secret/*`, `/items*`, `/item/*`, `/ssh-key/*`, `/ssh-keys`, `/health`), Bearer | Token-Gateway um die Bitwarden-CLI; hält `bw serve` (`:8087`) entsperrt |
+| Vaultwarden | mystorage | 8222→80 | `https://mykeyvault.lan` (Caddy, alle übrigen Pfade) | Eigentlicher Secrets-Store |
 | tools-registry | mystorage | 3457 | reines HTTP (LAN-only, keine Auth) | Verteilt die Scripts (`/registry`, `/registry/file`) |
 | tools-mcp | Mac (lokal) | — | MCP stdio (Node-Prozess) | Registriert Scripts als Tools; pollt den Registry alle 5 s |
 | Ollama | myubuntu | 11434 | HTTP | Transcript-Extraktion + Nightly-Cleanup-Urteile für ai-rem |
@@ -80,4 +80,6 @@ flowchart TB
 
 **Auth:** ai-rem und mykeyvault-mcp teilen sich denselben Bearer-Token (`ai-rem-api-token`, als `MCP_AUTH_TOKEN`); `vault-api` verwendet ihn als `VAULT_API_TOKEN`. Der Token stammt aus Vaultwarden und wird über `vault-api` an die Clients verteilt; ai-rem frischt ihn pro Session im Hintergrund auf.
 
-> **Hinweis:** `mykeyvault-mcp` läuft produktiv als HTTP-MCP-Container (`:3458`, `https://keyvault-mcp.lan`). Der Repo-Code (`mcp/src/index.ts`) zeigt noch die ältere stdio-Variante — das Repo hängt hier hinter der Produktion. Dieses Diagramm bildet die deployte Realität ab.
+> **Hinweis:** `mykeyvault-mcp` läuft produktiv als HTTP-MCP-Container (`:3458`, `https://mykeyvault.lan/mcp`). Der Repo-Code (`mcp/src/index.ts`) zeigt noch die ältere stdio-Variante — das Repo hängt hier hinter der Produktion. Dieses Diagramm bildet die deployte Realität ab.
+>
+> **Hostnamen-Konvention (seit 2026-06-11):** Alles, was zu mykeyvault gehört, läuft unter dem einen Hostnamen `mykeyvault.lan` mit pfadbasiertem Caddy-Routing (`/mcp*` → mykeyvault-mcp, vault-api-Pfade → vault-api, Rest → Vaultwarden). Die früheren Spezial-Hostnamen `keyvault-mcp.lan` und `keyvault-api.lan` sind abgeschafft.

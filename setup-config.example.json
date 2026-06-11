@@ -3,12 +3,12 @@
   "ssh_host": "your-server",
   "_comment_tls": "Optional: TLS-Basis-URL fuer den /mcp-Kanal (z.B. hinter Caddy 'tls internal'). Das Setup nutzt sie nur, wenn <url>/health auf der Maschine erreichbar UND vertraut ist (curl ohne -k), sonst Fallback auf den http-KG_URL. Bootstrap-Fetch laeuft weiter ueber http.",
   "ai_rem_https_url": "https://your-server",
-  "_comment_mcp_register": "Optional. Das Setup zieht ai-rem-/Vault-Token per SSH von ssh_host (aus dessen .env-Dateien). mykeyvault wird als HTTP-MCP aus 'http.url' (bzw. 'https_url', wenn ai-rem ueber https laeuft und der Host vertraut ist) registriert. tools wird aus 'stdio.repo' geklont + gebaut (npm) und als stdio-MCP mit TOOLS_MCP_REGISTRY_URL=stdio.registry_url registriert; das setzt node/npm/git auf der Maschine voraus - fehlen sie, gibt das Setup einen Installationshinweis und ueberspringt tools.",
+  "_comment_mcp_register": "Optional. Das Setup zieht ai-rem-/Vault-Token per SSH von ssh_host (aus dessen .env-Dateien). mykeyvault wird als HTTP-MCP registriert: URL-Kandidaten (erst 'https_url' wenn ai-rem ueber https laeuft, dann 'http.url') werden vor der Registrierung auf Erreichbarkeit geprobt (DNS + TLS-Trust) — nur ein erreichbarer wird eingetragen. Empfehlung: EIN Hostname fuer alles mykeyvault-Bezogene, pfadbasiert geroutet (z. B. /mcp -> MCP-Container). tools wird aus 'stdio.repo' geklont + gebaut (npm) und als stdio-MCP mit TOOLS_MCP_REGISTRY_URL=stdio.registry_url registriert; das setzt node/npm/git auf der Maschine voraus - fehlen sie, gibt das Setup einen Installationshinweis und ueberspringt tools.",
   "mcp_register": {
     "mykeyvault": {
       "http": {
         "url": "http://your-server:3458/mcp",
-        "https_url": "https://keyvault-mcp.your-domain/mcp"
+        "https_url": "https://mykeyvault.your-domain/mcp"
       },
       "vault_url": "http://your-server:8223"
     },

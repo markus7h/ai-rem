@@ -27,11 +27,11 @@ flowchart TB
 
   %% MCP-Kanaele (Bearer-Token ai-rem-api-token)
   CC -- "MCP https://airem.lan/mcp" --> CADDY
-  CC -- "MCP https://keyvault-mcp.lan/mcp" --> CADDY
+  CC -- "MCP https://mykeyvault.lan/mcp" --> CADDY
   CADDY -- "Bearer-Token" --> AIREM
   CADDY -- "Bearer-Token" --> KVMCP
-  CADDY -. "https://keyvault-api.lan" .-> VAPI
-  CADDY -. "https://mykeyvault.lan" .-> VW
+  CADDY -. "https://mykeyvault.lan/secret/* u. a. (pfadbasiert)" .-> VAPI
+  CADDY -. "https://mykeyvault.lan (Rest)" .-> VW
 
   %% tools-mcp lokal
   CC --> TMCP
