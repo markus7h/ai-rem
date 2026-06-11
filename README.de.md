@@ -101,10 +101,10 @@ Netto ≈ 1.175.000 Token / Monat gespart
 
 | URL | Funktion |
 |---|---|
-| `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore |
-| `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen |
+| `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore (Export v2 erhält `pinned`/`sort_order`/`archived`) |
+| `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen; archivierte Preferences sind gedimmt, gebadged und stehen unter einer Trennzeile (laden nie in den Session-Kontext) |
 | `/cleanup` | Nightly-Cleanup: Konfiguration, manueller Lauf, Pending-Reviews, Lauf-Log |
-| `/install` | Client-Setup-Befehle pro Plattform (bash / PowerShell) mit Kopier-Buttons — public, fürs Onboarding neuer Maschinen |
+| `/install` | Client-Setup-Befehle pro Plattform (bash / PowerShell) mit Kopier-Buttons, inkl. Schritt-für-Schritt-SSH-Key-Anleitung (keygen, `~/.ssh/config`-Host-Block mit User aus der `setup-config`, ssh-copy-id / PowerShell-Variante) — public, fürs Onboarding neuer Maschinen |
 
 **`/prefs`** — Vollständiger Preferences-Manager im Browser: pin/unpin, Context-Dropdown, manuelle Reihenfolge (`sort_order`), löschen. Klick auf den Namen klappt die vollständige Beschreibung auf. Aufrufbar über den Slash-Command `/ai-rem:prefedit`.
 
@@ -325,6 +325,9 @@ Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-c
 
 ```json
 {
+  "ssh_host": "your-server",
+  "ssh_user": "your-user",
+  "ssh_hostname": "your-server.lan",
   "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
   "permissions_deny": ["Bash(bw get *)", ...],
   "smb": {"mount": "/path/to/mount", "url": "smb://server/share"},

@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.18"
+VERSION = "0.4.19"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1106,6 +1106,7 @@ def pull_secrets(setup_cfg):
     if not ssh_ok:
         extra = '' if ssh else ' (ssh-Client fehlt)'
         print('⚠ SSH zu %s nicht erreichbar%s — Secrets nur aus Env' % (ssh_host, extra))
+        print('  SSH-Key-Anleitung (Schritt fuer Schritt): %s/install' % KG_URL)
 
     def remote_env(remote_file, key):
         try:
@@ -2098,18 +2099,21 @@ def _dump_graph() -> dict:
     """Serialize the entire Entity+Rel graph into a plain dict (JSON-ready)."""
     entities = _rows(db_exec(
         "MATCH (e:Entity) RETURN e.id, e.name, e.type, e.descr, e.extra, "
-        "e.context, e.created_at, e.updated_at"
+        "e.context, e.created_at, e.updated_at, e.pinned, e.sort_order, e.archived"
     ))
     relations = _rows(db_exec(
         "MATCH (a:Entity)-[r:Rel]->(b:Entity) RETURN a.id, r.name, b.id, r.extra, r.created_at"
     ))
     return {
-        "version": 1,
+        # v2: pinned/sort_order/archived im Export — Restore war vorher lossy.
+        "version": 2,
         "exported_at": _now(),
         "entities": [
             {"id": r[0], "name": r[1], "type": r[2], "description": r[3],
              "extra": json.loads(r[4] or "{}"), "context": r[5] or "",
-             "created_at": r[6], "updated_at": r[7]}
+             "created_at": r[6], "updated_at": r[7],
+             "pinned": r[8] or "", "sort_order": r[9] or "",
+             "archived": r[10] or ""}
             for r in entities
         ],
         "relations": [
@@ -2228,6 +2232,7 @@ input[type=number]{width:60px}
 .toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
 tr.below{opacity:.5}
 tr.ctxcut td{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--pin);border-top:2px dashed var(--pin);border-bottom:2px dashed var(--pin);background:rgba(128,128,128,.07)}
+.badge{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--pin);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:1px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -2250,15 +2255,17 @@ let prefs=[];
 
 async function load(){
   prefs=await fetch('/api/preferences').then(r=>r.json()).catch(()=>[]);
-  document.getElementById('cnt').textContent=prefs.length;
+  const nArch=prefs.filter(p=>p.archived).length;
+  const nActive=prefs.length-nArch;
+  document.getElementById('cnt').textContent=nActive+(nArch?` (+${nArch} archiviert)`:'');
   const tb=document.getElementById('rows');
   if(!prefs.length){tb.innerHTML='<tr><td colspan="6" style="color:var(--muted);padding:20px 10px">Keine Preferences.</td></tr>';return;}
   const LIMIT=__CTX_LIMIT__;
   tb.innerHTML=prefs.map((p,i)=>{
     const row=`
-    <tr class="${i>=LIMIT?'below':''}">
+    <tr class="${p.archived||i>=LIMIT?'below':''}">
       <td><button class="pin-btn ${p.pinned?'active':''}" onclick="togglePin(${i})" title="${p.pinned?'Unpin':'Pin'}">📌</button></td>
-      <td><div class="name" onclick="toggleDescr(${i})" title="Klicken zum Aufklappen">${esc(p.name)}</div><div class="descr">${esc(p.descr)}</div><div class="full-descr" id="fd${i}">${esc(p.descr)}</div></td>
+      <td><div class="name" onclick="toggleDescr(${i})" title="Klicken zum Aufklappen">${esc(p.name)}${p.archived?'<span class="badge">archiviert</span>':''}</div><div class="descr">${esc(p.descr)}</div><div class="full-descr" id="fd${i}">${esc(p.descr)}</div></td>
       <td>
         <select onchange="setCtx(${i},this.value)">
           <option value="" ${!p.context?'selected':''}>global</option>
@@ -2271,10 +2278,15 @@ async function load(){
       <td class="date">${p.updated_at?p.updated_at.slice(0,10):'—'}</td>
       <td><button class="del" onclick="del(${i})">Löschen</button></td>
     </tr>`;
-    const cut=(i===LIMIT-1&&prefs.length>LIMIT)
+    // Archivierte stehen (API-sortiert) am Ende: Trennzeile vor dem ersten,
+    // Kontext-Grenze zaehlt nur aktive Eintraege.
+    const archSep=(p.archived&&(i===0||!prefs[i-1].archived))
+      ?`<tr class="ctxcut"><td colspan="6">🗄 Archiviert · erscheint nicht im Session-Kontext</td></tr>`
+      :'';
+    const cut=(!p.archived&&i===LIMIT-1&&nActive>LIMIT)
       ?`<tr class="ctxcut"><td colspan="6">✂ Kontext-Grenze · die oberen ${LIMIT} werden in den Session-Kontext geladen, alles darunter nicht</td></tr>`
       :'';
-    return row+cut;
+    return archSep+row+cut;
   }).join('');
 }
 
@@ -2536,6 +2548,15 @@ mcp = FastMCP(
 )
 
 
+def _load_setup_cfg() -> dict:
+    # Persoenliche Config bevorzugen, sonst generisches Starter-Template.
+    for path in (_SETUP_CONFIG_PATH, _SETUP_CONFIG_EXAMPLE_PATH):
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    return {}
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health_route(request: Request) -> PlainTextResponse:
     # Public (kein Token) — vom Docker-Healthcheck und Reachability-Probes genutzt.
@@ -2575,12 +2596,7 @@ async def claude_md_guard_hook_route(request: Request) -> PlainTextResponse:
 
 @mcp.custom_route("/setup-config", methods=["GET"])
 async def setup_config_route(request: Request) -> JSONResponse:
-    # Persoenliche Config bevorzugen, sonst generisches Starter-Template ausliefern.
-    for path in (_SETUP_CONFIG_PATH, _SETUP_CONFIG_EXAMPLE_PATH):
-        if os.path.exists(path):
-            with open(path) as f:
-                return JSONResponse(json.load(f))
-    return JSONResponse({})
+    return JSONResponse(_load_setup_cfg())
 
 
 @mcp.custom_route("/cmd", methods=["GET"])
@@ -2602,18 +2618,22 @@ async def cmd_memory_cleanup_route(request: Request) -> PlainTextResponse:
 async def api_preferences(request: Request) -> JSONResponse:
     rows = _rows(db_exec(
         "MATCH (e:Entity {type: 'Preference'}) "
-        "RETURN e.id, e.name, e.context, e.pinned, e.sort_order, e.descr, e.updated_at"
+        "RETURN e.id, e.name, e.context, e.pinned, e.sort_order, e.descr, e.updated_at, e.archived"
     ))
     prefs = [
         {"id": r[0], "name": r[1], "context": r[2] or "",
          "pinned": r[3] == "true",
          "sort_order": int(r[4]) if r[4] else None,
-         "descr": r[5] or "", "updated_at": r[6] or ""}
+         "descr": r[5] or "", "updated_at": r[6] or "",
+         "archived": r[7] == "true"}
         for r in rows
     ]
 
+    # Archivierte ans Ende — sie laden nicht in den Session-Kontext (get_context
+    # filtert sie) und duerfen die Kontext-Grenze in der UI nicht verfaelschen.
     def _key(p):
-        return (0 if p["pinned"] else 1,
+        return (1 if p["archived"] else 0,
+                0 if p["pinned"] else 1,
                 (0, p["sort_order"]) if p["sort_order"] is not None else (1, 0),
                 p["updated_at"])
 
@@ -2875,6 +2895,10 @@ h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
 .card{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:22px}
 .cmd{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px;margin-bottom:8px}
 .cmd code{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;word-break:break-all}
+.cfg{display:flex;align-items:flex-start;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px;margin-bottom:8px}
+.cfg pre{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre;overflow-x:auto;margin:0}
+.step{font-size:12px;font-weight:600;color:var(--muted);margin:14px 0 6px}
+.step:first-of-type{margin-top:0}
 button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background .15s}
 button:hover{background:var(--ah)}
 .hint{font-size:12px;color:var(--muted);margin-top:8px}
@@ -2899,6 +2923,25 @@ li{margin-bottom:4px}
     <h2>Windows (PowerShell, nativ)</h2>
     <div class="cmd"><code id="c2">irm __KG_URL__/setup.ps1 | iex</code><button onclick="copyCmd('c2')">Kopieren</button></div>
     <p class="hint">Kein WSL nötig — claude CLI nativ. Fehlt Python: <code>winget install Python.Python.3.12</code>, fehlt claude: <code>irm https://claude.ai/install.ps1 | iex</code></p>
+  </div>
+
+  <div class="card">
+    <h2>SSH-Zugang einrichten (Secret-Pull)</h2>
+    <p class="hint" style="margin:0 0 12px">Das Setup zieht die Tokens per <code>ssh __SSH_HOST__</code> vom Server — einmal pro Maschine einrichten:</p>
+    <div class="step">1 · Key erzeugen (alle Plattformen, Enter-Defaults sind ok)</div>
+    <div class="cmd"><code id="s1">ssh-keygen -t ed25519</code><button onclick="copyCmd('s1')">Kopieren</button></div>
+    <div class="step">2 · Host-Eintrag in <code>~/.ssh/config</code> (Windows: <code>C:\\Users\\&lt;name&gt;\\.ssh\\config</code>)</div>
+    <div class="cfg"><pre id="s2">Host __SSH_HOST__
+    HostName __SSH_HOSTNAME__
+    User __SSH_USER__
+    IdentityFile ~/.ssh/id_ed25519</pre><button onclick="copyCmd('s2')">Kopieren</button></div>
+    <div class="step">3 · Public-Key auf den Server — macOS/Linux/WSL:</div>
+    <div class="cmd"><code id="s3">ssh-copy-id __SSH_HOST__</code><button onclick="copyCmd('s3')">Kopieren</button></div>
+    <div class="step">&nbsp;&nbsp;&nbsp;…Windows (PowerShell, kein ssh-copy-id an Bord):</div>
+    <div class="cmd"><code id="s4">type $env:USERPROFILE\\.ssh\\id_ed25519.pub | ssh __SSH_HOST__ "cat >> ~/.ssh/authorized_keys"</code><button onclick="copyCmd('s4')">Kopieren</button></div>
+    <div class="step">4 · Testen (muss ohne Passwort-Abfrage durchlaufen)</div>
+    <div class="cmd"><code id="s5">ssh __SSH_HOST__ true && echo OK</code><button onclick="copyCmd('s5')">Kopieren</button></div>
+    <p class="hint">Ohne SSH-Zugang läuft das Setup trotzdem — dann Token manuell mitgeben: <code>AI_REM_TOKEN=&lt;token&gt;</code> bzw. <code>$env:AI_REM_TOKEN</code>.</p>
   </div>
 
   <div class="card">
@@ -3012,8 +3055,15 @@ async def ui_route(request: Request) -> Response:
 @mcp.custom_route("/install", methods=["GET"])
 async def install_route(request: Request) -> Response:
     # Public (wie /setup*): Onboarding-Seite mit den Setup-Aufrufen pro Plattform —
-    # eine neue Maschine hat noch kein Session-Cookie.
-    return Response(content=_INSTALL_HTML, media_type="text/html")
+    # eine neue Maschine hat noch kein Session-Cookie. SSH-Koordinaten kommen
+    # zur Request-Zeit aus der setup-config (Config-Aenderung ohne Neustart wirksam).
+    cfg = _load_setup_cfg()
+    ssh_host = cfg.get("ssh_host") or "your-server"
+    html = (_INSTALL_HTML
+            .replace("__SSH_HOST__", ssh_host)
+            .replace("__SSH_HOSTNAME__", cfg.get("ssh_hostname") or ssh_host)
+            .replace("__SSH_USER__", cfg.get("ssh_user") or "<user>"))
+    return Response(content=html, media_type="text/html")
 
 
 @mcp.custom_route("/api/status", methods=["GET"])
@@ -3197,15 +3247,25 @@ def _apply_import(body: dict, mode: str) -> dict:
         # (older backups) so restore stays compatible.
         ctx = entity.get("context") or extra.get("context", "") or ""
         extra_json = json.dumps(extra, ensure_ascii=False)
+
+        # v2-Felder; v1-Backups haben sie nicht -> Defaults (leer = inaktiv).
+        # bool-Normalisierung, damit auch handgebaute Bodies mit true/false gehen.
+        def _flag(key):
+            return "true" if entity.get(key) in (True, "true") else ""
+
         db_exec(
             """CREATE (:Entity {id: $id, name: $name, type: $type,
                                 descr: $descr, extra: $extra, context: $ctx,
+                                pinned: $pinned, sort_order: $so, archived: $archived,
                                 created_at: $ts, updated_at: $ts})""",
             {
                 "id": eid, "name": entity["name"],
                 "type": entity.get("type", "Unknown"),
                 "descr": entity.get("description", ""), "extra": extra_json,
                 "ctx": ctx,
+                "pinned": _flag("pinned"),
+                "so": str(entity.get("sort_order") or ""),
+                "archived": _flag("archived"),
                 "ts": entity.get("created_at", ts),
             },
         )

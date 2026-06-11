@@ -1,6 +1,9 @@
 {
   "_comment": "Generisches Starter-Template. Wird von /setup-config ausgeliefert, wenn keine eigene setup-config.json vorhanden ist. Eine eigene setup-config.json (gitignored) ueberschreibt dieses Template komplett. Frei anpassen.",
   "ssh_host": "your-server",
+  "_comment_ssh": "ssh_user/ssh_hostname werden nur fuer die SSH-Anleitung auf der /install-Seite verwendet (Host-Block fuer ~/.ssh/config). Der Secret-Pull selbst nutzt 'ssh <ssh_host>' und damit die lokale SSH-Config.",
+  "ssh_user": "your-user",
+  "ssh_hostname": "your-server.lan",
   "_comment_tls": "Optional: TLS-Basis-URL fuer den /mcp-Kanal (z.B. hinter Caddy 'tls internal'). Das Setup nutzt sie nur, wenn <url>/health auf der Maschine erreichbar UND vertraut ist (curl ohne -k), sonst Fallback auf den http-KG_URL. Bootstrap-Fetch laeuft weiter ueber http.",
   "ai_rem_https_url": "https://your-server",
   "_comment_mcp_register": "Optional. Das Setup zieht ai-rem-/Vault-Token per SSH von ssh_host (aus dessen .env-Dateien). mykeyvault wird als HTTP-MCP registriert: URL-Kandidaten (erst 'https_url' wenn ai-rem ueber https laeuft, dann 'http.url') werden vor der Registrierung auf Erreichbarkeit geprobt (DNS + TLS-Trust) — nur ein erreichbarer wird eingetragen. Empfehlung: EIN Hostname fuer alles mykeyvault-Bezogene, pfadbasiert geroutet (z. B. /mcp -> MCP-Container). tools wird aus 'stdio.repo' geklont + gebaut (npm) und als stdio-MCP mit TOOLS_MCP_REGISTRY_URL=stdio.registry_url registriert; das setzt node/npm/git auf der Maschine voraus - fehlen sie, gibt das Setup einen Installationshinweis und ueberspringt tools.",

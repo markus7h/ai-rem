@@ -97,10 +97,10 @@ Net ≈ 1,175,000 tokens / month saved
 
 | URL | Function |
 |---|---|
-| `/ui` | Backup management: manual, schedule, download, restore |
-| `/prefs` | Preferences manager: pin, context, sort order, delete |
+| `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`) |
+| `/prefs` | Preferences manager: pin, context, sort order, delete; archived preferences are dimmed, badged and listed below a separator (they never load into session context) |
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log |
-| `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons — public, for onboarding new machines |
+| `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons, incl. step-by-step SSH key guide (keygen, `~/.ssh/config` host block with user from `setup-config`, ssh-copy-id / PowerShell variant) — public, for onboarding new machines |
 
 **`/prefs`** — Full preferences manager in the browser: pin/unpin, context dropdown, manual sort order, delete. Click on the name to expand the full description inline. A dashed **context-limit line** marks how many preferences `memory_get_context` actually loads into the session (top `CONTEXT_PREF_LIMIT`, default 15 — pinned first, then sort order / recency); rows below it are dimmed. Accessible via the slash command `/ai-rem:prefedit`.
 
@@ -342,6 +342,9 @@ The setup endpoint optionally loads a `setup-config.json` from the server (`/set
 
 ```json
 {
+  "ssh_host": "your-server",
+  "ssh_user": "your-user",
+  "ssh_hostname": "your-server.lan",
   "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
   "permissions_deny": ["Bash(bw get *)", ...],
   "smb": {"mount": "/path/to/mount", "url": "smb://server/share"},
