@@ -100,6 +100,7 @@ Net ≈ 1,175,000 tokens / month saved
 | `/ui` | Backup management: manual, schedule, download, restore |
 | `/prefs` | Preferences manager: pin, context, sort order, delete |
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log |
+| `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons — public, for onboarding new machines |
 
 **`/prefs`** — Full preferences manager in the browser: pin/unpin, context dropdown, manual sort order, delete. Click on the name to expand the full description inline. A dashed **context-limit line** marks how many preferences `memory_get_context` actually loads into the session (top `CONTEXT_PREF_LIMIT`, default 15 — pinned first, then sort order / recency); rows below it are dimmed. Accessible via the slash command `/ai-rem:prefedit`.
 
@@ -194,7 +195,7 @@ All sensitive routes (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) require
 authentication. The server is **fail-closed**: without `AI_REM_API_TOKEN` it
 refuses to start. A request is authorized if **any** of these holds:
 
-1. the path is public — `/health`, `/setup`, `/setup.py`, `/setup.ps1`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (onboarding/login only, no private data);
+1. the path is public — `/health`, `/setup`, `/setup.py`, `/setup.ps1`, `/install`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (onboarding/login only, no private data);
 2. it originates from **loopback** *and the request is not proxied* (no `X-Forwarded-For`). In a bridge-network container this effectively only covers in-container traffic (e.g. the healthcheck): tunneled/proxied requests arrive as the Docker gateway IP, not loopback. Behind a same-host reverse proxy (e.g. Caddy) the peer is `127.0.0.1` but `X-Forwarded-For` is set, so the token is still required;
 3. it carries `Authorization: Bearer <AI_REM_API_TOKEN>` (constant-time compared) — used by MCP clients (Claude's `/mcp` channel);
 4. it carries a valid `ai_rem_session` cookie — used by the browser Web UI (see below).

@@ -104,6 +104,7 @@ Netto ≈ 1.175.000 Token / Monat gespart
 | `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore |
 | `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen |
 | `/cleanup` | Nightly-Cleanup: Konfiguration, manueller Lauf, Pending-Reviews, Lauf-Log |
+| `/install` | Client-Setup-Befehle pro Plattform (bash / PowerShell) mit Kopier-Buttons — public, fürs Onboarding neuer Maschinen |
 
 **`/prefs`** — Vollständiger Preferences-Manager im Browser: pin/unpin, Context-Dropdown, manuelle Reihenfolge (`sort_order`), löschen. Klick auf den Namen klappt die vollständige Beschreibung auf. Aufrufbar über den Slash-Command `/ai-rem:prefedit`.
 
@@ -179,7 +180,7 @@ Alle sensiblen Routen (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) verlangen
 Authentifizierung. Der Server ist **fail-closed**: ohne `AI_REM_API_TOKEN` startet
 er nicht. Ein Request ist autorisiert, wenn **eine** Bedingung gilt:
 
-1. Der Pfad ist public — `/health`, `/setup`, `/setup.py`, `/setup.ps1`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (nur Onboarding/Login, keine privaten Daten);
+1. Der Pfad ist public — `/health`, `/setup`, `/setup.py`, `/setup.ps1`, `/install`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (nur Onboarding/Login, keine privaten Daten);
 2. die Herkunft ist **Loopback** *und der Request ist nicht proxied* (kein `X-Forwarded-For`). Im Bridge-Netz deckt das faktisch nur containerinternen Verkehr ab (z. B. den Healthcheck): getunnelte/proxied Requests kommen als Docker-Gateway-IP an, nicht als Loopback. Hinter einem Same-Host-Reverse-Proxy (z. B. Caddy) ist die Peer-IP zwar `127.0.0.1`, aber `X-Forwarded-For` ist gesetzt → der Token wird trotzdem verlangt;
 3. er trägt `Authorization: Bearer <AI_REM_API_TOKEN>` (konstant-zeitlicher Vergleich) — von MCP-Clients (Claudes `/mcp`-Kanal);
 4. er trägt ein gültiges `ai_rem_session`-Cookie — von der Browser-Web-UI (siehe unten).

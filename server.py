@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.16"
+VERSION = "0.4.17"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -65,7 +65,7 @@ _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  #
 
 # Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck/Login — keine
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
-_PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1",
+_PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/install",
                          "/setup-config", "/hooks/", "/cmd", "/login")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
@@ -2232,7 +2232,7 @@ tr.ctxcut td{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spa
 </head>
 <body>
 <h1>Preferences</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext &nbsp;·&nbsp; Top <b>__CTX_LIMIT__</b> werden in den Kontext geladen</p>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <a href="/install">Install</a> &nbsp;·&nbsp; <span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext &nbsp;·&nbsp; Top <b>__CTX_LIMIT__</b> werden in den Kontext geladen</p>
 <table>
   <thead><tr>
     <th style="width:32px">📌</th>
@@ -2378,7 +2378,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </head>
 <body>
 <h1>ai-rem</h1>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
 <div class="grid">
 
   <div class="card">
@@ -2686,7 +2686,7 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
 </head>
 <body>
 <h1>Cleanup</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; nicht-destruktiv: archivieren statt löschen</p>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/install">Install</a> &nbsp;·&nbsp; nicht-destruktiv: archivieren statt löschen</p>
 
 <div class="card">
   <div class="row">
@@ -2856,6 +2856,75 @@ async def import_route(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+_INSTALL_HTML = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Install</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:820px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:32px}
+.grid{display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:22px}
+.cmd{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px;margin-bottom:8px}
+.cmd code{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;word-break:break-all}
+button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background .15s}
+button:hover{background:var(--ah)}
+.hint{font-size:12px;color:var(--muted);margin-top:8px}
+ul{margin:0 0 0 18px;font-size:13px}
+li{margin-bottom:4px}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--ok);color:var(--ok);border-radius:8px;padding:12px 18px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<h1>ai-rem installieren</h1>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; Client-Setup für eine neue Maschine — ein Befehl, idempotent (mehrfach ausführen ist sicher)</p>
+<div class="grid">
+
+  <div class="card">
+    <h2>macOS · Linux · WSL</h2>
+    <div class="cmd"><code id="c1">bash &lt;(curl -s __KG_URL__/setup)</code><button onclick="copyCmd('c1')">Kopieren</button></div>
+    <p class="hint">Im Terminal ausführen. Aus dem Claude-Code-Prompt: dieselbe Zeile mit vorangestelltem <code>!</code> (läuft in deiner Shell, der Agent führt sie nie selbst aus).</p>
+  </div>
+
+  <div class="card">
+    <h2>Windows (PowerShell, nativ)</h2>
+    <div class="cmd"><code id="c2">irm __KG_URL__/setup.ps1 | iex</code><button onclick="copyCmd('c2')">Kopieren</button></div>
+    <p class="hint">Kein WSL nötig — claude CLI nativ. Fehlt Python: <code>winget install Python.Python.3.12</code>, fehlt claude: <code>irm https://claude.ai/install.ps1 | iex</code></p>
+  </div>
+
+  <div class="card">
+    <h2>Voraussetzungen</h2>
+    <ul>
+      <li><b>Pflicht:</b> <code>python3</code> + <code>claude</code> CLI — fehlt etwas, bricht das Setup mit plattformspezifischem Install-Hinweis ab</li>
+      <li><b>Optional (nur tools-mcp):</b> <code>git</code>, Node.js &ge; 18 inkl. <code>npm</code></li>
+      <li><b>Secrets:</b> per SSH vom Server gezogen (SSH-Key vorausgesetzt) — alternativ Token im Env: <code>AI_REM_TOKEN=&lt;token&gt;</code> bzw. <code>$env:AI_REM_TOKEN</code></li>
+    </ul>
+    <p class="hint">Beide Wrapper laden dieselbe plattformneutrale Logik (<a href="/setup.py">setup.py</a>) — Verhalten auf allen Plattformen identisch. Details: <a href="/cmd">/setup-ai-rem Anleitung</a></p>
+  </div>
+
+</div>
+<div class="toast" id="toast">Kopiert ✓</div>
+<script>
+function copyCmd(id){
+  const text=document.getElementById(id).textContent;
+  // navigator.clipboard braucht Secure Context (https) - Fallback fuer http://host:3456
+  const done=()=>{const t=document.getElementById('toast');t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1500);};
+  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(text).then(done);return;}
+  const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';
+  document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done();
+}
+</script>
+</body></html>""".replace("__KG_URL__", _KG_URL)
+
 _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2881,6 +2950,7 @@ button:hover{background:#2e7d32}
 <label for="token">API-Token</label>
 <input type="password" id="token" name="token" autofocus autocomplete="current-password">
 <button type="submit">Anmelden</button>
+<p style="margin:16px 0 0;font-size:12px;text-align:center"><a href="/install" style="color:#388e3c">Neue Maschine einrichten →</a></p>
 </form>
 </body></html>"""
 
@@ -2937,6 +3007,13 @@ async def logout_route(request: Request) -> Response:
 @mcp.custom_route("/ui", methods=["GET"])
 async def ui_route(request: Request) -> Response:
     return Response(content=_UI_HTML, media_type="text/html")
+
+
+@mcp.custom_route("/install", methods=["GET"])
+async def install_route(request: Request) -> Response:
+    # Public (wie /setup*): Onboarding-Seite mit den Setup-Aufrufen pro Plattform —
+    # eine neue Maschine hat noch kein Session-Cookie.
+    return Response(content=_INSTALL_HTML, media_type="text/html")
 
 
 @mcp.custom_route("/api/status", methods=["GET"])
