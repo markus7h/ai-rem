@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.17"
+VERSION = "0.4.18"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -3824,6 +3824,7 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
         db_exec(
             f"""MATCH (e:Entity {{type: 'Preference'}})
                {_ctx_clause('e', context, where=True)}
+               {_archived_clause('e', include_archived, where=not context)}
                RETURN e.name, e.descr, e.pinned, e.sort_order, e.updated_at""",
             ctx_param,
         )
