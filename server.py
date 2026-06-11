@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.13"
+VERSION = "0.4.14"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1083,10 +1083,37 @@ else:
     print("✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:" % os.environ.get("SSH_HOST", "mystorage"))
     print("  AI_REM_TOKEN=<token> bash <(curl -s %s/setup)" % os.environ.get("KG_URL", ""))
 
-# (2) mykeyvault als HTTP-MCP registrieren (kein SMB/node nötig)
+# (2) mykeyvault als HTTP-MCP registrieren (kein SMB/node nötig).
+# Kandidaten nur registrieren, wenn der Host von DIESER Maschine aus antwortet
+# (DNS aufloesbar + TLS vertraut) — eine 4xx-Antwort genuegt als Lebenszeichen.
+# Verhindert tote Registrierungen (z. B. https-Host ohne DNS-Eintrag).
+import urllib.error
+
+
+def _reachable(url):
+    try:
+        urllib.request.urlopen(url, timeout=5)
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+
 reg_http = reg.get("http") or {}
 _ai_https = servers.get("ai-rem", {}).get("url", "").startswith("https")
-mkv_url = os.environ.get("MYKEYVAULT_URL") or (reg_http.get("https_url") if (_ai_https and reg_http.get("https_url")) else reg_http.get("url"))
+mkv_url = os.environ.get("MYKEYVAULT_URL", "")
+if not mkv_url:
+    _cands = []
+    if _ai_https and reg_http.get("https_url"):
+        _cands.append(reg_http["https_url"])
+    if reg_http.get("url"):
+        _cands.append(reg_http["url"])
+    for _c in _cands:
+        if _reachable(_c):
+            mkv_url = _c
+            break
+        print("⚠ mykeyvault-Kandidat nicht erreichbar/vertraut, ueberspringe: %s" % _c)
 if mkv_url and tok:
     existed = "mykeyvault" in servers
     servers["mykeyvault"] = {"type": "http", "url": mkv_url,
