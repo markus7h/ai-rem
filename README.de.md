@@ -179,7 +179,7 @@ Alle sensiblen Routen (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) verlangen
 Authentifizierung. Der Server ist **fail-closed**: ohne `AI_REM_API_TOKEN` startet
 er nicht. Ein Request ist autorisiert, wenn **eine** Bedingung gilt:
 
-1. Der Pfad ist public — `/health`, `/setup`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (nur Onboarding/Login, keine privaten Daten);
+1. Der Pfad ist public — `/health`, `/setup`, `/setup.py`, `/setup.ps1`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (nur Onboarding/Login, keine privaten Daten);
 2. die Herkunft ist **Loopback** *und der Request ist nicht proxied* (kein `X-Forwarded-For`). Im Bridge-Netz deckt das faktisch nur containerinternen Verkehr ab (z. B. den Healthcheck): getunnelte/proxied Requests kommen als Docker-Gateway-IP an, nicht als Loopback. Hinter einem Same-Host-Reverse-Proxy (z. B. Caddy) ist die Peer-IP zwar `127.0.0.1`, aber `X-Forwarded-For` ist gesetzt → der Token wird trotzdem verlangt;
 3. er trägt `Authorization: Bearer <AI_REM_API_TOKEN>` (konstant-zeitlicher Vergleich) — von MCP-Clients (Claudes `/mcp`-Kanal);
 4. er trägt ein gültiges `ai_rem_session`-Cookie — von der Browser-Web-UI (siehe unten).
@@ -236,6 +236,19 @@ docker compose pull && docker compose up -d
 ```
 Führe aus: bash <(curl -s http://<SERVER_IP>:3456/setup)
 ```
+
+Auf **nativem Windows** (PowerShell, kein WSL nötig):
+
+```
+irm http://<SERVER_IP>:3456/setup.ps1 | iex
+```
+
+Beide Wrapper laden dieselbe plattformneutrale Logik (`/setup.py`,
+benötigt Python 3) — das Verhalten ist auf macOS, Linux, WSL und
+Windows identisch. Auf Windows werden die Hooks als
+`python -X utf8 <hook>`-Commands registriert und der Secret-Pull
+nutzt den mitgelieferten OpenSSH-Client (alternativ
+`$env:AI_REM_TOKEN` setzen).
 
 Das Skript erledigt automatisch:
 1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren

@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.15"
+VERSION = "0.4.16"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -65,7 +65,8 @@ _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  #
 
 # Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck/Login — keine
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
-_PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup-config", "/hooks/", "/cmd", "/login")
+_PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1",
+                         "/setup-config", "/hooks/", "/cmd", "/login")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 # ─── Setup-Endpunkt Inhalte ──────────────────────────────────────────────────
@@ -206,11 +207,14 @@ if "--refresh" in sys.argv:
     sys.exit(0)
 
 # Refresh detached anstossen (kein Startup-Delay trotz ~8s bw).
+# start_new_session ist POSIX-only; Windows-Pendant ist DETACHED_PROCESS.
+_detach = ({"creationflags": 0x00000008} if sys.platform == "win32"
+           else {"start_new_session": True})
 try:
     subprocess.Popen(
         [sys.executable, os.path.abspath(__file__), "--refresh"],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        **_detach,
     )
 except Exception:
     pass
@@ -520,17 +524,27 @@ def check_tools():
 
 def _ai_rem_cli():
     import shutil, glob
+    # X_OK ist auf Windows bedeutungslos; dort wird die CLI eh via python gestartet.
+    _usable = lambda p: p and os.path.isfile(p) and (sys.platform == "win32" or os.access(p, os.X_OK))
     for p in [os.environ.get("AI_REM_CLI", ""),
               os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
               os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem")]:
-        if p and os.path.isfile(p) and os.access(p, os.X_OK):
+        if _usable(p):
             return p
     # Nicht-Standard-Layouts (z.B. SMB-Mount /Volumes/<x>/myCode).
     for pat in ("/Volumes/*/myCode/github/ai-rem/bin/ai-rem",):
         for p in sorted(glob.glob(pat)):
-            if os.path.isfile(p) and os.access(p, os.X_OK):
+            if _usable(p):
                 return p
     return shutil.which("ai-rem") or ""
+
+
+def _cli_cmd(cli, *args):
+    # bin/ai-rem ist ein Shebang-Script — Windows kann das nicht direkt starten.
+    # -X utf8: die CLI liest UTF-8-Transcripts/JSON ohne explizites encoding=.
+    if sys.platform == "win32":
+        return [sys.executable, "-X", "utf8", cli, *args]
+    return [cli, *args]
 
 
 def check_ollama_and_catchup():
@@ -547,7 +561,7 @@ def check_ollama_and_catchup():
     cli = _ai_rem_cli()
     if cli:
         try:
-            subprocess.Popen([cli, "catchup"],
+            subprocess.Popen(_cli_cmd(cli, "catchup"),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
@@ -661,14 +675,24 @@ CLI_GLOBS = ["/Volumes/*/myCode/github/ai-rem/bin/ai-rem"]
 
 
 def _find_cli():
+    # X_OK ist auf Windows bedeutungslos; dort wird die CLI eh via python gestartet.
+    _usable = lambda p: p and Path(p).is_file() and (sys.platform == "win32" or os.access(p, os.X_OK))
     for p in CANDIDATE_CLI_PATHS:
-        if p and Path(p).is_file() and os.access(p, os.X_OK):
+        if _usable(p):
             return p
     for pat in CLI_GLOBS:
         for p in sorted(glob.glob(pat)):
-            if Path(p).is_file() and os.access(p, os.X_OK):
+            if _usable(p):
                 return p
     return shutil.which("ai-rem") or ""
+
+
+def _cli_cmd(cli, *args):
+    # bin/ai-rem ist ein Shebang-Script — Windows kann das nicht direkt starten.
+    # -X utf8: die CLI liest UTF-8-Transcripts/JSON ohne explizites encoding=.
+    if sys.platform == "win32":
+        return [sys.executable, "-X", "utf8", cli, *args]
+    return [cli, *args]
 
 
 def _notify(text):
@@ -766,13 +790,13 @@ def main():
 
     # Erst die md-Fallback-Queue nachziehen (no-op wenn Ollama down / Queue leer).
     try:
-        subprocess.run([cli, "catchup"], capture_output=True, text=True, timeout=TIMEOUT_S)
+        subprocess.run(_cli_cmd(cli, "catchup"), capture_output=True, text=True, timeout=TIMEOUT_S)
     except Exception:
         pass
 
     try:
         proc = subprocess.run(
-            [cli, "ingest", "--transcript", transcript],
+            _cli_cmd(cli, "ingest", "--transcript", transcript),
             capture_output=True, text=True, timeout=TIMEOUT_S,
         )
         if proc.returncode != 0:
@@ -843,494 +867,637 @@ if __name__ == "__main__":
     sys.exit(0)
 '''
 
-SETUP_SCRIPT = r"""#!/usr/bin/env bash
-# ai-rem Setup - plattformunabhaengig (macOS, Ubuntu/Linux, Windows-WSL).
-# Harte Abhaengigkeiten: bash, curl, python3, claude CLI.
-# Optional (nur tools-mcp): git, node >= 18, npm.
-set -e
-KG_URL="__KG_URL__"
-CLAUDE_HOME="$HOME/.claude"
-HOOK_PATH="$CLAUDE_HOME/hooks/system-check.py"
+# setup.py: die GESAMTE Setup-Logik, plattformneutral (macOS/Linux/WSL/Windows).
+# Eine Quelle der Wahrheit - die /setup- (bash) und /setup.ps1-Wrapper laden und
+# starten nur dieses Script.
+SETUP_PY = r"""#!/usr/bin/env python3
+# ai-rem Setup — plattformneutral (macOS, Ubuntu/Linux, WSL, Windows).
+# Wird von den Wrappern geholt+gestartet:
+#   bash <(curl -s __KG_URL__/setup)          (macOS/Linux/WSL)
+#   irm __KG_URL__/setup.ps1 | iex            (Windows PowerShell)
+# Harte Abhaengigkeiten: python3, claude CLI. Optional (nur tools-mcp): git, node >= 18, npm.
+import glob
+import json
+import os
+import re
+import shutil
+import ssl
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
 
-# set -e bricht sonst still mittendrin ab - bei Fehler klar melden, wo es stand.
-trap 'rc=$?; echo ""; echo "✗ Setup abgebrochen (Exit $rc, Skript-Zeile $LINENO)."; echo "  Nach Behebung erneut ausfuehren:  bash <(curl -s '"$KG_URL"'/setup)"' ERR
+KG_URL = '__KG_URL__'
+HOME = os.path.expanduser('~')
+CLAUDE_HOME = os.path.join(HOME, '.claude')
+IS_WIN = sys.platform == 'win32'
 
-# ── Plattform erkennen (steuert die Installations-Hinweise) ──────────────────
-case "$(uname -s)" in
-    Darwin) PLATFORM="macos" ;;
-    Linux)  if grep -qi microsoft /proc/version 2>/dev/null; then PLATFORM="wsl"; else PLATFORM="linux"; fi ;;
-    *)      PLATFORM="other" ;;
-esac
+# Windows-Konsole (cp850/cp1252) wuerde sonst an ✓/✗ scheitern.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
-# hint_install <apt-pakete> <brew-pakete>
-hint_install() {
-    case "$PLATFORM" in
-        macos) echo "    Installieren (macOS):          brew install $2" ;;
-        wsl)   echo "    Installieren (WSL/Ubuntu):     sudo apt update && sudo apt install -y $1"
-               echo "    Hinweis WSL: IN der WSL-Distribution installieren, nicht auf der Windows-Seite." ;;
-        linux) echo "    Installieren (Ubuntu/Debian):  sudo apt update && sudo apt install -y $1" ;;
-        *)     echo "    Installieren: $1" ;;
-    esac
-}
 
-echo "=== ai-rem Setup ($PLATFORM) ==="
+def detect_platform():
+    if IS_WIN:
+        return 'windows'
+    if sys.platform == 'darwin':
+        return 'macos'
+    if sys.platform.startswith('linux'):
+        try:
+            with open('/proc/version', encoding='utf-8', errors='replace') as f:
+                if 'microsoft' in f.read().lower():
+                    return 'wsl'
+        except OSError:
+            pass
+        return 'linux'
+    return 'other'
 
-# ── Preflight: harte Abhaengigkeiten gesammelt pruefen ────────────────────────
-MISSING=""
-for _c in curl python3; do command -v "$_c" >/dev/null 2>&1 || MISSING="$MISSING $_c"; done
-if [ -n "$MISSING" ]; then
-    echo "✗ Fehlende Programme:$MISSING"
-    hint_install "${MISSING# }" "${MISSING# }"
-    echo "    Danach erneut ausfuehren:  bash <(curl -s $KG_URL/setup)"
-    exit 1
-fi
 
-if ! command -v claude >/dev/null 2>&1; then
-    echo "✗ claude CLI fehlt - ohne sie kann das Setup nichts registrieren."
-    echo "    Installieren (alle Plattformen):  curl -fsSL https://claude.ai/install.sh | bash"
-    echo "    …oder via npm:                    npm install -g @anthropic-ai/claude-code"
-    [ "$PLATFORM" = "wsl" ] && echo "    Hinweis WSL: claude muss IN der WSL-Distribution installiert sein ('which claude' in WSL pruefen)."
-    echo "    Danach erneut ausfuehren:  bash <(curl -s $KG_URL/setup)"
-    exit 1
-fi
+PLATFORM = detect_platform()
 
-# Atomarer Download: erst in Temp-Datei, nur bei Erfolg + nicht-leer per mv ersetzen.
-# Verhindert, dass ein transienter Serverfehler eine bestehende Datei truncatet.
-fetch_to() {
-    _url="$1"; _dst="$2"
-    _tmp="$(mktemp "${_dst}.XXXXXX")" || { echo "✗ mktemp fehlgeschlagen: $_dst"; return 1; }
-    if curl -sf "$_url" > "$_tmp" && [ -s "$_tmp" ]; then
-        mv "$_tmp" "$_dst"
-        return 0
-    fi
-    rm -f "$_tmp"
-    echo "✗ Download fehlgeschlagen, $_dst unveraendert: $_url"
-    return 1
-}
 
-# Alte kg-memory Registrierung entfernen
-if claude mcp list 2>/dev/null | grep -q "kg-memory"; then
-    claude mcp remove kg-memory
-    echo "✓ Alte kg-memory Registrierung entfernt"
-fi
+def rerun_hint():
+    # Die jeweils richtige "erneut ausfuehren"-Zeile fuer diese Plattform.
+    if PLATFORM == 'windows':
+        return 'irm %s/setup.ps1 | iex' % KG_URL
+    return 'bash <(curl -s %s/setup)' % KG_URL
 
-# Neue ai-rem Registrierung
-if claude mcp list 2>/dev/null | grep -q "ai-rem"; then
-    echo "✓ MCP bereits registriert"
-elif claude mcp add --transport http --scope user ai-rem "$KG_URL/mcp"; then
-    echo "✓ MCP registriert (ai-rem)"
-else
-    echo "✗ 'claude mcp add' fehlgeschlagen - claude CLI zu alt? Aktualisieren mit:  claude update"
-    echo "  Danach erneut ausfuehren:  bash <(curl -s $KG_URL/setup)"
-    exit 1
-fi
 
-mkdir -p "$CLAUDE_HOME/hooks" "$CLAUDE_HOME/commands"
+def hint_install(apt_pkgs, brew_pkgs=None, winget_pkgs=None):
+    brew_pkgs = brew_pkgs or apt_pkgs
+    if PLATFORM == 'macos':
+        print('    Installieren (macOS):          brew install %s' % brew_pkgs)
+    elif PLATFORM == 'wsl':
+        print('    Installieren (WSL/Ubuntu):     sudo apt update && sudo apt install -y %s' % apt_pkgs)
+        print('    Hinweis WSL: IN der WSL-Distribution installieren, nicht auf der Windows-Seite.')
+    elif PLATFORM == 'linux':
+        print('    Installieren (Ubuntu/Debian):  sudo apt update && sudo apt install -y %s' % apt_pkgs)
+    elif PLATFORM == 'windows' and winget_pkgs:
+        print('    Installieren (Windows):        winget install %s' % winget_pkgs)
+    else:
+        print('    Installieren: %s' % apt_pkgs)
 
-# Setup-Config laden (persoenliche Entities, Permissions, mcp_register — nicht im Repo)
-SETUP_CFG=$(curl -sf "$KG_URL/setup-config" 2>/dev/null || echo '{}')
-[ "$SETUP_CFG" = '{}' ] && echo "⚠ setup-config nicht ladbar - personalisierte Teile (tools-mcp, Vault, Entities) werden uebersprungen"
-export SETUP_CFG
 
-# ── Runtime-MCP-Endpoint waehlen: TLS (https) bevorzugt, sonst http-Fallback ──
-# Der Bootstrap-Fetch oben laeuft bewusst weiter ueber http://IP (kein Cert noetig).
-# Den /mcp-Kanal (traegt den Bearer bei JEDEM Call) auf https umstellen, ABER nur
-# wenn der TLS-Host auf DIESER Maschine erreichbar UND vertraut ist (curl ohne -k) —
-# sonst Fallback auf $KG_URL/mcp, damit ein Host ohne Caddy-Root-CA nicht 401/Cert-bricht.
-MCP_ENDPOINT="$KG_URL/mcp"
-HTTPS_BASE="$(printf '%s' "$SETUP_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ai_rem_https_url",""))' 2>/dev/null || true)"
-if [ -n "$HTTPS_BASE" ]; then
-    if curl -sf --max-time 6 "$HTTPS_BASE/health" >/dev/null 2>&1; then
-        MCP_ENDPOINT="$HTTPS_BASE/mcp"
-        echo "✓ TLS-Endpoint nutzbar: $MCP_ENDPOINT"
-    elif curl -skf --max-time 6 "$HTTPS_BASE/health" >/dev/null 2>&1; then
-        # Erreichbar, aber Handshake scheitert ohne -k => Root-CA fehlt auf dieser Maschine.
-        echo "⚠ TLS-Endpoint $HTTPS_BASE erreichbar, aber Zertifikat NICHT vertraut - bleibe bei $MCP_ENDPOINT"
-        echo "  Fuer TLS die Caddy-Root-CA dieser Maschine bekannt machen"
-        echo "  (liegt im Caddy-Container unter /data/caddy/pki/authorities/local/root.crt):"
-        case "$PLATFORM" in
-            macos) echo "    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt" ;;
-            *)     echo "    sudo cp root.crt /usr/local/share/ca-certificates/caddy-root.crt && sudo update-ca-certificates"
-                   [ "$PLATFORM" = "wsl" ] && echo "    (in der WSL-Distribution ausfuehren - der Windows-Zertifikatsspeicher zaehlt hier NICHT)" ;;
-        esac
-        echo "    Danach Setup erneut ausfuehren - der /mcp-Kanal migriert dann automatisch auf https."
-    else
-        echo "ℹ TLS-Endpoint $HTTPS_BASE nicht erreichbar - bleibe bei $MCP_ENDPOINT"
-    fi
-fi
-export MCP_ENDPOINT
+def http_get(url, timeout=10, insecure=False):
+    # insecure=True ist NUR die Erreichbarkeits-Probe (Ersatz fuer curl -k) —
+    # nie fuer Inhalte, die danach verwendet werden.
+    ctx = ssl._create_unverified_context() if insecure else None
+    req = urllib.request.Request(url, headers={'User-Agent': 'ai-rem-setup'})
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        return resp.read()
+
+
+def fetch_to(url, dst):
+    # Atomarer Download: erst Temp-Datei im Zielverzeichnis, nur bei Erfolg +
+    # nicht-leer per os.replace ersetzen. Verhindert, dass ein transienter
+    # Serverfehler eine bestehende Datei truncatet.
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    try:
+        data = http_get(url)
+    except Exception:
+        data = b''
+    if not data:
+        print('✗ Download fehlgeschlagen, %s unveraendert: %s' % (dst, url))
+        return False
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dst), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+        os.replace(tmp, dst)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def hook_command(path):
+    # Unix: Shebang + chmod reichen, der Command ist der nackte Pfad.
+    # Windows: kein Shebang-Exec — python explizit davorsetzen. -X utf8, weil
+    # die Hooks JSON/MD mit UTF-8-Inhalt ohne explizites encoding= lesen und
+    # der Windows-Default (cp1252) daran scheitern wuerde.
+    if IS_WIN:
+        return '"%s" -X utf8 "%s"' % (sys.executable, path)
+    return path
+
+
+def run(cmd, timeout=120, capture=True, cwd=None):
+    return subprocess.run(cmd, capture_output=capture, text=True,
+                          timeout=timeout, cwd=cwd)
+
+
+# ── Preflight: claude CLI ─────────────────────────────────────────────────────
+
+def find_claude():
+    claude = shutil.which('claude')
+    if claude:
+        return claude
+    print('✗ claude CLI fehlt - ohne sie kann das Setup nichts registrieren.')
+    if PLATFORM == 'windows':
+        print('    Installieren (Windows):           irm https://claude.ai/install.ps1 | iex')
+    else:
+        print('    Installieren (alle Plattformen):  curl -fsSL https://claude.ai/install.sh | bash')
+    print('    …oder via npm:                    npm install -g @anthropic-ai/claude-code')
+    if PLATFORM == 'wsl':
+        print("    Hinweis WSL: claude muss IN der WSL-Distribution installiert sein ('which claude' in WSL pruefen).")
+    print('    Danach erneut ausfuehren:  %s' % rerun_hint())
+    sys.exit(1)
+
+
+def register_mcp(claude):
+    try:
+        listed = run([claude, 'mcp', 'list'], timeout=60).stdout or ''
+    except Exception:
+        listed = ''
+    if 'kg-memory' in listed:
+        run([claude, 'mcp', 'remove', 'kg-memory'], timeout=60)
+        print('✓ Alte kg-memory Registrierung entfernt')
+    if 'ai-rem' in listed:
+        print('✓ MCP bereits registriert')
+        return
+    p = run([claude, 'mcp', 'add', '--transport', 'http', '--scope', 'user',
+             'ai-rem', KG_URL + '/mcp'], timeout=120)
+    if p.returncode != 0:
+        print("✗ 'claude mcp add' fehlgeschlagen - claude CLI zu alt? Aktualisieren mit:  claude update")
+        if (p.stderr or '').strip():
+            print('  | ' + (p.stderr or '').strip().splitlines()[-1])
+        print('  Danach erneut ausfuehren:  %s' % rerun_hint())
+        sys.exit(1)
+    print('✓ MCP registriert (ai-rem)')
+
+
+# ── setup-config + TLS-Endpoint-Wahl ─────────────────────────────────────────
+
+def load_setup_config():
+    try:
+        cfg = json.loads(http_get(KG_URL + '/setup-config').decode('utf-8'))
+    except Exception:
+        cfg = {}
+    if not cfg:
+        print('⚠ setup-config nicht ladbar - personalisierte Teile (tools-mcp, Vault, Entities) werden uebersprungen')
+    return cfg
+
+
+def choose_mcp_endpoint(setup_cfg):
+    # TLS (https) bevorzugt, sonst http-Fallback. Der Bootstrap-Fetch laeuft
+    # bewusst weiter ueber http://IP (kein Cert noetig). Den /mcp-Kanal (traegt
+    # den Bearer bei JEDEM Call) auf https umstellen, ABER nur wenn der TLS-Host
+    # auf DIESER Maschine erreichbar UND vertraut ist — sonst Fallback, damit
+    # ein Host ohne Caddy-Root-CA nicht 401/Cert-bricht.
+    endpoint = KG_URL + '/mcp'
+    https_base = setup_cfg.get('ai_rem_https_url', '')
+    if not https_base:
+        return endpoint
+
+    def probe(insecure):
+        try:
+            http_get(https_base + '/health', timeout=6, insecure=insecure)
+            return True
+        except urllib.error.HTTPError:
+            return True  # Antwort vom Server = erreichbar
+        except Exception:
+            return False
+
+    if probe(insecure=False):
+        endpoint = https_base + '/mcp'
+        print('✓ TLS-Endpoint nutzbar: %s' % endpoint)
+    elif probe(insecure=True):
+        # Erreichbar, aber Handshake scheitert ohne insecure => Root-CA fehlt hier.
+        print('⚠ TLS-Endpoint %s erreichbar, aber Zertifikat NICHT vertraut - bleibe bei %s' % (https_base, endpoint))
+        print('  Fuer TLS die Caddy-Root-CA dieser Maschine bekannt machen')
+        print('  (liegt im Caddy-Container unter /data/caddy/pki/authorities/local/root.crt):')
+        if PLATFORM == 'macos':
+            print('    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt')
+        elif PLATFORM == 'windows':
+            print('    certutil -addstore -f Root root.crt   (Admin-PowerShell)')
+            print('    Fuer Node/npm zusaetzlich:  setx NODE_EXTRA_CA_CERTS C:\\pfad\\zu\\root.crt')
+        else:
+            print('    sudo cp root.crt /usr/local/share/ca-certificates/caddy-root.crt && sudo update-ca-certificates')
+            if PLATFORM == 'wsl':
+                print('    (in der WSL-Distribution ausfuehren - der Windows-Zertifikatsspeicher zaehlt hier NICHT)')
+        print('    Danach Setup erneut ausfuehren - der /mcp-Kanal migriert dann automatisch auf https.')
+    else:
+        print('ℹ TLS-Endpoint %s nicht erreichbar - bleibe bei %s' % (https_base, endpoint))
+    return endpoint
+
 
 # ── Bootstrap-Secrets per SSH von mystorage ziehen ───────────────────────────
-# /setup ist oeffentlich (anonymes curl), Secrets liegen also NICHT im Script-Body.
-# Stattdessen zieht der bereits per SSH-Key vertraute Host die Tokens direkt aus
-# den .env-Dateien auf dem Server — ai-rem bleibt damit KEIN Secret-Verteiler.
-# Override: AI_REM_TOKEN / VAULT_API_TOKEN im Env haben Vorrang vor dem SSH-Pull.
-SSH_HOST="${AI_REM_SSH_HOST:-$(printf '%s' "$SETUP_CFG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ssh_host","mystorage"))' 2>/dev/null || echo mystorage)}"
-ssh_ok=0
-if ssh -o BatchMode=yes -o ConnectTimeout=5 "$SSH_HOST" true 2>/dev/null; then ssh_ok=1; fi
-if [ "$ssh_ok" != 1 ]; then echo "⚠ SSH zu $SSH_HOST nicht erreichbar — Secrets nur aus Env"; fi
+# /setup ist oeffentlich (anonymer Download), Secrets liegen also NICHT im
+# Script-Body. Stattdessen zieht der bereits per SSH-Key vertraute Host die
+# Tokens direkt aus den .env-Dateien auf dem Server — ai-rem bleibt damit KEIN
+# Secret-Verteiler. Override: AI_REM_TOKEN / VAULT_API_TOKEN im Env haben Vorrang.
 
-if [ -z "${AI_REM_TOKEN:-}" ] && [ "$ssh_ok" = 1 ]; then
-    AI_REM_TOKEN=$(ssh "$SSH_HOST" "grep -h '^AI_REM_API_TOKEN=' mydocker/compose-files/ai-rem/.env 2>/dev/null | head -1 | cut -d= -f2-" 2>/dev/null | tr -d '\r\n' || true)
-fi
-export AI_REM_TOKEN
-if [ -z "${VAULT_API_TOKEN:-}" ] && [ "$ssh_ok" = 1 ]; then
-    VAULT_API_TOKEN=$(ssh "$SSH_HOST" "grep -h '^VAULT_API_TOKEN=' mydocker/compose-files/mykeyvault/.env 2>/dev/null | head -1 | cut -d= -f2-" 2>/dev/null | tr -d '\r\n' || true)
-fi
-export VAULT_API_TOKEN
+def pull_secrets(setup_cfg):
+    ssh_host = os.environ.get('AI_REM_SSH_HOST') or setup_cfg.get('ssh_host', 'mystorage')
+    ssh = shutil.which('ssh')
+    ssh_ok = False
+    if ssh:
+        try:
+            ssh_ok = run([ssh, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
+                          ssh_host, 'true'], timeout=20).returncode == 0
+        except Exception:
+            ssh_ok = False
+    if not ssh_ok:
+        extra = '' if ssh else ' (ssh-Client fehlt)'
+        print('⚠ SSH zu %s nicht erreichbar%s — Secrets nur aus Env' % (ssh_host, extra))
 
-# == tools-mcp (stdio) klonen+bauen, falls in setup-config ====================
-TOOLS_MCP_ENTRY=""
-_t_get() { printf '%s' "$SETUP_CFG" | python3 -c "import json,sys;print(json.load(sys.stdin).get('mcp_register',{}).get('tools',{}).get('stdio',{}).get('$1',''))" 2>/dev/null || true; }
-TOOLS_REG_URL="$(_t_get registry_url)"
-if [ -n "$TOOLS_REG_URL" ]; then
-  _miss=""
-  for _c in node npm git; do command -v "$_c" >/dev/null 2>&1 || _miss="$_miss $_c"; done
-  NODE_MAJOR=0
-  command -v node >/dev/null 2>&1 && NODE_MAJOR="$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
-  case "$NODE_MAJOR" in (*[!0-9]*|'') NODE_MAJOR=0 ;; esac
-  if [ -z "$_miss" ] && [ "$NODE_MAJOR" -ge 18 ]; then
-    T_REPO="$(_t_get repo)"; T_ENTRY="$(_t_get entry)"; [ -n "$T_ENTRY" ] || T_ENTRY="dist/index.js"
-    T_DIR_RAW="$(_t_get install_dir)"; [ -n "$T_DIR_RAW" ] || T_DIR_RAW="$HOME/Code/tools-mcp"
-    T_DIR="${T_DIR_RAW/#\~/$HOME}"
-    if [ -d "$T_DIR/.git" ]; then git -C "$T_DIR" pull --ff-only >/dev/null 2>&1 || echo "⚠ git pull in $T_DIR fehlgeschlagen - baue mit vorhandenem Stand"
-    else mkdir -p "$(dirname "$T_DIR")" && git clone --depth 1 "$T_REPO" "$T_DIR" >/dev/null 2>&1 || echo "✗ git clone $T_REPO fehlgeschlagen (Netz/Repo-Zugriff pruefen)"; fi
-    if [ -d "$T_DIR" ]; then
-      NPM_LOG="$(mktemp)"
-      if ! ( cd "$T_DIR" && npm install --no-audit --no-fund && npm run build ) >"$NPM_LOG" 2>&1; then
-        echo "✗ tools-mcp npm-Build fehlgeschlagen - letzte Log-Zeilen:"
-        tail -n 12 "$NPM_LOG" | sed 's/^/    | /'
-        if grep -qiE 'SELF_SIGNED_CERT|UNABLE_TO_GET_ISSUER|UNABLE_TO_VERIFY_LEAF|CERT_UNTRUSTED|certificate' "$NPM_LOG"; then
-          echo "  ↳ Zertifikatsproblem (Proxy/eigene Root-CA in der npm-Kette). Abhilfe:"
-          echo "      npm config set cafile /pfad/zur/root-ca.pem"
-          echo "      oder:  export NODE_EXTRA_CA_CERTS=/pfad/zur/root-ca.pem"
-        fi
-        grep -qi 'EACCES' "$NPM_LOG" && echo "  ↳ Rechteproblem (EACCES): Besitzer von $T_DIR und ~/.npm pruefen - npm nie mit sudo ausfuehren."
-      fi
-      rm -f "$NPM_LOG"
-    fi
-    if [ -f "$T_DIR/$T_ENTRY" ]; then TOOLS_MCP_ENTRY="$T_DIR/$T_ENTRY"; echo "OK tools-mcp gebaut: $TOOLS_MCP_ENTRY"; else echo "!! tools-mcp Build fehlgeschlagen - tools nicht registriert. Manuell pruefen: cd $T_DIR && npm install && npm run build"; fi
-  else
-    echo ""
-    echo "================================================================"
-    echo "!!  tools-MCP NICHT eingerichtet - Node.js >= 18 inkl. npm + git wird benoetigt."
-    [ -n "$_miss" ] && echo "    Fehlende Programme:$_miss"
-    [ -z "$_miss" ] && [ "$NODE_MAJOR" -lt 18 ] && echo "    Node.js v$NODE_MAJOR ist zu alt (mindestens v18 noetig)."
-    case "$PLATFORM" in
-      macos) echo "    Installieren:  brew install node git" ;;
-      wsl|linux)
-        echo "    Ubuntu/Debian-apt liefert oft ein zu altes Node - aktuelles Node via NodeSource:"
-        echo "      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs git"
-        echo "    Alternativ nvm:  https://github.com/nvm-sh/nvm  (nvm install --lts)"
-        [ "$PLATFORM" = "wsl" ] && echo "    Hinweis WSL: Node IN der WSL-Distribution installieren; tools-mcp nicht unter /mnt/c ablegen (langsam, exec-Probleme)." ;;
-      *)     echo "    Installieren:  Node.js >= 18 inkl. npm + git" ;;
-    esac
-    echo "    Danach erneut ausfuehren:  bash <(curl -s __KG_URL__/setup)"
-    echo "================================================================"
-  fi
-fi
-export TOOLS_MCP_ENTRY TOOLS_REG_URL
+    def remote_env(remote_file, key):
+        try:
+            p = run([ssh, ssh_host,
+                     "grep -h '^%s=' %s 2>/dev/null | head -1 | cut -d= -f2-" % (key, remote_file)],
+                    timeout=20)
+            return (p.stdout or '').strip()
+        except Exception:
+            return ''
+
+    ai_rem_token = os.environ.get('AI_REM_TOKEN', '')
+    if not ai_rem_token and ssh_ok:
+        ai_rem_token = remote_env('mydocker/compose-files/ai-rem/.env', 'AI_REM_API_TOKEN')
+    vault_token = os.environ.get('VAULT_API_TOKEN', '')
+    if not vault_token and ssh_ok:
+        vault_token = remote_env('mydocker/compose-files/mykeyvault/.env', 'VAULT_API_TOKEN')
+    return ssh_host, ai_rem_token, vault_token
+
+
+# ── tools-mcp (stdio) klonen+bauen, falls in setup-config ────────────────────
+
+def build_tools_mcp(setup_cfg):
+    stdio = setup_cfg.get('mcp_register', {}).get('tools', {}).get('stdio', {})
+    reg_url = stdio.get('registry_url', '')
+    if not reg_url:
+        return '', ''
+
+    miss = [c for c in ('node', 'npm', 'git') if not shutil.which(c)]
+    node_major = 0
+    if shutil.which('node'):
+        try:
+            v = run(['node', '-v'], timeout=20).stdout.strip().lstrip('v')
+            node_major = int(v.split('.')[0])
+        except Exception:
+            node_major = 0
+    if miss or node_major < 18:
+        print('')
+        print('================================================================')
+        print('!!  tools-MCP NICHT eingerichtet - Node.js >= 18 inkl. npm + git wird benoetigt.')
+        if miss:
+            print('    Fehlende Programme: %s' % ' '.join(miss))
+        elif node_major < 18:
+            print('    Node.js v%s ist zu alt (mindestens v18 noetig).' % node_major)
+        if PLATFORM == 'macos':
+            print('    Installieren:  brew install node git')
+        elif PLATFORM == 'windows':
+            print('    Installieren:  winget install OpenJS.NodeJS.LTS Git.Git')
+        elif PLATFORM in ('wsl', 'linux'):
+            print('    Ubuntu/Debian-apt liefert oft ein zu altes Node - aktuelles Node via NodeSource:')
+            print('      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs git')
+            print('    Alternativ nvm:  https://github.com/nvm-sh/nvm  (nvm install --lts)')
+            if PLATFORM == 'wsl':
+                print('    Hinweis WSL: Node IN der WSL-Distribution installieren; tools-mcp nicht unter /mnt/c ablegen (langsam, exec-Probleme).')
+        else:
+            print('    Installieren:  Node.js >= 18 inkl. npm + git')
+        print('    Danach erneut ausfuehren:  %s' % rerun_hint())
+        print('================================================================')
+        return '', reg_url
+
+    repo = stdio.get('repo', '')
+    entry = stdio.get('entry') or 'dist/index.js'
+    tdir = os.path.expanduser(stdio.get('install_dir') or os.path.join('~', 'Code', 'tools-mcp'))
+    git = shutil.which('git')
+    npm = shutil.which('npm')
+
+    if os.path.isdir(os.path.join(tdir, '.git')):
+        if run([git, '-C', tdir, 'pull', '--ff-only'], timeout=120).returncode != 0:
+            print('⚠ git pull in %s fehlgeschlagen - baue mit vorhandenem Stand' % tdir)
+    else:
+        os.makedirs(os.path.dirname(tdir), exist_ok=True)
+        if run([git, 'clone', '--depth', '1', repo, tdir], timeout=300).returncode != 0:
+            print('✗ git clone %s fehlgeschlagen (Netz/Repo-Zugriff pruefen)' % repo)
+
+    if os.path.isdir(tdir):
+        log = ''
+        for cmd in ([npm, 'install', '--no-audit', '--no-fund'], [npm, 'run', 'build']):
+            p = run(cmd, timeout=600, cwd=tdir)
+            log += (p.stdout or '') + (p.stderr or '')
+            if p.returncode != 0:
+                print('✗ tools-mcp npm-Build fehlgeschlagen - letzte Log-Zeilen:')
+                for line in log.splitlines()[-12:]:
+                    print('    | ' + line)
+                if re.search(r'SELF_SIGNED_CERT|UNABLE_TO_GET_ISSUER|UNABLE_TO_VERIFY_LEAF|CERT_UNTRUSTED|certificate', log, re.I):
+                    print('  ↳ Zertifikatsproblem (Proxy/eigene Root-CA in der npm-Kette). Abhilfe:')
+                    print('      npm config set cafile /pfad/zur/root-ca.pem')
+                    print('      oder:  NODE_EXTRA_CA_CERTS=/pfad/zur/root-ca.pem setzen')
+                if 'EACCES' in log:
+                    print('  ↳ Rechteproblem (EACCES): Besitzer von %s und ~/.npm pruefen - npm nie mit sudo ausfuehren.' % tdir)
+                break
+
+    entry_path = os.path.join(tdir, *entry.split('/'))
+    if os.path.isfile(entry_path):
+        print('OK tools-mcp gebaut: %s' % entry_path)
+        return entry_path, reg_url
+    print('!! tools-mcp Build fehlgeschlagen - tools nicht registriert. Manuell pruefen: cd %s && npm install && npm run build' % tdir)
+    return '', reg_url
+
 
 # ── ai-rem Bearer setzen + mykeyvault bootstrappen (atomar in ~/.claude.json) ─
 # Damit die ERSTE Session nicht 401t; danach refresht der SessionStart-Hook.
-KG_URL="$KG_URL" CLAUDE_HOME="$CLAUDE_HOME" SSH_HOST="$SSH_HOST" python3 - << 'PYEOF' || true
-import json, os, shutil, urllib.request
 
-cj = os.path.expanduser("~/.claude.json")
-if not os.path.exists(cj):
-    raise SystemExit("⚠ ~/.claude.json fehlt - claude einmal interaktiv starten, dann Setup erneut ausfuehren")
-cfg = json.load(open(cj))
-servers = cfg.setdefault("mcpServers", {})
-if "ai-rem" not in servers:
-    raise SystemExit("⚠ ai-rem nicht in ~/.claude.json registriert - Bearer/Vault-Bootstrap uebersprungen")
+def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
+                       vault_token, tools_entry, tools_reg_url):
+    cj = os.path.join(HOME, '.claude.json')
+    if not os.path.exists(cj):
+        print('⚠ ~/.claude.json fehlt - claude einmal interaktiv starten, dann Setup erneut ausfuehren')
+        return ''
+    with open(cj, encoding='utf-8') as f:
+        cfg = json.load(f)
+    servers = cfg.setdefault('mcpServers', {})
+    if 'ai-rem' not in servers:
+        print('⚠ ai-rem nicht in ~/.claude.json registriert - Bearer/Vault-Bootstrap uebersprungen')
+        return ''
 
-scfg = json.loads(os.environ.get("SETUP_CFG", "{}"))
-reg = scfg.get("mcp_register", {}).get("mykeyvault", {})
-vault_url = os.environ.get("VAULT_API_URL") or reg.get("vault_url", "http://mystorage:8223")
-vault_tok = os.environ.get("VAULT_API_TOKEN", "")
+    reg = setup_cfg.get('mcp_register', {}).get('mykeyvault', {})
+    vault_url = os.environ.get('VAULT_API_URL') or reg.get('vault_url', 'http://mystorage:8223')
 
-# Runtime-Endpoint setzen (https-mit-Fallback aus dem Bash-Teil) — migriert auch
-# bestehende http-Registrierungen bei Re-Run auf TLS.
-mcp_endpoint = os.environ.get("MCP_ENDPOINT", "")
-if mcp_endpoint:
-    servers["ai-rem"]["url"] = mcp_endpoint
+    # Runtime-Endpoint setzen (https-mit-Fallback) — migriert auch bestehende
+    # http-Registrierungen bei Re-Run auf TLS.
+    if mcp_endpoint:
+        servers['ai-rem']['url'] = mcp_endpoint
 
+    def from_vault(url, vt):
+        req = urllib.request.Request(url.rstrip('/') + '/secret/ai-rem-api-token',
+                                     headers={'Authorization': 'Bearer ' + vt})
+        return json.loads(urllib.request.urlopen(req, timeout=10).read().decode('utf-8')).get('password', '')
 
-def _from_vault(url, vt):
-    req = urllib.request.Request(url.rstrip("/") + "/secret/ai-rem-api-token",
-                                 headers={"Authorization": "Bearer " + vt})
-    return json.loads(urllib.request.urlopen(req, timeout=10).read().decode()).get("password", "")
+    # (1) ai-rem Bearer: AI_REM_TOKEN (SSH-Pull/Env) > frischer Vault-Read > bestehende Koordinaten
+    tok = ai_rem_token
+    if not tok and vault_token:
+        try:
+            tok = from_vault(vault_url, vault_token)
+        except Exception:
+            pass
+    if not tok and 'mykeyvault' in servers:
+        try:
+            e = servers['mykeyvault']['env']
+            tok = from_vault(e['VAULT_API_URL'], e['VAULT_API_TOKEN'])
+        except Exception:
+            pass
 
-
-# (1) ai-rem Bearer: AI_REM_TOKEN (SSH-Pull/Env) > frischer Vault-Read > bestehende Koordinaten
-tok = os.environ.get("AI_REM_TOKEN", "")
-if not tok and vault_tok:
-    try:
-        tok = _from_vault(vault_url, vault_tok)
-    except Exception:
-        pass
-if not tok and "mykeyvault" in servers:
-    try:
-        e = servers["mykeyvault"]["env"]
-        tok = _from_vault(e["VAULT_API_URL"], e["VAULT_API_TOKEN"])
-    except Exception:
-        pass
-
-if tok:
-    servers["ai-rem"].setdefault("headers", {})["Authorization"] = "Bearer " + tok
-    print("✓ ai-rem Bearer-Header gesetzt")
-else:
-    print("✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:" % os.environ.get("SSH_HOST", "mystorage"))
-    print("  AI_REM_TOKEN=<token> bash <(curl -s %s/setup)" % os.environ.get("KG_URL", ""))
-
-# (2) mykeyvault als HTTP-MCP registrieren (kein SMB/node nötig).
-# Kandidaten nur registrieren, wenn der Host von DIESER Maschine aus antwortet
-# (DNS aufloesbar + TLS vertraut) — eine 4xx-Antwort genuegt als Lebenszeichen.
-# Verhindert tote Registrierungen (z. B. https-Host ohne DNS-Eintrag).
-import urllib.error
-
-
-def _reachable(url):
-    try:
-        urllib.request.urlopen(url, timeout=5)
-        return True
-    except urllib.error.HTTPError:
-        return True
-    except Exception:
-        return False
-
-
-reg_http = reg.get("http") or {}
-_ai_https = servers.get("ai-rem", {}).get("url", "").startswith("https")
-mkv_url = os.environ.get("MYKEYVAULT_URL", "")
-if not mkv_url:
-    _cands = []
-    if _ai_https and reg_http.get("https_url"):
-        _cands.append(reg_http["https_url"])
-    if reg_http.get("url"):
-        _cands.append(reg_http["url"])
-    for _c in _cands:
-        if _reachable(_c):
-            mkv_url = _c
-            break
-        print("⚠ mykeyvault-Kandidat nicht erreichbar/vertraut, ueberspringe: %s" % _c)
-if mkv_url and tok:
-    existed = "mykeyvault" in servers
-    servers["mykeyvault"] = {"type": "http", "url": mkv_url,
-                             "headers": {"Authorization": "Bearer " + tok}}
-    print("✓ mykeyvault " + ("migriert" if existed else "registriert") + (" (https)" if (mkv_url or "").startswith("https") else " (http)"))
-if vault_tok:
-    vf = os.path.join(os.environ["CLAUDE_HOME"], "ai-rem-vault.env")
-    fd = os.open(vf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write("VAULT_API_URL=%s\nVAULT_API_TOKEN=%s\n" % (vault_url, vault_tok))
-
-# (3) tools als stdio-MCP registrieren (gebaut aus Registry-Repo)
-_tools_entry = os.environ.get("TOOLS_MCP_ENTRY", "")
-_tools_reg = os.environ.get("TOOLS_REG_URL", "")
-if _tools_entry and _tools_reg:
-    _existed = "tools" in servers
-    servers["tools"] = {"type": "stdio", "command": "node",
-                        "args": [_tools_entry],
-                        "env": {"TOOLS_MCP_REGISTRY_URL": _tools_reg}}
-    print("✓ tools " + ("migriert" if _existed else "registriert") + " (stdio)")
-
-tmp = cj + ".tmp"
-json.dump(cfg, open(tmp, "w"), indent=2, ensure_ascii=False)
-os.replace(tmp, cj)
-PYEOF
-
-# settings-template.json: immer aus SETUP_CFG neu schreiben, damit Config-
-# Aenderungen (Permissions, Deny, SMB, …) bei jedem Re-Run propagieren.
-TEMPLATE_PATH="$CLAUDE_HOME/settings-template.json"
-python3 -c "
-import json, os
-cfg = json.loads(os.environ.get('SETUP_CFG', '{}'))
-tmpl = {
-    'version': '2026-05-25',
-    'ai_rem_endpoint': os.environ.get('MCP_ENDPOINT', '$KG_URL/mcp'),
-    'smb': cfg.get('smb', {}),
-    'mcp_stdio_servers': cfg.get('mcp_stdio_servers', {}),
-    'tools_scripts_dir': cfg.get('tools_scripts_dir', ''),
-    'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto'},
-    'permissions_allow_portable': cfg.get('permissions_allow_portable', [
-        'Bash', 'Skill(update-config)', 'Skill(update-config:*)',
-        'mcp__ai-rem__memory_status', 'mcp__ai-rem__memory_get_context',
-        'mcp__ai-rem__memory_search', 'mcp__ai-rem__memory_add',
-        'mcp__ai-rem__memory_list', 'mcp__ai-rem__memory_get_relations',
-        'mcp__ai-rem__memory_relate', 'mcp__ai-rem__memory_delete',
-    ]),
-    'permissions_allow_path_templates': ['Read(//{HOME}/.claude/**)', 'Read(//{TMP}/**)'],
-    'permissions_deny': cfg.get('permissions_deny', []),
-    'hooks': {
-        'SessionStart': ['system-check.py (ai-rem, SMB, MCP, settings-sync, tools)'],
-        'UserPromptSubmit': ['Tool-Discovery'],
-        'PreToolUse': ['claude-md-guard.py (warnt bei CLAUDE.md-Edits → ai-rem)'],
-    },
-    'additional_directories_templates': ['{HOME}/.claude', '{HOME}'],
-    'path_mappings': cfg.get('path_mappings', {}),
-}
-with open(os.path.expanduser('~/.claude/settings-template.json'), 'w') as f:
-    json.dump(tmpl, f, indent=2, ensure_ascii=False); f.write('\n')
-print('✓ settings-template.json aktualisiert')
-"
-
-# SessionStart-Hook: konsolidiertes system-check.py
-if fetch_to "$KG_URL/hooks/system-check.py" "$HOOK_PATH"; then
-    chmod +x "$HOOK_PATH"
-    echo "✓ SessionStart-Hook: $HOOK_PATH"
-fi
-
-# PreCompact + SessionEnd Hook: auto-memory.py (Transcript → ai-rem)
-AUTO_MEM_HOOK="$CLAUDE_HOME/hooks/auto-memory.py"
-if fetch_to "$KG_URL/hooks/auto-memory.py" "$AUTO_MEM_HOOK"; then
-    chmod +x "$AUTO_MEM_HOOK"
-    echo "✓ Auto-Memory-Hook: $AUTO_MEM_HOOK"
-fi
-
-# PreToolUse Hook: claude-md-guard.py (warnt bei CLAUDE.md-Edits)
-GUARD_HOOK="$CLAUDE_HOME/hooks/claude-md-guard.py"
-if fetch_to "$KG_URL/hooks/claude-md-guard.py" "$GUARD_HOOK"; then
-    chmod +x "$GUARD_HOOK"
-    echo "✓ CLAUDE.md-Guard-Hook: $GUARD_HOOK"
-fi
-
-# settings.json: Permissions, konsolidierter Hook, alte Hooks entfernen
-HOOK_PATH="$HOOK_PATH" AUTO_MEM_HOOK="$AUTO_MEM_HOOK" GUARD_HOOK="$GUARD_HOOK" python3 - << 'PYEOF'
-import json
-import os
-
-path = os.path.expanduser("~/.claude/settings.json")
-hook_path = os.environ["HOOK_PATH"]
-tmpl_path = os.path.expanduser("~/.claude/settings-template.json")
-data = json.load(open(path)) if os.path.exists(path) else {}
-tmpl = json.load(open(tmpl_path)) if os.path.exists(tmpl_path) else {}
-
-perms = data.setdefault("permissions", {})
-allow = perms.setdefault("allow", [])
-allow[:] = [p.replace("mcp__kg-memory__", "mcp__ai-rem__") for p in allow]
-
-allow_set = set(allow)
-added = []
-for p in tmpl.get("permissions_allow_portable", []):
-    if p not in allow_set and not any(
-        a.endswith("*") and p.startswith(a[:-1]) for a in allow_set
-    ):
-        allow.append(p)
-        added.append(p)
-
-deny = perms.setdefault("deny", [])
-deny_set = set(deny)
-added_deny = []
-for p in tmpl.get("permissions_deny", []):
-    if p not in deny_set:
-        deny.append(p)
-        added_deny.append(p)
-
-# autoMemoryEnabled ist ein System-Invariant (Auto-Memory ist deaktiviert) und wird
-# erzwungen; model/theme sind User-Preferences und werden nur gesetzt falls noch leer.
-FORCED = {"autoMemoryEnabled"}
-for key, val in tmpl.get("general", {}).items():
-    if key in FORCED:
-        data[key] = val
+    if tok:
+        servers['ai-rem'].setdefault('headers', {})['Authorization'] = 'Bearer ' + tok
+        print('✓ ai-rem Bearer-Header gesetzt')
     else:
-        data.setdefault(key, val)
+        print('✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:' % ssh_host)
+        if PLATFORM == 'windows':
+            print('  $env:AI_REM_TOKEN="<token>"; %s' % rerun_hint())
+        else:
+            print('  AI_REM_TOKEN=<token> %s' % rerun_hint())
 
-hooks = data.setdefault("hooks", {})
-sessions = hooks.setdefault("SessionStart", [])
-group = next((g for g in sessions if g.get("matcher") == "*"), None)
-if group is None:
-    group = {"matcher": "*", "hooks": []}
-    sessions.append(group)
-group.setdefault("hooks", [])
+    # (2) mykeyvault als HTTP-MCP registrieren (kein SMB/node noetig).
+    # Kandidaten nur registrieren, wenn der Host von DIESER Maschine aus antwortet
+    # (DNS aufloesbar + TLS vertraut) — eine 4xx-Antwort genuegt als Lebenszeichen.
+    def reachable(url):
+        try:
+            http_get(url, timeout=5)
+            return True
+        except urllib.error.HTTPError:
+            return True
+        except Exception:
+            return False
 
-OLD_HOOKS = [
-    "ai-rem-bootstrap.py", "ai-rem-bootstrap.sh",
-    "settings-sync-check.py",
-]
-OLD_HOOKS.extend(json.loads(os.environ.get("SETUP_CFG", "{}")).get("old_hooks", []))
-group["hooks"] = [
-    h for h in group["hooks"]
-    if not any(h.get("command", "").endswith(o) for o in OLD_HOOKS)
-]
+    reg_http = reg.get('http') or {}
+    ai_https = servers.get('ai-rem', {}).get('url', '').startswith('https')
+    mkv_url = os.environ.get('MYKEYVAULT_URL', '')
+    if not mkv_url:
+        cands = []
+        if ai_https and reg_http.get('https_url'):
+            cands.append(reg_http['https_url'])
+        if reg_http.get('url'):
+            cands.append(reg_http['url'])
+        for c in cands:
+            if reachable(c):
+                mkv_url = c
+                break
+            print('⚠ mykeyvault-Kandidat nicht erreichbar/vertraut, ueberspringe: %s' % c)
+    if mkv_url and tok:
+        existed = 'mykeyvault' in servers
+        servers['mykeyvault'] = {'type': 'http', 'url': mkv_url,
+                                 'headers': {'Authorization': 'Bearer ' + tok}}
+        print('✓ mykeyvault ' + ('migriert' if existed else 'registriert')
+              + (' (https)' if mkv_url.startswith('https') else ' (http)'))
+    if vault_token:
+        vf = os.path.join(CLAUDE_HOME, 'ai-rem-vault.env')
+        fd = os.open(vf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write('VAULT_API_URL=%s\nVAULT_API_TOKEN=%s\n' % (vault_url, vault_token))
 
-hook_added = False
-if not any(h.get("command") == hook_path for h in group["hooks"]):
-    group["hooks"].append({"type": "command", "command": hook_path, "timeout": 15})
-    hook_added = True
+    # (3) tools als stdio-MCP registrieren (gebaut aus Registry-Repo)
+    if tools_entry and tools_reg_url:
+        existed = 'tools' in servers
+        servers['tools'] = {'type': 'stdio', 'command': 'node',
+                            'args': [tools_entry],
+                            'env': {'TOOLS_MCP_REGISTRY_URL': tools_reg_url}}
+        print('✓ tools ' + ('migriert' if existed else 'registriert') + ' (stdio)')
 
-auto_mem_hook = os.environ.get("AUTO_MEM_HOOK", "")
-auto_mem_added = []
-if auto_mem_hook:
-    for event in ("PreCompact", "SessionEnd"):
-        ev = hooks.setdefault(event, [])
-        g = next((x for x in ev if x.get("matcher") == "*"), None)
+    tmp = cj + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, cj)
+    return tok
+
+
+# ── settings-template.json: immer aus setup-config neu schreiben ─────────────
+# Damit Config-Aenderungen (Permissions, Deny, SMB, …) bei jedem Re-Run propagieren.
+
+def write_settings_template(setup_cfg, mcp_endpoint):
+    tmpl = {
+        'version': '2026-05-25',
+        'ai_rem_endpoint': mcp_endpoint or (KG_URL + '/mcp'),
+        'smb': setup_cfg.get('smb', {}),
+        'mcp_stdio_servers': setup_cfg.get('mcp_stdio_servers', {}),
+        'tools_scripts_dir': setup_cfg.get('tools_scripts_dir', ''),
+        'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto'},
+        'permissions_allow_portable': setup_cfg.get('permissions_allow_portable', [
+            'Bash', 'Skill(update-config)', 'Skill(update-config:*)',
+            'mcp__ai-rem__memory_status', 'mcp__ai-rem__memory_get_context',
+            'mcp__ai-rem__memory_search', 'mcp__ai-rem__memory_add',
+            'mcp__ai-rem__memory_list', 'mcp__ai-rem__memory_get_relations',
+            'mcp__ai-rem__memory_relate', 'mcp__ai-rem__memory_delete',
+        ]),
+        'permissions_allow_path_templates': ['Read(//{HOME}/.claude/**)', 'Read(//{TMP}/**)'],
+        'permissions_deny': setup_cfg.get('permissions_deny', []),
+        'hooks': {
+            'SessionStart': ['system-check.py (ai-rem, SMB, MCP, settings-sync, tools)'],
+            'UserPromptSubmit': ['Tool-Discovery'],
+            'PreToolUse': ['claude-md-guard.py (warnt bei CLAUDE.md-Edits → ai-rem)'],
+        },
+        'additional_directories_templates': ['{HOME}/.claude', '{HOME}'],
+        'path_mappings': setup_cfg.get('path_mappings', {}),
+    }
+    with open(os.path.join(CLAUDE_HOME, 'settings-template.json'), 'w', encoding='utf-8') as f:
+        json.dump(tmpl, f, indent=2, ensure_ascii=False)
+        f.write('\n')
+    print('✓ settings-template.json aktualisiert')
+
+
+# ── Hooks deployen ────────────────────────────────────────────────────────────
+
+def install_hooks():
+    paths = {}
+    for fname, label in (('system-check.py', 'SessionStart-Hook'),
+                         ('auto-memory.py', 'Auto-Memory-Hook'),
+                         ('claude-md-guard.py', 'CLAUDE.md-Guard-Hook')):
+        dst = os.path.join(CLAUDE_HOME, 'hooks', fname)
+        if fetch_to(KG_URL + '/hooks/' + fname, dst):
+            if not IS_WIN:
+                os.chmod(dst, 0o755)
+            paths[fname] = dst
+            print('✓ %s: %s' % (label, dst))
+    return paths
+
+
+# ── settings.json: Permissions, Hooks registrieren, alte Hooks entfernen ─────
+
+def update_settings(setup_cfg, mcp_endpoint, hook_paths):
+    path = os.path.join(CLAUDE_HOME, 'settings.json')
+    tmpl_path = os.path.join(CLAUDE_HOME, 'settings-template.json')
+    data = {}
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    tmpl = {}
+    if os.path.exists(tmpl_path):
+        with open(tmpl_path, encoding='utf-8') as f:
+            tmpl = json.load(f)
+
+    perms = data.setdefault('permissions', {})
+    allow = perms.setdefault('allow', [])
+    allow[:] = [p.replace('mcp__kg-memory__', 'mcp__ai-rem__') for p in allow]
+
+    allow_set = set(allow)
+    added = []
+    for p in tmpl.get('permissions_allow_portable', []):
+        if p not in allow_set and not any(
+            a.endswith('*') and p.startswith(a[:-1]) for a in allow_set
+        ):
+            allow.append(p)
+            added.append(p)
+
+    deny = perms.setdefault('deny', [])
+    deny_set = set(deny)
+    added_deny = []
+    for p in tmpl.get('permissions_deny', []):
+        if p not in deny_set:
+            deny.append(p)
+            added_deny.append(p)
+
+    # autoMemoryEnabled ist ein System-Invariant (Auto-Memory ist deaktiviert) und
+    # wird erzwungen; model/theme sind User-Preferences, nur gesetzt falls leer.
+    forced = {'autoMemoryEnabled'}
+    for key, val in tmpl.get('general', {}).items():
+        if key in forced:
+            data[key] = val
+        else:
+            data.setdefault(key, val)
+
+    def hook_group(event, matcher):
+        groups = hooks.setdefault(event, [])
+        g = next((x for x in groups if x.get('matcher') == matcher), None)
         if g is None:
-            g = {"matcher": "*", "hooks": []}
-            ev.append(g)
-        g.setdefault("hooks", [])
-        if not any(h.get("command") == auto_mem_hook for h in g["hooks"]):
-            g["hooks"].append({"type": "command", "command": auto_mem_hook, "timeout": 120})
-            auto_mem_added.append(event)
+            g = {'matcher': matcher, 'hooks': []}
+            groups.append(g)
+        g.setdefault('hooks', [])
+        return g
 
-guard_hook = os.environ.get("GUARD_HOOK", "")
-guard_added = False
-if guard_hook:
-    pre = hooks.setdefault("PreToolUse", [])
-    g = next((x for x in pre if x.get("matcher") == "Write|Edit|MultiEdit"), None)
-    if g is None:
-        g = {"matcher": "Write|Edit|MultiEdit", "hooks": []}
-        pre.append(g)
-    g.setdefault("hooks", [])
-    if not any(h.get("command") == guard_hook for h in g["hooks"]):
-        g["hooks"].append({"type": "command", "command": guard_hook, "timeout": 10})
-        guard_added = True
+    def has_hook(group, hook_file):
+        # Erkennt beide Command-Formen: nackter Pfad (Unix) und
+        # 'python "...\\hook.py"' (Windows) — auch ueber Re-Runs hinweg.
+        base = os.path.basename(hook_file)
+        return any(base in h.get('command', '') for h in group['hooks'])
 
-# Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
-# - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
-# - AI_REM_CLI per Discovery (inkl. SMB-Mount /Volumes/<x>/myCode)
-# setdefault => bewusste manuelle Overrides bleiben erhalten.
-import glob as _glob
-env = data.setdefault("env", {})
-_mcp_ep = os.environ.get("MCP_ENDPOINT", "")
-if _mcp_ep:
-    env.setdefault("AI_REM_ENDPOINT", _mcp_ep)
-_cli = ""
-for _c in (os.environ.get("AI_REM_CLI", ""),
-           os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
-           os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem")):
-    if _c and os.path.isfile(_c) and os.access(_c, os.X_OK):
-        _cli = _c
-        break
-if not _cli:
-    for _p in sorted(_glob.glob("/Volumes/*/myCode/github/ai-rem/bin/ai-rem")):
-        if os.path.isfile(_p) and os.access(_p, os.X_OK):
-            _cli = _p
+    hooks = data.setdefault('hooks', {})
+    group = hook_group('SessionStart', '*')
+
+    old_hooks = ['ai-rem-bootstrap.py', 'ai-rem-bootstrap.sh', 'settings-sync-check.py']
+    old_hooks.extend(setup_cfg.get('old_hooks', []))
+    group['hooks'] = [
+        h for h in group['hooks']
+        if not any(o in h.get('command', '') for o in old_hooks)
+    ]
+
+    hook_path = hook_paths.get('system-check.py', '')
+    hook_added = False
+    if hook_path and not has_hook(group, hook_path):
+        group['hooks'].append({'type': 'command', 'command': hook_command(hook_path), 'timeout': 15})
+        hook_added = True
+
+    auto_mem = hook_paths.get('auto-memory.py', '')
+    auto_mem_added = []
+    if auto_mem:
+        for event in ('PreCompact', 'SessionEnd'):
+            g = hook_group(event, '*')
+            if not has_hook(g, auto_mem):
+                g['hooks'].append({'type': 'command', 'command': hook_command(auto_mem), 'timeout': 120})
+                auto_mem_added.append(event)
+
+    guard = hook_paths.get('claude-md-guard.py', '')
+    guard_added = False
+    if guard:
+        g = hook_group('PreToolUse', 'Write|Edit|MultiEdit')
+        if not has_hook(g, guard):
+            g['hooks'].append({'type': 'command', 'command': hook_command(guard), 'timeout': 10})
+            guard_added = True
+
+    # Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
+    # - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
+    # - AI_REM_CLI per Discovery (inkl. SMB-Mount /Volumes/<x>/myCode auf macOS)
+    # setdefault => bewusste manuelle Overrides bleiben erhalten.
+    env = data.setdefault('env', {})
+    if mcp_endpoint:
+        env.setdefault('AI_REM_ENDPOINT', mcp_endpoint)
+
+    def usable_cli(p):
+        # X_OK ist auf Windows bedeutungslos; dort ruft der Hook die CLI eh via python auf.
+        return p and os.path.isfile(p) and (IS_WIN or os.access(p, os.X_OK))
+
+    cli = ''
+    for c in (os.environ.get('AI_REM_CLI', ''),
+              os.path.join(HOME, 'myCode', 'github', 'ai-rem', 'bin', 'ai-rem'),
+              os.path.join(HOME, '.local', 'share', 'ai-rem', 'bin', 'ai-rem')):
+        if usable_cli(c):
+            cli = c
             break
-if _cli:
-    env.setdefault("AI_REM_CLI", _cli)
+    if not cli and PLATFORM == 'macos':
+        for p in sorted(glob.glob('/Volumes/*/myCode/github/ai-rem/bin/ai-rem')):
+            if usable_cli(p):
+                cli = p
+                break
+    if cli:
+        env.setdefault('AI_REM_CLI', cli)
 
-json.dump(data, open(path, "w"), indent=2, ensure_ascii=False)
-print("\n".join([p for p in ("" if not added else f"  +{len(added)} allow permissions",
-                             "" if not added_deny else f"  +{len(added_deny)} deny rules",
-                             "  SessionStart-Hook" if hook_added else "",
-                             f"  Auto-Memory-Hooks: {', '.join(auto_mem_added)}" if auto_mem_added else "",
-                             "  CLAUDE.md-Guard-Hook" if guard_added else "",
-                             "  autoMemoryEnabled=false") if p]))
-print("✓ settings.json aktualisiert")
-PYEOF
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    for line in ('' if not added else '  +%d allow permissions' % len(added),
+                 '' if not added_deny else '  +%d deny rules' % len(added_deny),
+                 '  SessionStart-Hook' if hook_added else '',
+                 '  Auto-Memory-Hooks: %s' % ', '.join(auto_mem_added) if auto_mem_added else '',
+                 '  CLAUDE.md-Guard-Hook' if guard_added else '',
+                 '  autoMemoryEnabled=false'):
+        if line:
+            print(line)
+    print('✓ settings.json aktualisiert')
 
-# Auto-Memory md-Fallback: leere Datei anlegen (wird via @import in CLAUDE.md geladen)
-mkdir -p "$CLAUDE_HOME/auto-memory"
-[ -f "$CLAUDE_HOME/auto-memory/fallback.md" ] || : > "$CLAUDE_HOME/auto-memory/fallback.md"
 
-# CLAUDE.md: minimaler Pointer auf ai-rem (Regeln kommen ueber MCP Server Instructions)
-python3 - << 'PYEOF'
-import os
-import re
+# ── CLAUDE.md: minimaler Pointer auf ai-rem ──────────────────────────────────
+# (Regeln kommen ueber MCP Server Instructions)
 
-path = os.path.expanduser("~/.claude/CLAUDE.md")
-new_block = '''
+def update_claude_md():
+    path = os.path.join(CLAUDE_HOME, 'CLAUDE.md')
+    new_block = '''
 ## ai-rem
 ai-rem ist die einzige Wissensquelle für persistenten Kontext. Auto-Memory ist deaktiviert.
 Nutzungsregeln kommen über die MCP Server Instructions, Verhaltensregeln aus den ai-rem Preferences.
@@ -1338,117 +1505,236 @@ Nutzungsregeln kommen über die MCP Server Instructions, Verhaltensregeln aus de
 <!-- Auto-Memory md-Fallback: bei Ollama-Ausfall befüllt, vom catchup geleert -->
 @~/.claude/auto-memory/fallback.md
 '''
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = ''
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
 
-os.makedirs(os.path.dirname(path), exist_ok=True)
-text = open(path).read() if os.path.exists(path) else ""
+    # Bestehenden ai-rem-Block (alt oder neu) entfernen
+    for pat in (re.compile(r'\n## Knowledge Graph Memory \(ai-rem\)[\s\S]*?(?=\n## |\Z)'),
+                re.compile(r'\n## ai-rem[\s\S]*?(?=\n## |\Z)')):
+        text = pat.sub('', text)
 
-# Bestehenden ai-rem-Block (alt oder neu) entfernen
-for pat in [
-    re.compile(r"\n## Knowledge Graph Memory \(ai-rem\)[\s\S]*?(?=\n## |\Z)"),
-    re.compile(r"\n## ai-rem[\s\S]*?(?=\n## |\Z)"),
-]:
-    text, n = pat.subn("", text)
+    if not text.endswith('\n'):
+        text += '\n'
+    text += new_block
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    print('✓ CLAUDE.md aktualisiert (minimaler ai-rem Pointer)')
 
-if not text.endswith("\n"):
-    text += "\n"
-text += new_block
 
-open(path, "w").write(text)
-print("✓ CLAUDE.md aktualisiert (minimaler ai-rem Pointer)")
-PYEOF
+# ── Slash-Commands installieren ──────────────────────────────────────────────
 
-# Legacy-Slash-Command entfernen
-LEGACY="$CLAUDE_HOME/commands/setup-kg-memory.md"
-[ -f "$LEGACY" ] && rm "$LEGACY" && echo "✓ Alter /setup-kg-memory Command entfernt"
+def install_commands():
+    legacy = os.path.join(CLAUDE_HOME, 'commands', 'setup-kg-memory.md')
+    if os.path.isfile(legacy):
+        os.unlink(legacy)
+        print('✓ Alter /setup-kg-memory Command entfernt')
 
-# Slash-Commands installieren
-fetch_to "$KG_URL/cmd" "$CLAUDE_HOME/commands/setup-ai-rem.md" \
-    && echo "✓ /setup-ai-rem Command angelegt"
+    if fetch_to(KG_URL + '/cmd', os.path.join(CLAUDE_HOME, 'commands', 'setup-ai-rem.md')):
+        print('✓ /setup-ai-rem Command angelegt')
+    if fetch_to(KG_URL + '/cmd/prefedit', os.path.join(CLAUDE_HOME, 'commands', 'ai-rem', 'prefedit.md')):
+        print('✓ /ai-rem:prefedit Command angelegt')
+    if fetch_to(KG_URL + '/cmd/memory-cleanup', os.path.join(CLAUDE_HOME, 'commands', 'memory-cleanup.md')):
+        print('✓ /memory-cleanup Command angelegt')
 
-mkdir -p "$CLAUDE_HOME/commands/ai-rem"
-fetch_to "$KG_URL/cmd/prefedit" "$CLAUDE_HOME/commands/ai-rem/prefedit.md" \
-    && echo "✓ /ai-rem:prefedit Command angelegt"
 
-fetch_to "$KG_URL/cmd/memory-cleanup" "$CLAUDE_HOME/commands/memory-cleanup.md" \
-    && echo "✓ /memory-cleanup Command angelegt"
+# ── Preferences & Tool-Entities direkt via MCP API anlegen ───────────────────
+# (kein Claude-Token-Verbrauch)
 
-# Preferences & Tool-Entities direkt via MCP API anlegen (kein Claude-Token-Verbrauch)
-KG_URL="$KG_URL" python3 - << 'PYSETUP'
-import json, os, re, sys, urllib.request
+def create_entities(setup_cfg, ai_rem_token):
+    mcp_url = KG_URL + '/mcp'
+    token = ai_rem_token or os.environ.get('AI_REM_TOKEN', '')
+    if not token:
+        try:
+            with open(os.path.join(HOME, '.claude.json'), encoding='utf-8') as f:
+                auth = json.load(f)['mcpServers']['ai-rem']['headers']['Authorization']
+            token = auth.split()[-1] if auth else ''
+        except Exception:
+            token = ''
 
-BASE    = os.environ["KG_URL"]
-MCP_URL = BASE + "/mcp"
-_SID    = None
+    sid = {'v': None}
 
-def _token():
-    t = os.environ.get("AI_REM_TOKEN", "")
-    if t:
-        return t
+    def post(body, with_sid=True):
+        hdrs = {'Content-Type': 'application/json',
+                'Accept': 'application/json, text/event-stream'}
+        if token:
+            hdrs['Authorization'] = 'Bearer ' + token
+        if with_sid and sid['v']:
+            hdrs['mcp-session-id'] = sid['v']
+        req = urllib.request.Request(mcp_url, data=json.dumps(body).encode('utf-8'),
+                                     headers=hdrs, method='POST')
+        return urllib.request.urlopen(req, timeout=10)
+
+    def parse(resp):
+        raw = resp.read().decode('utf-8')
+        m = re.search(r'^data: (.+)$', raw, re.MULTILINE)
+        try:
+            obj = json.loads(m.group(1) if m else raw)
+            return obj.get('result', {}).get('content', [{}])[0].get('text', '')
+        except Exception:
+            return ''
+
+    def session():
+        if sid['v']:
+            return sid['v']
+        resp = post({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+                     'params': {'protocolVersion': '2024-11-05', 'capabilities': {},
+                                'clientInfo': {'name': 'setup', 'version': '1.0'}}},
+                    with_sid=False)
+        sid['v'] = resp.headers.get('mcp-session-id')
+        resp.read()
+        try:
+            post({'jsonrpc': '2.0', 'method': 'notifications/initialized'}).read()
+        except Exception:
+            pass
+        return sid['v']
+
+    def tool(name, args):
+        session()
+        return parse(post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+                           'params': {'name': name, 'arguments': args}}))
+
+    entities = setup_cfg.get('entities', [
+        {'name': 'skill_setup_ai_rem', 'type': 'Tool',
+         'description': 'Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten.'},
+        {'name': 'skill_ai_rem_prefedit', 'type': 'Tool',
+         'description': 'Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager.'},
+    ])
     try:
-        with open(os.path.expanduser("~/.claude.json")) as f:
-            auth = json.load(f)["mcpServers"]["ai-rem"]["headers"]["Authorization"]
-        return auth.split()[-1] if auth else ""
-    except Exception:
-        return ""
+        for e in entities:
+            tool('memory_add', e)
+        print('✓ %d Preferences & Tool-Entities aktualisiert' % len(entities))
+    except Exception as ex:
+        print('⚠ Entities: %s' % ex)
 
-_TOKEN = _token()
 
-def _post(body, sid=None):
-    hdrs = {"Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream"}
-    if _TOKEN:
-        hdrs["Authorization"] = "Bearer " + _TOKEN
-    if sid:
-        hdrs["mcp-session-id"] = sid
-    req = urllib.request.Request(
-        MCP_URL, data=json.dumps(body).encode(), headers=hdrs, method="POST")
-    return urllib.request.urlopen(req, timeout=10)
+# ── Ablauf ────────────────────────────────────────────────────────────────────
 
-def _parse(resp):
-    raw = resp.read().decode()
-    m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
+def main():
+    print('=== ai-rem Setup (%s) ===' % PLATFORM)
+    claude = find_claude()
+    register_mcp(claude)
+
+    os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
+    os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
+
+    setup_cfg = load_setup_config()
+    mcp_endpoint = choose_mcp_endpoint(setup_cfg)
+    ssh_host, ai_rem_token, vault_token = pull_secrets(setup_cfg)
+    tools_entry, tools_reg_url = build_tools_mcp(setup_cfg)
+
     try:
-        obj = json.loads(m.group(1) if m else raw)
-        return obj.get("result", {}).get("content", [{}])[0].get("text", "")
-    except Exception:
-        return ""
+        tok = update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
+                                 vault_token, tools_entry, tools_reg_url)
+    except Exception as ex:
+        print('⚠ ~/.claude.json-Update fehlgeschlagen: %s' % ex)
+        tok = ai_rem_token
 
-def _session():
-    global _SID
-    if _SID: return _SID
-    resp = _post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                  "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                             "clientInfo": {"name": "setup", "version": "1.0"}}})
-    _SID = resp.headers.get("mcp-session-id")
-    resp.read()
-    try: _post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=_SID).read()
-    except Exception: pass
-    return _SID
+    write_settings_template(setup_cfg, mcp_endpoint)
+    hook_paths = install_hooks()
+    update_settings(setup_cfg, mcp_endpoint, hook_paths)
 
-def _tool(name, args):
-    resp = _post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                  "params": {"name": name, "arguments": args}}, sid=_session())
-    return _parse(resp)
+    # Auto-Memory md-Fallback: leere Datei (wird via @import in CLAUDE.md geladen)
+    fb = os.path.join(CLAUDE_HOME, 'auto-memory', 'fallback.md')
+    os.makedirs(os.path.dirname(fb), exist_ok=True)
+    if not os.path.exists(fb):
+        open(fb, 'w', encoding='utf-8').close()
 
-cfg = json.loads(os.environ.get("SETUP_CFG", "{}"))
-ENTITIES = cfg.get("entities", [
-    {"name": "skill_setup_ai_rem", "type": "Tool",
-     "description": "Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten."},
-    {"name": "skill_ai_rem_prefedit", "type": "Tool",
-     "description": "Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager."},
-])
+    update_claude_md()
+    install_commands()
+    create_entities(setup_cfg, tok or ai_rem_token)
 
-try:
-    for e in ENTITIES:
-        _tool("memory_add", e)
-    print(f"✓ {len(ENTITIES)} Preferences & Tool-Entities aktualisiert")
-except Exception as ex:
-    print(f"⚠ Entities: {ex}")
-PYSETUP
+    print('')
+    print('Fertig. Claude Code neu starten - dann ist ai-rem aktiv.')
+    print('Auf jeder neuen Maschine:')
+    print('  macOS/Linux/WSL:  bash <(curl -s %s/setup)' % KG_URL)
+    print('  Windows:          irm %s/setup.ps1 | iex' % KG_URL)
 
-echo ""
-echo "Fertig. Claude Code neu starten - dann ist ai-rem aktiv."
-echo "Auf jeder neuen Maschine: bash <(curl -s __KG_URL__/setup)"
+
+if __name__ == '__main__':
+    try:
+        main()
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print('')
+        print('✗ Setup abgebrochen (Ctrl-C).')
+        sys.exit(130)
+    except Exception as ex:
+        import traceback
+        tb = traceback.extract_tb(sys.exc_info()[2])
+        line = tb[-1].lineno if tb else '?'
+        print('')
+        print('✗ Setup abgebrochen (%s: %s, Skript-Zeile %s).' % (type(ex).__name__, ex, line))
+        print('  Nach Behebung erneut ausfuehren:  %s' % rerun_hint())
+        sys.exit(1)
+""".replace("__KG_URL__", _KG_URL)
+
+SETUP_SCRIPT = r"""#!/usr/bin/env bash
+# ai-rem Setup-Wrapper (macOS/Linux/WSL) - laedt das plattformneutrale setup.py
+# und fuehrt es aus. Die eigentliche Logik liegt in /setup.py (EINE Quelle fuer
+# bash UND PowerShell). Windows nutzt stattdessen:  irm __KG_URL__/setup.ps1 | iex
+set -e
+KG_URL="__KG_URL__"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "✗ python3 fehlt - wird fuer das Setup benoetigt."
+    echo "    Installieren (Ubuntu/Debian/WSL):  sudo apt update && sudo apt install -y python3"
+    echo "    Installieren (macOS):              brew install python3"
+    echo "    Danach erneut ausfuehren:  bash <(curl -s $KG_URL/setup)"
+    exit 1
+fi
+
+TMP="$(mktemp "${TMPDIR:-/tmp}/ai-rem-setup.XXXXXX")"
+trap 'rm -f "$TMP"' EXIT
+if ! curl -sf "$KG_URL/setup.py" -o "$TMP" || [ ! -s "$TMP" ]; then
+    echo "✗ Download fehlgeschlagen: $KG_URL/setup.py"
+    exit 1
+fi
+python3 "$TMP"
+""".replace("__KG_URL__", _KG_URL)
+
+SETUP_PS1 = r"""# ai-rem Setup-Wrapper (Windows PowerShell) - laedt das plattformneutrale
+# setup.py und fuehrt es aus. Aufruf:  irm __KG_URL__/setup.ps1 | iex
+# Alles in einer Funktion: bei 'irm | iex' wuerde ein Top-Level 'exit' sonst
+# die Shell des Users beenden. Nur ASCII-Ausgaben - irm dekodiert text/plain
+# in Windows PowerShell 5.1 nicht als UTF-8.
+function Invoke-AiRemSetup {
+    $KgUrl = "__KG_URL__"
+
+    $python = $null
+    $pyArgs = @()
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd) { $python = $cmd.Source }
+    if (-not $python) {
+        $cmd = Get-Command py -ErrorAction SilentlyContinue
+        if ($cmd) { $python = $cmd.Source; $pyArgs = @("-3") }
+    }
+    if (-not $python) {
+        Write-Host "X python fehlt - wird fuer das Setup benoetigt."
+        Write-Host "    Installieren (Windows):    winget install Python.Python.3.12"
+        Write-Host "    Danach erneut ausfuehren:  irm $KgUrl/setup.ps1 | iex"
+        return
+    }
+
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-rem-setup-" + [guid]::NewGuid().ToString("N") + ".py")
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$KgUrl/setup.py" -OutFile $tmp
+        $env:PYTHONUTF8 = "1"
+        & $python @pyArgs $tmp
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "Setup mit Exit-Code $LASTEXITCODE beendet - Meldungen oben beachten."
+        }
+    } catch {
+        Write-Host "X Download/Start fehlgeschlagen: $_"
+    } finally {
+        Remove-Item -ErrorAction SilentlyContinue $tmp
+    }
+}
+Invoke-AiRemSetup
 """.replace("__KG_URL__", _KG_URL)
 
 CMD_MD = """\
@@ -1456,16 +1742,22 @@ CMD_MD = """\
 
 Das Setup holt ein Skript vom ai-rem-Server und fuehrt es aus. Der Auto-Mode-Klassifizierer
 blockt „Remote-Code holen + ausfuehren" als harte Grenze — **der Agent darf `curl|bash`
-NICHT selbst ausfuehren** (und keine Permission-/Config-Umgehung dafuer bauen).
+und `irm|iex` NICHT selbst ausfuehren** (und keine Permission-/Config-Umgehung dafuer bauen).
 
 **Anweisung an den Agenten:** Versuche NICHT, den Befehl selbst auszufuehren oder den Block
 zu umgehen. Lege dem User stattdessen die Zeile zum Selbst-Ausfuehren hin und erklaere den
 `!`-Prefix. In der User-Shell laeuft sie ohne Klassifizierer — jedes Mal, ohne Block.
 
-Auf jeder Maschine im Terminal ausfuehren:
+Auf jeder Maschine im Terminal ausfuehren — macOS/Linux/WSL:
 
 ```
 bash <(curl -s __KG_URL__/setup)
+```
+
+…Windows (PowerShell, claude CLI nativ):
+
+```
+irm __KG_URL__/setup.ps1 | iex
 ```
 
 …oder aus dem Claude-Code-Prompt mit vorangestelltem `!` (fuehrt es in deiner Shell aus):
@@ -1476,20 +1768,27 @@ bash <(curl -s __KG_URL__/setup)
 
 (Hinter Caddy/TLS stattdessen den https-Host nehmen, z. B. `https://airem.lan/setup`.)
 
+Beide Wrapper laden dieselbe plattformneutrale Logik (`__KG_URL__/setup.py`) —
+das Verhalten ist auf allen Plattformen identisch.
+
 ## Voraussetzungen (prueft das Skript selbst, mit Installations-Hinweisen)
 
-- **Pflicht:** `bash`, `curl`, `python3`, `claude` CLI — fehlt etwas, bricht das Setup
-  mit plattformspezifischem Installations-Hinweis ab (Ubuntu/WSL: apt, macOS: brew;
-  claude CLI: `curl -fsSL https://claude.ai/install.sh | bash`).
+- **Pflicht:** `python3` und `claude` CLI — fehlt etwas, bricht das Setup
+  mit plattformspezifischem Installations-Hinweis ab (Ubuntu/WSL: apt, macOS: brew,
+  Windows: winget; claude CLI: `curl -fsSL https://claude.ai/install.sh | bash`
+  bzw. Windows `irm https://claude.ai/install.ps1 | iex`).
 - **Optional (nur tools-mcp):** `git`, Node.js >= 18 inkl. `npm`. Zu altes Node
-  (Ubuntu-apt!) wird erkannt; Hinweis auf NodeSource/nvm. npm-Build-Fehler werden
-  mit Log-Auszug gemeldet, inkl. Diagnose fuer Proxy-/Zertifikatsprobleme
+  (Ubuntu-apt!) wird erkannt; Hinweis auf NodeSource/nvm (Windows: winget). npm-Build-Fehler
+  werden mit Log-Auszug gemeldet, inkl. Diagnose fuer Proxy-/Zertifikatsprobleme
   (`npm config set cafile …` / `NODE_EXTRA_CA_CERTS`).
 - **TLS:** Ist der https-Endpoint erreichbar, aber das Zertifikat nicht vertraut,
   bleibt das Setup bei http und zeigt, wie die Caddy-Root-CA installiert wird
-  (Ubuntu/WSL: `update-ca-certificates`, macOS: `security add-trusted-cert`).
+  (Ubuntu/WSL: `update-ca-certificates`, macOS: `security add-trusted-cert`,
+  Windows: `certutil -addstore -f Root root.crt`).
 - **WSL:** Alles (claude, node, git) gehoert IN die WSL-Distribution, nicht auf die
   Windows-Seite; der Windows-Zertifikatsspeicher gilt in WSL nicht.
+- **Windows nativ:** OpenSSH-Client (ab Windows 10 vorinstalliert) fuer den
+  Secret-Pull; alternativ Token via `$env:AI_REM_TOKEN` setzen.
 
 Das Skript erledigt automatisch:
 - MCP-Server registrieren
@@ -2246,6 +2545,17 @@ async def health_route(request: Request) -> PlainTextResponse:
 @mcp.custom_route("/setup", methods=["GET"])
 async def setup_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(SETUP_SCRIPT, media_type="text/plain")
+
+
+@mcp.custom_route("/setup.py", methods=["GET"])
+async def setup_py_route(request: Request) -> PlainTextResponse:
+    # Plattformneutrale Setup-Logik — wird von /setup (bash) und /setup.ps1 geladen.
+    return PlainTextResponse(SETUP_PY, media_type="text/x-python")
+
+
+@mcp.custom_route("/setup.ps1", methods=["GET"])
+async def setup_ps1_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(SETUP_PS1, media_type="text/plain")
 
 
 @mcp.custom_route("/hooks/system-check.py", methods=["GET"])
