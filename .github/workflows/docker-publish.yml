@@ -4,9 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  # Manueller README-Sync nach Docker Hub, ohne ein neues Release zu taggen.
+  # Baut/pusht KEIN Image — aktualisiert nur die full_description aus README.md.
+  workflow_dispatch: {}
 
 jobs:
   build-and-push:
+    # Nur bei Tag-Push bauen + pushen. Beim manuellen Dispatch übersprungen.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,13 +42,51 @@ jobs:
             magic3arkus/ai-rem:${{ steps.meta.outputs.version }}
             magic3arkus/ai-rem:latest
 
-      - name: Update Docker Hub description
+  update-description:
+    # Läuft nach erfolgreichem Build bei Tag-Push UND eigenständig beim manuellen Dispatch.
+    needs: [build-and-push]
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.build-and-push.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update Docker Hub description from README.md
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
+          # Docker Hub deckelt full_description bei 25000 (Bytes). Hart fehlschlagen,
+          # statt — wie bisher — still ein abgelehntes PATCH zu schlucken.
+          BYTES=$(wc -c < README.md)
+          echo "README.md: ${BYTES} bytes"
+          if [ "$BYTES" -gt 25000 ]; then
+            echo "::error::README.md (${BYTES} bytes) exceeds Docker Hub's 25000-byte full_description limit — trim it before release."
+            exit 1
+          fi
+
+          echo "→ Docker Hub login"
           TOKEN=$(curl -s -X POST "https://hub.docker.com/v2/users/login" \
             -H "Content-Type: application/json" \
-            -d '{"username":"${{ secrets.DOCKERHUB_USERNAME }}","password":"${{ secrets.DOCKERHUB_TOKEN }}"}' \
-            | jq -r '.token')
-          curl -s -X PATCH "https://hub.docker.com/v2/repositories/magic3arkus/ai-rem/" \
-            -H "Authorization: JWT $TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"full_description\": $(jq -Rs . < README.md)}"
+            -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+            | jq -r '.token // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Docker Hub login returned no JWT. DOCKERHUB_TOKEN must be the account password (or a PAT the hub.docker.com web API accepts) — a registry-only PAT does not work for the description endpoint."
+            exit 1
+          fi
+
+          echo "→ PATCH full_description"
+          STATUS=$(jq -Rs '{full_description: .}' < README.md \
+            | curl -s -o /tmp/dh_resp.json -w '%{http_code}' \
+                -X PATCH "https://hub.docker.com/v2/repositories/magic3arkus/ai-rem/" \
+                -H "Authorization: JWT ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d @-)
+          echo "HTTP ${STATUS}"
+          if [ "$STATUS" != "200" ]; then
+            echo "Response:"; cat /tmp/dh_resp.json || true
+            echo "::error::Docker Hub description update failed (HTTP ${STATUS})"
+            exit 1
+          fi
+          echo "✅ Docker Hub description synced from README.md (${BYTES} bytes)"

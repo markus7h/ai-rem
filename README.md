@@ -92,7 +92,7 @@ Net ≈ 660,000 tokens / month saved
 | Typical | 76 (59 %) | 12k | **~0.7M** |
 | Intensive | 91 (70 %) | 16k | **~1.2M** |
 
-**The savings grow as the graph grows.** This is the decisive long-term property: the per-session footprint stays roughly constant (~1–3k tokens) regardless of graph size, because only the *relevant* subgraph is loaded on demand. The naive alternative — keeping knowledge in `CLAUDE.md` — scales **linearly**: every new fact is paid for in *every* session forever. So as months pass and the graph accumulates hundreds of entities, the gap widens — the `CLAUDE.md` approach gets steadily more expensive while ai-rem's cost stays flat. The numbers above (262 entities) are an early-stage snapshot; at 500+ entities the same usage pattern saves substantially more, since the avoided always-on ballast is far larger.
+**The savings grow as the graph grows.** Because only the *relevant* subgraph is loaded on demand, ai-rem's per-session cost stays flat regardless of graph size, while the `CLAUDE.md` alternative scales **linearly** — every new fact is paid for in *every* session forever. The numbers above (262 entities) are an early-stage snapshot; at 500+ entities the same usage pattern saves substantially more.
 
 > The session count, recall rate, and retrieval payload are **measured** from real usage (141 sessions over 33 days, 2026-05-11 – 2026-06-12, re-measured from the Claude Code transcripts via `bin/measure-savings.py`). The per-session savings (8–16k) is a model, not a measurement — the "what it would have cost without ai-rem" can't be observed directly. Treat the totals as an informed estimate, not a benchmark.
 
@@ -107,7 +107,7 @@ Net ≈ 660,000 tokens / month saved
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log |
 | `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons, incl. step-by-step SSH key guide (keygen, `~/.ssh/config` host block with user from `setup-config`, ssh-copy-id / PowerShell variant) — public, for onboarding new machines |
 
-**`/prefs`** — Full preferences manager in the browser: pin/unpin, context dropdown, manual sort order, delete. Click on the name to expand the full description inline. A dashed **context-limit line** marks how many preferences `memory_get_context` actually loads into the session (top `CONTEXT_PREF_LIMIT`, default 15 — pinned first, then sort order / recency); rows below it are dimmed. Accessible via the slash command `/ai-rem:prefedit`.
+**`/prefs`** — Click a name to expand the full description inline. A dashed **context-limit line** marks how many preferences `memory_get_context` actually loads into the session (top `CONTEXT_PREF_LIMIT`, default 15 — pinned first, then sort order / recency); rows below it are dimmed. Accessible via the slash command `/ai-rem:prefedit`.
 
 ---
 
@@ -373,7 +373,7 @@ The setup endpoint optionally loads a `setup-config.json` from the server (`/set
 }
 ```
 
-The Docker image copies this file at build time (`COPY setup-config*.json ./`). The personal `setup-config.json` is gitignored, so it never ships in the public image. Instead the repo includes a generic **`setup-config.example.json`**: when no personal config is present, `/setup-config` falls back to it, so a fresh deployment seeds a useful starter set of behavioural preferences (plan-first, answer concisely, check ai-rem before asking, avoid hallucinations, store knowledge proactively) plus generic permission/deny rules. Drop in your own `setup-config.json` to override the template entirely.
+The Docker image copies this file at build time (`COPY setup-config*.json ./`). The personal `setup-config.json` is gitignored, so it never ships in the public image. Instead the repo includes a generic **`setup-config.example.json`**: when no personal config is present, `/setup-config` falls back to it, so a fresh deployment seeds a useful starter set of behavioural preferences plus generic permission/deny rules. Drop in your own `setup-config.json` to override the template entirely.
 
 **`mcp_register`** lets the setup wire up companion MCP servers using tokens it pulls from `ssh_host` over SSH:
 - **mykeyvault** is registered as an HTTP MCP from `http.url` (or `https_url` when ai-rem itself runs over a trusted https endpoint).
