@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.4.19](https://github.com/markus7h/ai-rem/releases/tag/v0.4.19)**.
+> Diese Dokumentation bezieht sich auf **[v0.4.20](https://github.com/markus7h/ai-rem/releases/tag/v0.4.20)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes stehen in den [GitHub Releases](https://github.com/markus7h/ai-rem/releases); frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
@@ -64,37 +64,38 @@ Der Kontext kann per CLAUDE.md gesetzt werden: z.B. `context="work"` für Arbeit
 
 ai-rem hängt nicht jedem Prompt Wissen an — es **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die ganze Session in der `CLAUDE.md` mitzuschleppen. Die Last pro Session bleibt nahezu konstant (~1–3k Token), egal wie stark der Graph wächst, während die Alternative — alles Wissen in die `CLAUDE.md` packen — ~20k Token in *jede* Session lädt.
 
-**Beispielrechnung — Annahme: durchschnittlich 5 Sessions/Tag:**
+**Beispielrechnung — auf Basis gemessener Nutzung (~4,3 Sessions/Tag):**
 
 | Parameter | Wert | Quelle |
 |---|---|---|
-| Sessions / Monat | 5 × 30 = **150** | Annahme |
-| Sessions mit echtem Recall | ~72 % → **~108** | gemessen (90/125 Sessions nutzten ai-rem) |
-| Triviale Sessions | ~42 | abgeleitet |
+| Sessions / Monat | ~4,3 × 30 = **~130** | gemessen (141 Sessions über 33 Tage) |
+| Sessions mit echtem Recall | ~59 % → **~76** | gemessen (83/141 Sessions nutzten ai-rem) |
+| Triviale Sessions | ~54 | abgeleitet |
 | Ersparnis pro Recall-Session | ~12k Token | modelliert (vermiedenes Re-Discovery / kein dauerhafter `CLAUDE.md`-Ballast) |
-| Hook- + Retrieval-Overhead | ~300 Token/Injektion | gemessen (~2,4 Injektionen/Session) |
+| Retrieval-Payload pro Recall-Session | ~2,8k Token | gemessen (~7,8 ai-rem-Aufrufe/Session, ~360 Token/Aufruf) |
+| Hook-Overhead (jede Session) | ~300 Token | modelliert |
 
 ```
-Gewinn:    108 Recall-Sessions × 12.000 = 1.296.000
-Kosten:     42 Trivial-Sessions ×    300 =     12.600
-Overhead:  ~360 Injektionen     ×    300 =    108.000
-────────────────────────────────────────────────────
-Netto ≈ 1.175.000 Token / Monat gespart
+Gewinn:     76 Recall-Sessions × 12.000 =  912.000
+Retrieval:  76 Recall-Sessions ×  2.800 =  212.800
+Hook:      130 Sessions        ×    300 =   39.000
+───────────────────────────────────────────────────
+Netto ≈ 660.000 Token / Monat gespart
 ```
 
-**Ergebnis: ~1,2 Mio Token/Monat** bei 5 Sessions/Tag — grob **6 volle 200k-Kontextfenster**, die nicht für Re-Erklären von Kontext, Re-Discovery von Infrastruktur oder dauerhaften `CLAUDE.md`-Ballast draufgehen. Pro Tag ~39k Token, pro Jahr ~14 Mio.
+**Ergebnis: ~0,7 Mio Token/Monat** bei ~4,3 Sessions/Tag — grob **3 volle 200k-Kontextfenster**, die nicht für Re-Erklären von Kontext, Re-Discovery von Infrastruktur oder dauerhaften `CLAUDE.md`-Ballast draufgehen. Pro Tag ~22k Token, pro Jahr ~8 Mio.
 
 **Bandbreite** (je nachdem, wie wissensintensiv die Sessions sind):
 
 | Szenario | Recall-Sessions | Token/Session | Netto / Monat |
 |---|---|---|---|
-| Konservativ | 90 (60 %) | 8k | **~0,6 Mio** |
-| Typisch | 108 (72 %) | 12k | **~1,2 Mio** |
-| Intensiv | 120 (80 %) | 16k | **~1,8 Mio** |
+| Konservativ | 65 (50 %) | 8k | **~0,3 Mio** |
+| Typisch | 76 (59 %) | 12k | **~0,7 Mio** |
+| Intensiv | 91 (70 %) | 16k | **~1,2 Mio** |
 
-**Die Ersparnis steigt, je größer der Graph wird.** Das ist die entscheidende Langzeit-Eigenschaft: Die Last pro Session bleibt nahezu konstant (~1–3k Token), unabhängig von der Graph-Größe, weil immer nur der *relevante* Subgraph bedarfsweise geladen wird. Die naive Alternative — Wissen in der `CLAUDE.md` halten — skaliert dagegen **linear**: Jeder neue Fakt wird in *jeder* Session aufs Neue bezahlt, für immer. Mit den Monaten sammeln sich Hunderte Entities an, und die Schere öffnet sich: Der `CLAUDE.md`-Ansatz wird stetig teurer, während ai-rems Kosten flach bleiben. Die Zahlen oben (146 Entities) sind eine Momentaufnahme der Frühphase; bei 500+ Entities spart dasselbe 5-Sessions/Tag-Muster deutlich mehr, weil der vermiedene Dauer-Ballast viel größer ist.
+**Die Ersparnis steigt, je größer der Graph wird.** Das ist die entscheidende Langzeit-Eigenschaft: Die Last pro Session bleibt nahezu konstant (~1–3k Token), unabhängig von der Graph-Größe, weil immer nur der *relevante* Subgraph bedarfsweise geladen wird. Die naive Alternative — Wissen in der `CLAUDE.md` halten — skaliert dagegen **linear**: Jeder neue Fakt wird in *jeder* Session aufs Neue bezahlt, für immer. Mit den Monaten sammeln sich Hunderte Entities an, und die Schere öffnet sich: Der `CLAUDE.md`-Ansatz wird stetig teurer, während ai-rems Kosten flach bleiben. Die Zahlen oben (262 Entities) sind eine Momentaufnahme der Frühphase; bei 500+ Entities spart dasselbe Nutzungsmuster deutlich mehr, weil der vermiedene Dauer-Ballast viel größer ist.
 
-> Session-Zahl und Recall-Rate sind aus echter Nutzung **gemessen** (125 Sessions über ~28 Tage). Die Ersparnis pro Session (8–16k) ist ein Modell, keine Messung — das „was es ohne ai-rem gekostet hätte" lässt sich nicht direkt beobachten. Die Summen sind also eine fundierte Schätzung, kein Benchmark.
+> Session-Zahl, Recall-Rate und Retrieval-Payload sind aus echter Nutzung **gemessen** (141 Sessions über 33 Tage, 11.05.–12.06.2026, nachgemessen aus den Claude-Code-Transcripts via `bin/measure-savings.py`). Die Ersparnis pro Session (8–16k) ist ein Modell, keine Messung — das „was es ohne ai-rem gekostet hätte" lässt sich nicht direkt beobachten. Die Summen sind also eine fundierte Schätzung, kein Benchmark.
 
 ---
 
