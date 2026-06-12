@@ -1,0 +1,108 @@
+# ai-rem — Knowledge Graph Memory for Claude
+
+**Persistent knowledge-graph memory for Claude Code — self-hosted MCP server.**
+
+ai-rem gives Claude Code a long-term memory that lives on **your** home server: open tasks,
+decisions, solved problems, projects and tools are stored in a knowledge graph and loaded
+*selectively* per session, instead of stuffing everything into `CLAUDE.md` on every machine.
+Available from any machine, independent of where you work.
+
+```bash
+docker pull magic3arkus/ai-rem
+```
+
+- **Source & full docs:** https://github.com/markus7h/ai-rem
+- **Supported tags:** `latest`, `vX.Y.Z` (one per release — see [GitHub Releases](https://github.com/markus7h/ai-rem/releases))
+- **Platforms:** `linux/amd64`, `linux/arm64`
+
+---
+
+## Why ai-rem?
+
+Static memory files like `CLAUDE.md` sit in context in full and are tied to individual
+projects and machines. ai-rem **lazy-loads** only the relevant subgraph on demand, so the
+per-session footprint stays roughly constant (~1–3k tokens) no matter how large the graph
+grows — working out to **~0.7 million tokens/month saved** at ~4.3 sessions/day, with the
+savings growing as the graph grows.
+([Methodology](https://github.com/markus7h/ai-rem/blob/main/docs/token-savings.md))
+
+**Built on:** [FastMCP](https://gofastmcp.com) (HTTP MCP server) + [Kuzu](https://kuzudb.com)
+(embedded graph DB — no separate DB container). Data persists in `/data`, backups in `/backups`.
+
+---
+
+## Quick start
+
+### 1. Server (one-time setup)
+
+```bash
+mkdir -p ~/mydocker/compose-files/ai-rem && cd ~/mydocker/compose-files/ai-rem
+curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/markus7h/ai-rem/main/.env.example
+cp .env.example .env
+# → set KG_PUBLIC_URL to your server IP
+# → set AI_REM_API_TOKEN (required, fail-closed) — e.g. `openssl rand -hex 32`
+docker compose pull && docker compose up -d
+```
+
+The server is **fail-closed**: without `AI_REM_API_TOKEN` it refuses to start. MCP clients
+authenticate with `Authorization: Bearer <token>`; the browser Web UI uses a derived,
+HttpOnly cookie set at `/login`.
+([Auth model](https://github.com/markus7h/ai-rem/blob/main/docs/authentication.md))
+
+### 2. Client (each machine) — say this to Claude Code
+
+```
+Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
+```
+
+On native Windows (PowerShell, no WSL): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
+The idempotent setup registers the MCP server, deploys the hooks, writes a minimal
+`CLAUDE.md` pointer and installs the slash commands.
+([Setup details](https://github.com/markus7h/ai-rem/blob/main/docs/installation.md))
+
+---
+
+## Key features
+
+- **Knowledge-graph memory** — typed entities (`Project · Task · Decision · Preference · …`) and relations; hybrid lexical + semantic search. ([Tool reference](https://github.com/markus7h/ai-rem/blob/main/docs/mcp-tools.md))
+- **Lazy-loaded context** — only the relevant subgraph is loaded per session; cost stays flat as the graph grows.
+- **Cross-machine** — one server, available from every client; no per-repo `CLAUDE.md` ballast.
+- **Web UI** — `/ui` backups (manual/scheduled/restore), `/prefs` preferences manager, `/cleanup` maintenance, `/install` onboarding.
+- **Auto-Memory** — a session-end hook extracts structured entities/relations from each transcript via Ollama (with an offline md-fallback + catch-up).
+- **Nightly cleanup** — non-destructive dedup/archive (never deletes; preferences & pinned untouched), ambiguous cases go to a review queue.
+- **Plan saving** — finalized plans become open `Task`s, a central cross-machine to-do list.
+
+([Hooks & automation](https://github.com/markus7h/ai-rem/blob/main/docs/hooks-and-automation.md))
+
+---
+
+## Configuration (env)
+
+Set in the Compose `.env`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AI_REM_API_TOKEN` | — (**required**) | API token; server is fail-closed without it |
+| `KG_PUBLIC_URL` | — | Public URL of the server |
+| `PORT` | `3456` | TCP port |
+| `KUZU_DB_PATH` | `/data/kg.db` | Database path |
+| `BACKUP_DIR` | `/backups` | Backup files |
+| `MAX_BACKUPS` | `10` | Backups to keep |
+| `AI_REM_OLLAMA_URL` | `http://myubuntu:11434` | Ollama for nightly cleanup / extraction |
+
+---
+
+## Documentation
+
+Full documentation lives on GitHub:
+
+- **[README](https://github.com/markus7h/ai-rem/blob/main/README.md)** (English) · **[README.de](https://github.com/markus7h/ai-rem/blob/main/README.de.md)** (Deutsch)
+- [Architecture](https://github.com/markus7h/ai-rem/blob/main/docs/architecture.md) · [MCP tool reference](https://github.com/markus7h/ai-rem/blob/main/docs/mcp-tools.md)
+- [Token savings](https://github.com/markus7h/ai-rem/blob/main/docs/token-savings.md) · [Authentication](https://github.com/markus7h/ai-rem/blob/main/docs/authentication.md)
+- [Hooks & automation](https://github.com/markus7h/ai-rem/blob/main/docs/hooks-and-automation.md) · [Configuration](https://github.com/markus7h/ai-rem/blob/main/docs/configuration.md) · [Installation details](https://github.com/markus7h/ai-rem/blob/main/docs/installation.md)
+
+## Related projects
+
+- [tools-mcp](https://github.com/markus7h/tools-mcp) — MCP server exposing small scripts as tools via a central registry.
+- [mykeyvault](https://github.com/markus7h/mykeyvault) — self-hosted secrets vault. ai-rem deliberately stores **no secrets**; credentials live in mykeyvault instead.

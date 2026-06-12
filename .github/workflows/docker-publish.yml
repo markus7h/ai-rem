@@ -50,19 +50,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update Docker Hub description from README.md
+      - name: Update Docker Hub description from docs/dockerhub.md
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Docker Hub deckelt full_description bei 25000 (Bytes). Hart fehlschlagen,
-          # statt — wie bisher — still ein abgelehntes PATCH zu schlucken.
-          BYTES=$(wc -c < README.md)
-          echo "README.md: ${BYTES} bytes"
+          # Eigene Landing-Page (statt der wachsenden README), mit absoluten GitHub-Links —
+          # relative Links rendern auf Docker Hub nicht. Größe so vom 25k-Limit entkoppelt.
+          DESC_FILE="docs/dockerhub.md"
+          SHORT_DESC="Persistent knowledge-graph memory for Claude Code — self-hosted MCP server"
+
+          # Docker Hub deckelt full_description bei 25000 (Bytes) und description bei 100 (Zeichen).
+          # Hart fehlschlagen, statt — wie früher — still ein abgelehntes PATCH zu schlucken.
+          BYTES=$(wc -c < "$DESC_FILE")
+          echo "${DESC_FILE}: ${BYTES} bytes"
           if [ "$BYTES" -gt 25000 ]; then
-            echo "::error::README.md (${BYTES} bytes) exceeds Docker Hub's 25000-byte full_description limit — trim it before release."
+            echo "::error::${DESC_FILE} (${BYTES} bytes) exceeds Docker Hub's 25000-byte full_description limit."
+            exit 1
+          fi
+          SHORT_LEN=$(printf '%s' "$SHORT_DESC" | wc -m | tr -d ' ')
+          if [ "$SHORT_LEN" -gt 100 ]; then
+            echo "::error::short description (${SHORT_LEN} chars) exceeds Docker Hub's 100-char limit."
             exit 1
           fi
 
@@ -76,8 +86,10 @@ jobs:
             exit 1
           fi
 
-          echo "→ PATCH full_description"
-          STATUS=$(jq -Rs '{full_description: .}' < README.md \
+          echo "→ PATCH description + full_description"
+          BODY=$(jq -n --arg sd "$SHORT_DESC" --rawfile fd "$DESC_FILE" \
+                   '{description: $sd, full_description: $fd}')
+          STATUS=$(printf '%s' "$BODY" \
             | curl -s -o /tmp/dh_resp.json -w '%{http_code}' \
                 -X PATCH "https://hub.docker.com/v2/repositories/magic3arkus/ai-rem/" \
                 -H "Authorization: JWT ${TOKEN}" \
@@ -89,4 +101,4 @@ jobs:
             echo "::error::Docker Hub description update failed (HTTP ${STATUS})"
             exit 1
           fi
-          echo "✅ Docker Hub description synced from README.md (${BYTES} bytes)"
+          echo "✅ Docker Hub synced: full_description from ${DESC_FILE} (${BYTES} bytes) + short description (${SHORT_LEN} chars)"

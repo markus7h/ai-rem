@@ -1,0 +1,66 @@
+# Hooks & Automatisierung
+
+[← Zurück zur README](../README.de.md)
+
+ai-rem bringt drei Claude-Code-Hooks mit, die den Graph ohne Handarbeit befüllen und sauber
+halten: **Auto-Memory** (Session → Graph), **Nightly-Cleanup** (Dedup/Archivieren) und
+**Plan-Speicherung** (Pläne → offene Tasks). Alle drei werden vom Client-Setup-Skript deployt.
+
+---
+
+## Auto-Memory (PreCompact + SessionEnd → ai-rem)
+
+Das eingebaute Markdown-Auto-Memory von Claude Code wird durch einen Transcript-Extraktor ersetzt, der **strukturierte Entities und Relations** in ai-rem schreibt.
+
+**Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → Ollama (qwen3:14b auf `AI_REM_OLLAMA_URL`, default `http://localhost:11434`) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
+
+**CLI** (`bin/ai-rem`, eigene `.venv`):
+
+```bash
+ai-rem status
+ai-rem search "auto-memory"
+ai-rem show "<name>"   # vollständige, ungekürzte description + extra + relations (via /export)
+ai-rem list --type Decision
+ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
+```
+
+**Anti-Rekursion:** Transcripts unter 500 Zeichen werden übersprungen, `/tmp/ai-rem-ingest.lock` verhindert verschachtelte Läufe.
+
+**Failure-Mode (md-Fallback + Catch-up):** Ist Ollama nicht erreichbar, geht die Session nicht verloren — eine heuristische Extraktion wird an `~/.claude/auto-memory/fallback.md` angehängt (via `@`-Import in `CLAUDE.md`, bleibt also im Kontext) und das Transcript in `pending.jsonl` vorgemerkt. Sobald Ollama wieder erreichbar ist, zieht `ai-rem catchup` (von den SessionStart- und PreCompact/SessionEnd-Hooks ausgeführt) die vorgemerkten Sessions sauber nach ai-rem nach und **leert das md**. Der Hook bricht nie `/compact` oder das Session-Ende; harte Fehler gehen nach `~/.claude/auto-memory/errors.log`.
+
+**Sichtbarkeit:** Jeder erfolgreiche Lauf schreibt `~/.claude/auto-memory/last-run.json`; der SessionStart-Check zeigt eine Zeile wie `🧠 N Entities, M Rel` (mit `(md-Fallback)`, wenn Ollama down war).
+
+**Konfigurations-Env:**
+- `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)
+- `AI_REM_OLLAMA_URL` — Ollama-Basis-URL (default `http://localhost:11434`)
+- `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`)
+
+---
+
+## Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen)
+
+Ein Daemon-Thread im Container fährt täglich einen Wartungslauf (default 03:00, konfigurierbar in der `/cleanup`-Web-UI). Er erkennt Dubletten und überholte Einträge (Heuristiken + Ollama, wenn erreichbar) und **archiviert** sie, statt zu löschen: Der Eintrag wird `archived` getaggt, optional komprimiert (Original in `extra.original_descr` gesichert) und via `DUPLIKAT_VON` / `VERALTET_DURCH` verlinkt. Archivierte Einträge sind aus `memory_get_context`/`search`/`list` standardmäßig ausgeblendet (Opt-in mit `include_archived=true`), bleiben aber für die Historie via `memory_get_relations` erreichbar. **`Preference`, gepinnte und bereits archivierte Einträge werden nie angefasst.** Jeder Lauf sichert zuerst; das Log ist in der `/cleanup`-Web-UI einsehbar.
+
+Mehrdeutige Fälle (und alles, wenn Ollama nachts down war) landen in einer Review-Queue. Eine nicht-leere Queue wird beim Session-Start nur als informativer Hinweis angezeigt (keine Auto-Ausführung). Abarbeiten auf zwei Wegen: **(a)** in der `/cleanup`-Web-UI, wo jedes Pending-Item beide Beschreibungen mit **Mergen/Archivieren** (anwenden) und **Verwerfen** (beide behalten) zeigt (`POST /api/cleanup/resolve`); oder **(b)** der Slash-Command `/memory-cleanup`, der die Einträge von Claude mit Urteil abarbeiten lässt. Beide nutzen dieselben nicht-destruktiven `memory_merge` / `memory_archive`-Operationen — nichts wird gelöscht.
+
+> **Ollama-Erreichbarkeit:** Der nächtliche Judge braucht ein erreichbares Ollama unter `AI_REM_OLLAMA_URL`. In der mitgelieferten `docker-compose.yml` ist der Default `http://myubuntu:11434` (pro Deployment via `.env` überschreibbar). Ist es nicht gesetzt/erreichbar, läuft der Cleanup trotzdem, schiebt aber jedes mehrdeutige Paar in die Review-Queue statt es automatisch zu beurteilen (`ollama_used=false` im Lauf-Log).
+
+---
+
+## Plan-Speicherung (ExitPlanMode → ai-rem)
+
+Ein `PostToolUse`-Hook auf `ExitPlanMode` (`hooks/save-plan.py`) speichert jeden finalisierten Plan als **offenen `Task`** in ai-rem — so werden Pläne eine zentrale, maschinenübergreifende Liste statt nur Slug-Dateien unter `~/.claude/plans/`. Der SessionStart-Hook `system-check.py` zeigt diese offenen `Task`s (inkl. Pläne) automatisch an — eine neue Session startet direkt mit der Liste; alternativ *„gibt es offene Pläne?"* fragen und auswählen.
+
+**Felder** kommen aus einem kleinen Frontmatter-Block, den Claude oben in jede Plan-Datei schreibt (kein Raten aus dem Fließtext):
+
+```
+---
+name: "Plan: <Titel>"
+description: "<ein kurzer Satz>"
+status: offen
+---
+```
+
+Der Hook liest das Frontmatter der zuletzt geänderten Plan-Datei und upsertet via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert über `name` → keine Dubletten. Erledigte Pläne werden archiviert (`memory_archive`); der Status liegt zentral in ai-rem (cross-machine). Fail-silent: blockiert nie `ExitPlanMode`.
+
+**Installation:** `hooks/save-plan.py` nach `~/.claude/hooks/` kopieren, `chmod +x`, und den `PostToolUse: ExitPlanMode`-Hook in `~/.claude/settings.json` registrieren (siehe Datei-Header).

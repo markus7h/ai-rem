@@ -24,77 +24,17 @@ Technically:
 
 ## How it works
 
-At the start of each session, Claude loads the relevant context from the graph via `memory_get_context()` and uses it as a working basis. New insights are proactively saved by Claude using `memory_add` or `memory_relate`.
+At the start of each session, Claude loads the relevant context from the graph via `memory_get_context()` and saves new insights proactively with `memory_add` / `memory_relate`. The graph holds typed **entities** — `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic` — and **relations** between them. Each entity can carry a `context` tag (`work` / `private` / global) so work and private knowledge stay separated per repo.
 
-### Available MCP Tools
-
-| Tool | Description |
-|---|---|
-| `memory_add(name, type, description, extra, context, pinned)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context` |
-| `memory_preference_update(name, context, pinned, sort_order)` | Update preference fields without overwriting the description |
-| `memory_relate(from, relation, to, extra)` | Create a relationship between two entities |
-| `memory_search(query, context, include_archived, limit)` | Hybrid search over name + description: per-token lexical matching plus semantic vector recall (finds multi-word queries even when the words aren't contiguous) |
-| `memory_search_full(query, context)` | Like `memory_search`, but returns the full description without the 400-char truncation |
-| `memory_get_context(topic, context, include_archived)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
-| `memory_list(type, context, include_archived)` | List all entities |
-| `memory_get_relations(name)` | Show all relationships of an entity |
-| `memory_archive(name, compressed_description, superseded_by)` | Archive an entry instead of deleting it — hidden from context/search/list by default, optionally compressed and linked via `VERALTET_DURCH` |
-| `memory_merge(canonical_name, duplicate_name)` | Fold a duplicate into the canonical entry: relations are repointed, unique info appended, the duplicate archived and linked via `DUPLIKAT_VON` |
-| `memory_delete(name)` | Remove an entity and its relationships |
-| `memory_status()` | Quick status: number of entities and relations (used by the SessionStart hook) |
-| `memory_check_update()` | Show the installed version and check Docker Hub for a newer one |
-
-### Entity Types
-
-`Person` · `Project` · `Task` · `Tool` · `Problem` · `Solution` · `Decision` · `Preference` · `Topic`
-
-### Context Separation
-
-Each entity can be tagged with a `context`:
-- `context="work"` — only visible in work sessions
-- `context="private"` — only visible in private sessions
-- no tag — global, appears in all queries
-
-The context can be set per CLAUDE.md: e.g. `context="work"` for work repositories and `context="private"` for personal projects.
+→ **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` tool set (13 tools) with signatures, entity types and context separation.
 
 ---
 
 ## Token savings
 
-ai-rem doesn't add knowledge to every prompt — it **lazy-loads** only the relevant subgraph on demand instead of carrying everything in `CLAUDE.md` all session long. The per-session footprint stays roughly constant (~1–3k tokens) no matter how large the graph grows, while the alternative — stuffing all knowledge into `CLAUDE.md` — costs ~20k tokens loaded into *every* session.
+ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying everything in `CLAUDE.md` all session long. The per-session footprint stays roughly constant (~1–3k tokens) no matter how large the graph grows. At ~4.3 sessions/day this works out to **~0.7 million tokens/month saved** — roughly **3 full 200k context windows** — and the savings *grow* as the graph grows, because ai-rem's cost stays flat while a `CLAUDE.md`-everything approach scales linearly.
 
-**Worked estimate — based on measured usage (~4.3 sessions/day):**
-
-| Parameter | Value | Source |
-|---|---|---|
-| Sessions / month | ~4.3 × 30 = **~130** | measured (141 sessions over 33 days) |
-| Sessions with real recall | ~59 % → **~76** | measured (83/141 sessions used ai-rem) |
-| Trivial sessions | ~54 | derived |
-| Savings per recall session | ~12k tokens | modelled (avoided re-discovery / no permanent `CLAUDE.md` ballast) |
-| Retrieval payload per recall session | ~2.8k tokens | measured (~7.8 ai-rem calls/session, ~360 tokens/call) |
-| Hook overhead (every session) | ~300 tokens | modelled |
-
-```
-Gain:       76 recall sessions × 12,000 =  912,000
-Retrieval:  76 recall sessions ×  2,800 =  212,800
-Hook:      130 sessions        ×    300 =   39,000
-───────────────────────────────────────────────────
-Net ≈ 660,000 tokens / month saved
-```
-
-**Result: ~0.7 million tokens/month** at ~4.3 sessions/day — roughly **3 full 200k context windows** you don't burn on re-explaining context, re-discovering infrastructure, or permanent `CLAUDE.md` bloat. Per day that's ~22k tokens; per year ~8M.
-
-**Range** (depending on how knowledge-heavy your sessions are):
-
-| Scenario | Recall sessions | Tokens/session | Net / month |
-|---|---|---|---|
-| Conservative | 65 (50 %) | 8k | **~0.3M** |
-| Typical | 76 (59 %) | 12k | **~0.7M** |
-| Intensive | 91 (70 %) | 16k | **~1.2M** |
-
-**The savings grow as the graph grows.** Because only the *relevant* subgraph is loaded on demand, ai-rem's per-session cost stays flat regardless of graph size, while the `CLAUDE.md` alternative scales **linearly** — every new fact is paid for in *every* session forever. The numbers above (262 entities) are an early-stage snapshot; at 500+ entities the same usage pattern saves substantially more.
-
-> The session count, recall rate, and retrieval payload are **measured** from real usage (141 sessions over 33 days, 2026-05-11 – 2026-06-12, re-measured from the Claude Code transcripts via `bin/measure-savings.py`). The per-session savings (8–16k) is a model, not a measurement — the "what it would have cost without ai-rem" can't be observed directly. Treat the totals as an informed estimate, not a benchmark.
+→ **[Full methodology, measurements and ranges](docs/token-savings.md)**
 
 ---
 
@@ -103,70 +43,21 @@ Net ≈ 660,000 tokens / month saved
 | URL | Function |
 |---|---|
 | `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`); header shows the server version |
-| `/prefs` | Preferences manager: pin, context, sort order, delete; archived preferences are dimmed, badged and listed below a separator (they never load into session context) |
+| `/prefs` | Preferences manager: pin, context, sort order, delete; archived preferences are dimmed, badged and listed below a separator (they never load into session context). Accessible via `/ai-rem:prefedit` |
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log |
-| `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons, incl. step-by-step SSH key guide (keygen, `~/.ssh/config` host block with user from `setup-config`, ssh-copy-id / PowerShell variant) — public, for onboarding new machines |
-
-**`/prefs`** — Click a name to expand the full description inline. A dashed **context-limit line** marks how many preferences `memory_get_context` actually loads into the session (top `CONTEXT_PREF_LIMIT`, default 15 — pinned first, then sort order / recency); rows below it are dimmed. Accessible via the slash command `/ai-rem:prefedit`.
+| `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons, incl. step-by-step SSH key guide — public, for onboarding new machines |
 
 ---
 
-## Auto-Memory (PreCompact + SessionEnd → ai-rem)
+## Automation (hooks)
 
-The built-in Claude Code auto-memory (markdown file) is replaced by a transcript extractor that writes **structured entities and relations** into ai-rem.
+Three Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
 
-**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://localhost:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
+- **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via Ollama, with an md-fallback + catch-up when Ollama is down.
+- **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue.
+- **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
 
-**CLI** (`bin/ai-rem`, own `.venv`):
-
-```bash
-ai-rem status
-ai-rem search "auto-memory"
-ai-rem show "<name>"   # full, untruncated description + extra + relations (via /export)
-ai-rem list --type Decision
-ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
-```
-
-**Anti-recursion:** transcripts under 500 chars are skipped, `/tmp/ai-rem-ingest.lock` prevents nested runs.
-
-**Failure-mode (md-fallback + catch-up):** if Ollama is unreachable, the session is not lost — a heuristic extraction is appended to `~/.claude/auto-memory/fallback.md` (imported into `CLAUDE.md` via `@`-import, so it stays in context) and the transcript is queued in `pending.jsonl`. As soon as Ollama is reachable again, `ai-rem catchup` (run by the SessionStart and PreCompact/SessionEnd hooks) re-ingests the queued sessions properly into ai-rem and **empties the md**. The hook never breaks `/compact` or session end; hard errors go to `~/.claude/auto-memory/errors.log`.
-
-**Visibility:** each successful run writes `~/.claude/auto-memory/last-run.json`; the SessionStart check surfaces a line like `🧠 N Entities, M Rel` (with `(md-Fallback)` when Ollama was down).
-
-**Configuration env:**
-- `AI_REM_ENDPOINT` — MCP URL (default `http://localhost:3456/mcp`)
-- `AI_REM_OLLAMA_URL` — Ollama base URL (default `http://localhost:11434`)
-- `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`)
-
----
-
-## Nightly cleanup (non-destructive: archive, don't delete)
-
-A daemon thread in the container runs a daily maintenance pass (default 03:00, configurable in the `/cleanup` web UI). It detects duplicate and outdated entries (heuristics + Ollama when reachable) and **archives** them instead of deleting: the entry is tagged `archived`, optionally compressed (with the original preserved in `extra.original_descr`), and linked via `DUPLIKAT_VON` / `VERALTET_DURCH`. Archived entries are hidden from `memory_get_context`/`search`/`list` by default (opt in with `include_archived=true`) but remain reachable for history via `memory_get_relations`. **Preferences, pinned and already-archived entries are never touched.** Every run backs up first; the log is viewable in the `/cleanup` web UI.
-
-Ambiguous cases (and everything when Ollama was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution). You can resolve it two ways: **(a)** in the `/cleanup` web UI, where each pending item shows both descriptions with **Mergen/Archivieren** (apply) and **Verwerfen** (keep both) buttons (`POST /api/cleanup/resolve`); or **(b)** the `/memory-cleanup` slash command, which has Claude resolve the entries with judgment. Both use the same non-destructive `memory_merge` / `memory_archive` operations — nothing is deleted.
-
-> **Ollama reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable Ollama. In the bundled `docker-compose.yml` it defaults to `http://myubuntu:11434` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
-
----
-
-## Plan saving (ExitPlanMode → ai-rem)
-
-A `PostToolUse` hook on `ExitPlanMode` (`hooks/save-plan.py`) stores every finalized plan as an **open `Task`** in ai-rem, so plans become a central, cross-machine list instead of just slug files under `~/.claude/plans/`. The `system-check.py` SessionStart hook surfaces these open `Task`s (plans included) automatically, so a new session opens with the list right there — or ask *"any open plans?"* to pick one.
-
-**Fields** come from a small frontmatter block Claude writes at the top of each plan file (no prose guessing):
-
-```
----
-name: "Plan: <title>"
-description: "<one short sentence>"
-status: offen
----
-```
-
-The hook reads the newest plan file's frontmatter and upserts via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert is keyed by `name`, so re-finalizing a plan never duplicates. Completed plans are archived (`memory_archive`) — the status lives in ai-rem, so it stays consistent across machines. Fail-silent: never blocks `ExitPlanMode`.
-
-**Install:** copy `hooks/save-plan.py` to `~/.claude/hooks/`, `chmod +x`, and register the `PostToolUse: ExitPlanMode` hook in `~/.claude/settings.json` (see the file header).
+→ **[Hooks & automation in detail](docs/hooks-and-automation.md)**
 
 ---
 
@@ -193,37 +84,15 @@ MAX_BACKUPS=10                           # Maximum number of backups to keep
 KUZU_POOL_SIZE=4                         # Connection pool size
 ```
 
+Client onboarding can additionally be customised via a `setup-config.json` → **[Personal configuration](docs/configuration.md)**.
+
 ---
 
 ## Authentication
 
-All sensitive routes (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) require
-authentication. The server is **fail-closed**: without `AI_REM_API_TOKEN` it
-refuses to start. A request is authorized if **any** of these holds:
+All sensitive routes (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) require a token. The server is **fail-closed** — without `AI_REM_API_TOKEN` it refuses to start. MCP clients authenticate with `Authorization: Bearer <token>`; the browser Web UI uses a derived, HttpOnly cookie set at `/login`. The token is kept once in [mykeyvault](https://github.com/markus7h/mykeyvault) (`ai-rem-api-token`) and pulled in by `deploy.sh` / the client hook.
 
-1. the path is public — `/health`, `/setup`, `/setup.py`, `/setup.ps1`, `/install`, `/setup-config`, `/hooks/*`, `/cmd*`, `/login` (onboarding/login only, no private data);
-2. it originates from **loopback** *and the request is not proxied* (no `X-Forwarded-For`). In a bridge-network container this effectively only covers in-container traffic (e.g. the healthcheck): tunneled/proxied requests arrive as the Docker gateway IP, not loopback. Behind a same-host reverse proxy (e.g. Caddy) the peer is `127.0.0.1` but `X-Forwarded-For` is set, so the token is still required;
-3. it carries `Authorization: Bearer <AI_REM_API_TOKEN>` (constant-time compared) — used by MCP clients (Claude's `/mcp` channel);
-4. it carries a valid `ai_rem_session` cookie — used by the browser Web UI (see below).
-
-### Web UI login
-
-A browser cannot set an `Authorization` header when navigating, so the Web UI
-uses a cookie. Open `/login`, enter the API token once, and the server sets an
-**HttpOnly, Secure, SameSite=Strict** cookie that authorizes `/ui` and its
-`/api/*` calls; `/logout` clears it. The cookie value is **not** the raw token
-but a derived, UI-scoped value (`HMAC-SHA256(token, "ai-rem-ui-session")`), so the
-`/mcp` Bearer never reaches the browser and the session auto-invalidates when the
-token rotates. Because the cookie is `Secure`, the UI must be reached over HTTPS
-(e.g. a Caddy `tls internal` vhost). Lifetime defaults to 30 days
-(`AI_REM_UI_SESSION_TTL`, in seconds).
-
-**Token source — [mykeyvault](https://github.com/markus7h/mykeyvault):** the token
-is stored once in the vault as item `ai-rem-api-token` (single source of truth).
-- **Server:** `deploy.sh` pulls it from the vault at deploy time and writes it into the remote `.env` — server startup stays independent of the vault's runtime state.
-- **Clients:** the `system-check.py` SessionStart hook uses the bearer token already stored in `~/.claude.json` → `mcpServers."ai-rem".headers.Authorization` for the current session (fast, no vault roundtrip — that is also how Claude's `/mcp` channel carries it) and refreshes it from the vault in a **detached background process** for the next session (vault-api coordinates live in `~/.claude.json` → `mcpServers.mykeyvault.env`; the `bw` backend is ~8 s, too slow for the synchronous startup path). Only the first run without a stored header reads the vault synchronously. If neither a header nor the vault yields a token, ai-rem returns `401`.
-
-Generate a token manually (if not using the vault): `openssl rand -hex 32`.
+→ **[Authentication model, Web UI login & token source](docs/authentication.md)**
 
 ---
 
@@ -258,32 +127,11 @@ docker compose pull && docker compose up -d
 Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
 ```
 
-On **native Windows** (PowerShell, no WSL needed):
+On **native Windows** (PowerShell, no WSL needed): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
 
-```
-irm http://<SERVER_IP>:3456/setup.ps1 | iex
-```
+The script is idempotent and registers the MCP server, deploys the three hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.
 
-Both wrappers fetch and run the same platform-neutral logic
-(`/setup.py`, requires Python 3) — behaviour is identical on
-macOS, Linux, WSL and Windows. On Windows the hooks are registered
-as `python -X utf8 <hook>` commands and the secret pull uses the
-built-in OpenSSH client (or set `$env:AI_REM_TOKEN` instead).
-
-The script automatically handles:
-1. `claude mcp add` — register ai-rem as a user-scoped HTTP MCP server
-2. `~/.claude/settings-template.json` — (re)generate base template for permissions, deny rules and hooks from the live setup config
-3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count, open tasks/plans)
-4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → Ollama-Extraktor → structured entities)
-5. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md
-6. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook; remove old hooks; set `autoMemoryEnabled: false`
-7. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
-8. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`, `/memory-cleanup`)
-9. Create preferences & tool entities directly in the knowledge graph via MCP API
-
-**The only thing to remember:** the URL `<SERVER_IP>:3456/setup`.
-
-The script is idempotent — running it multiple times on the same machine is safe.
+→ **[What the setup does, repo layout & CLAUDE.md strategy](docs/installation.md)**
 
 ### Update to a new version
 
@@ -292,92 +140,6 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && do
 ```
 
 ---
-
-## Files
-
-```
-ai-rem/
-├── server.py                   # MCP server (FastMCP + Kuzu + web UI + backup + cleanup
-│                               #   + embedded setup.py/bash/PS1 scripts and hooks)
-├── bin/ai-rem                  # CLI (status/search/ingest/catchup, own .venv)
-├── lib/                        # extractor (+ md-fallback/catchup), heuristic, mcp_client
-├── hooks/save-plan.py          # PostToolUse hook: ExitPlanMode → open Task in ai-rem
-├── docs/                       # architecture (md + Mermaid + PDF), MCP function docs,
-│                               #   release-history.md (archived notes ≤ v0.1.5)
-├── deploy.sh                   # Deploy to the home server (scp + remote build + recreate)
-├── .github/workflows/          # Docker Hub publish on v* tags
-├── requirements.txt            # fastmcp, kuzu, fastembed
-├── Dockerfile
-├── docker-compose.yml
-├── .env.example                # Configuration template
-├── .env                        # Configuration (not in repo, derived from .env.example)
-├── setup-config.json           # Personal configuration (gitignored)
-├── setup-config.example.json   # Generic starter template (served when no personal config)
-├── .claude/settings.json.example  # Example repo-local Claude permissions
-├── .claude/settings.json       # Your local Claude permissions (gitignored; copy from .example)
-├── README.md                   # This file (English)
-└── README.de.md                # German documentation
-```
-
-> `.claude/settings.json` is **gitignored** so personal/local permission tweaks never land in
-> the repo. Copy the template to get started: `cp .claude/settings.json.example .claude/settings.json`.
-
----
-
-## CLAUDE.md Strategy
-
-The setup script writes only a **minimal pointer** to `~/.claude/CLAUDE.md`:
-
-```markdown
-## ai-rem
-ai-rem is the only knowledge source for persistent context. Auto-memory is disabled.
-Usage rules come via MCP Server Instructions, behavioural rules from ai-rem Preferences.
-
-<!-- Auto-memory md-fallback: filled when Ollama is down, emptied by catchup -->
-@~/.claude/auto-memory/fallback.md
-```
-
-The actual rules come from two sources loaded automatically at session start:
-- **MCP Server Instructions** — what to store, what not to, how to link entities (built into the server)
-- **ai-rem Preferences** (`memory_get_context`) — personal behaviour rules, feedback, working styles (dynamic, in the graph)
-
-A **PreToolUse guard hook** (`claude-md-guard.py`, deployed by the setup script) reinforces this invariant: whenever `~/.claude/CLAUDE.md` is edited, it injects a non-blocking reminder to put rules/knowledge into ai-rem rather than letting them silently accumulate in CLAUDE.md. This replaces relying on a pinned preference for the same purpose.
-
-Project-specific CLAUDE.md files set the default context:
-
-| File | Purpose |
-|---|---|
-| `~/.claude/CLAUDE.md` | Minimal ai-rem pointer (managed by setup script) |
-| `work-repo/CLAUDE.md` | `context="work"` as default for work repositories |
-
----
-
-## Personal Configuration (setup-config.json)
-
-The setup endpoint optionally loads a `setup-config.json` from the server (`/setup-config`). This file is **not in the repo** — it contains personal settings:
-
-```json
-{
-  "ssh_host": "your-server",
-  "ssh_user": "your-user",
-  "ssh_hostname": "your-server.lan",
-  "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
-  "permissions_deny": ["Bash(bw get *)", ...],
-  "smb": {"mount": "/path/to/mount", "url": "smb://server/share"},
-  "mcp_register": {
-    "mykeyvault": {"http": {"url": "http://server:3458/mcp", "https_url": "https://keyvault.example/mcp"}, "vault_url": "http://server:8223"},
-    "tools": {"stdio": {"repo": "https://github.com/markus7h/tools-mcp.git", "install_dir": "~/Code/tools-mcp", "entry": "dist/index.js", "registry_url": "http://server:3457"}}
-  },
-  "old_hooks": ["legacy-hook.sh"],
-  "entities": [{"name": "...", "type": "Tool", "description": "..."}]
-}
-```
-
-The Docker image copies this file at build time (`COPY setup-config*.json ./`). The personal `setup-config.json` is gitignored, so it never ships in the public image. Instead the repo includes a generic **`setup-config.example.json`**: when no personal config is present, `/setup-config` falls back to it, so a fresh deployment seeds a useful starter set of behavioural preferences plus generic permission/deny rules. Drop in your own `setup-config.json` to override the template entirely.
-
-**`mcp_register`** lets the setup wire up companion MCP servers using tokens it pulls from `ssh_host` over SSH:
-- **mykeyvault** is registered as an HTTP MCP from `http.url` (or `https_url` when ai-rem itself runs over a trusted https endpoint).
-- **tools** ([tools-mcp](https://github.com/markus7h/tools-mcp)) is cloned from `stdio.repo`, built with `npm`, and registered as a stdio MCP with `TOOLS_MCP_REGISTRY_URL=stdio.registry_url`. This requires **node, npm and git** on the client — if any are missing the setup prints an install hint and skips `tools` (everything else still completes).
 
 ## Related Projects
 
