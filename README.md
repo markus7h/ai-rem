@@ -1,6 +1,7 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.3.0](https://github.com/markus7h/ai-rem/releases/tag/v0.3.0)**.
+> This documentation describes **[v0.4.19](https://github.com/markus7h/ai-rem/releases/tag/v0.4.19)**.
+> Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
 Static memory files like `CLAUDE.md` sit in context in full and are tied to individual projects and machines. ai-rem takes a more efficient approach: relevant information — open tasks, decisions made, solved problems, projects, tools used — lives in a knowledge graph on your home server, is loaded selectively instead of wholesale, and is available from any machine, independent of where you work.
@@ -29,16 +30,19 @@ At the start of each session, Claude loads the relevant context from the graph v
 
 | Tool | Description |
 |---|---|
-| `memory_add(name, type, description, context, pinned)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context` |
+| `memory_add(name, type, description, extra, context, pinned)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context` |
 | `memory_preference_update(name, context, pinned, sort_order)` | Update preference fields without overwriting the description |
-| `memory_relate(from, relation, to)` | Create a relationship between two entities |
-| `memory_search(query, context)` | Hybrid search over name + description: per-token lexical matching plus semantic vector recall (finds multi-word queries even when the words aren't contiguous) |
+| `memory_relate(from, relation, to, extra)` | Create a relationship between two entities |
+| `memory_search(query, context, include_archived, limit)` | Hybrid search over name + description: per-token lexical matching plus semantic vector recall (finds multi-word queries even when the words aren't contiguous) |
 | `memory_search_full(query, context)` | Like `memory_search`, but returns the full description without the 400-char truncation |
-| `memory_get_context(topic, context)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
-| `memory_list(type, context)` | List all entities |
+| `memory_get_context(topic, context, include_archived)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
+| `memory_list(type, context, include_archived)` | List all entities |
 | `memory_get_relations(name)` | Show all relationships of an entity |
+| `memory_archive(name, compressed_description, superseded_by)` | Archive an entry instead of deleting it — hidden from context/search/list by default, optionally compressed and linked via `VERALTET_DURCH` |
+| `memory_merge(canonical_name, duplicate_name)` | Fold a duplicate into the canonical entry: relations are repointed, unique info appended, the duplicate archived and linked via `DUPLIKAT_VON` |
 | `memory_delete(name)` | Remove an entity and its relationships |
 | `memory_status()` | Quick status: number of entities and relations (used by the SessionStart hook) |
+| `memory_check_update()` | Show the installed version and check Docker Hub for a newer one |
 
 ### Entity Types
 
@@ -141,7 +145,7 @@ A daemon thread in the container runs a daily maintenance pass (default 03:00, c
 
 Ambiguous cases (and everything when Ollama was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution). You can resolve it two ways: **(a)** in the `/cleanup` web UI, where each pending item shows both descriptions with **Mergen/Archivieren** (apply) and **Verwerfen** (keep both) buttons (`POST /api/cleanup/resolve`); or **(b)** the `/memory-cleanup` slash command, which has Claude resolve the entries with judgment. Both use the same non-destructive `memory_merge` / `memory_archive` operations — nothing is deleted.
 
-> **Ollama reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable Ollama. In the bundled `docker-compose.yml` it defaults to `http://192.168.2.11:11434` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
+> **Ollama reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable Ollama. In the bundled `docker-compose.yml` it defaults to `http://myubuntu:11434` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
 
 ---
 
@@ -168,8 +172,9 @@ The hook reads the newest plan file's frontmatter and upserts via `memory_add` (
 ## Requirements
 
 - Docker on the target server
-- Claude Code CLI on the client machine
+- Claude Code CLI and **Python 3** on the client machine (the setup and the hooks run on Python)
 - Network access to `<SERVER_IP>:<PORT>`
+- Optional (only for the `tools` companion MCP): git, Node.js ≥ 18 incl. npm
 
 ---
 
@@ -272,7 +277,7 @@ The script automatically handles:
 5. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md
 6. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook; remove old hooks; set `autoMemoryEnabled: false`
 7. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
-8. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`)
+8. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`, `/memory-cleanup`)
 9. Create preferences & tool entities directly in the knowledge graph via MCP API
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`.
@@ -291,15 +296,22 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && do
 
 ```
 ai-rem/
-├── server.py                   # MCP server (FastMCP + Kuzu + web UI + backup + cleanup)
+├── server.py                   # MCP server (FastMCP + Kuzu + web UI + backup + cleanup
+│                               #   + embedded setup.py/bash/PS1 scripts and hooks)
 ├── bin/ai-rem                  # CLI (status/search/ingest/catchup, own .venv)
 ├── lib/                        # extractor (+ md-fallback/catchup), heuristic, mcp_client
-├── requirements.txt            # fastmcp, kuzu
+├── hooks/save-plan.py          # PostToolUse hook: ExitPlanMode → open Task in ai-rem
+├── docs/                       # architecture (md + Mermaid + PDF), MCP function docs,
+│                               #   release-history.md (archived notes ≤ v0.1.5)
+├── deploy.sh                   # Deploy to the home server (scp + remote build + recreate)
+├── .github/workflows/          # Docker Hub publish on v* tags
+├── requirements.txt            # fastmcp, kuzu, fastembed
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example                # Configuration template
 ├── .env                        # Configuration (not in repo, derived from .env.example)
-├── setup-config.json           # Personal configuration (gitignored; example in repo)
+├── setup-config.json           # Personal configuration (gitignored)
+├── setup-config.example.json   # Generic starter template (served when no personal config)
 ├── .claude/settings.json.example  # Example repo-local Claude permissions
 ├── .claude/settings.json       # Your local Claude permissions (gitignored; copy from .example)
 ├── README.md                   # This file (English)
@@ -313,12 +325,15 @@ ai-rem/
 
 ## CLAUDE.md Strategy
 
-The setup script writes only a **minimal 3-line pointer** to `~/.claude/CLAUDE.md`:
+The setup script writes only a **minimal pointer** to `~/.claude/CLAUDE.md`:
 
 ```markdown
 ## ai-rem
 ai-rem is the only knowledge source for persistent context. Auto-memory is disabled.
 Usage rules come via MCP Server Instructions, behavioural rules from ai-rem Preferences.
+
+<!-- Auto-memory md-fallback: filled when Ollama is down, emptied by catchup -->
+@~/.claude/auto-memory/fallback.md
 ```
 
 The actual rules come from two sources loaded automatically at session start:
