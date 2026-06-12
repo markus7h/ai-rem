@@ -35,7 +35,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.20"
+VERSION = "0.4.21"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -2390,7 +2390,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </head>
 <body>
 <h1>ai-rem</h1>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
 <div class="grid">
 
   <div class="card">
@@ -3049,7 +3049,7 @@ async def logout_route(request: Request) -> Response:
 
 @mcp.custom_route("/ui", methods=["GET"])
 async def ui_route(request: Request) -> Response:
-    return Response(content=_UI_HTML, media_type="text/html")
+    return Response(content=_UI_HTML.replace("__VERSION__", VERSION), media_type="text/html")
 
 
 @mcp.custom_route("/install", methods=["GET"])
@@ -3071,7 +3071,7 @@ async def api_status(request: Request) -> JSONResponse:
     e_count = _rows(await db_exec_async("MATCH (e:Entity) RETURN count(e)"))[0][0]
     r_count = _rows(await db_exec_async("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
     cfg = _load_backup_cfg()
-    return JSONResponse({"entities": e_count, "relations": r_count, "last_backup": cfg.get("last_backup")})
+    return JSONResponse({"version": VERSION, "entities": e_count, "relations": r_count, "last_backup": cfg.get("last_backup")})
 
 
 @mcp.custom_route("/api/backup/config", methods=["GET"])

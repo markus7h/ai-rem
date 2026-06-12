@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.4.20](https://github.com/markus7h/ai-rem/releases/tag/v0.4.20)**.
+> Diese Dokumentation bezieht sich auf **[v0.4.21](https://github.com/markus7h/ai-rem/releases/tag/v0.4.21)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes stehen in den [GitHub Releases](https://github.com/markus7h/ai-rem/releases); frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
@@ -103,7 +103,7 @@ Netto ≈ 660.000 Token / Monat gespart
 
 | URL | Funktion |
 |---|---|
-| `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore (Export v2 erhält `pinned`/`sort_order`/`archived`) |
+| `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore (Export v2 erhält `pinned`/`sort_order`/`archived`); Kopfzeile zeigt die Server-Version |
 | `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen; archivierte Preferences sind gedimmt, gebadged und stehen unter einer Trennzeile (laden nie in den Session-Kontext) |
 | `/cleanup` | Nightly-Cleanup: Konfiguration, manueller Lauf, Pending-Reviews, Lauf-Log |
 | `/install` | Client-Setup-Befehle pro Plattform (bash / PowerShell) mit Kopier-Buttons, inkl. Schritt-für-Schritt-SSH-Key-Anleitung (keygen, `~/.ssh/config`-Host-Block mit User aus der `setup-config`, ssh-copy-id / PowerShell-Variante) — public, fürs Onboarding neuer Maschinen |

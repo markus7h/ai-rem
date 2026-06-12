@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.4.20](https://github.com/markus7h/ai-rem/releases/tag/v0.4.20)**.
+> This documentation describes **[v0.4.21](https://github.com/markus7h/ai-rem/releases/tag/v0.4.21)**.
 > Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
@@ -102,7 +102,7 @@ Net ≈ 660,000 tokens / month saved
 
 | URL | Function |
 |---|---|
-| `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`) |
+| `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`); header shows the server version |
 | `/prefs` | Preferences manager: pin, context, sort order, delete; archived preferences are dimmed, badged and listed below a separator (they never load into session context) |
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log |
 | `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons, incl. step-by-step SSH key guide (keygen, `~/.ssh/config` host block with user from `setup-config`, ssh-copy-id / PowerShell variant) — public, for onboarding new machines |
