@@ -3307,29 +3307,57 @@ def _apply_import(body: dict, mode: str) -> dict:
 def memory_add(
     name: str,
     type: str,
-    description: str = "",
+    description: Optional[str] = None,
     extra: Optional[dict] = None,
-    context: str = "",
-    pinned: bool = False,
+    context: Optional[str] = None,
+    pinned: Optional[bool] = None,
 ) -> str:
     """Entity im Knowledge Graph anlegen oder aktualisieren.
 
     type-Werte: Person | Project | Task | Tool | Problem | Solution | Decision | Preference | Topic
     extra: beliebige JSON-Properties (z.B. {"status": "offen", "priority": "hoch"})
-    context: "work" | "private" | "" (global, default — erscheint in allen Context-Abfragen)
+    context: "work" | "private" | "" (global — erscheint in allen Context-Abfragen)
     pinned: True → Preference erscheint immer ganz oben in get_context, unabhängig von updated_at
+
+    Partial-Update: Beim Aktualisieren eines bestehenden Eintrags werden nur
+    übergebene Felder gesetzt. Weggelassene Felder (description/extra/context/pinned
+    = None) behalten ihren bisherigen Wert; um ein Feld gezielt zu leeren, "" bzw.
+    {} bzw. False explizit übergeben. Beim Neuanlegen gelten die alten Defaults
+    ("" / {} / False).
     """
     eid = _id(name)
-    merged = dict(extra or {})
-    if context:
-        merged["context"] = context
-    extra_json = json.dumps(merged, ensure_ascii=False)
-    pinned_val = "true" if pinned else ""
     ts = _now()
 
-    existed = bool(_rows(
-        db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})
+    prev = _rows(db_exec(
+        "MATCH (e:Entity {id: $id}) RETURN e.descr, e.extra, e.context, e.pinned",
+        {"id": eid},
     ))
+    existed = bool(prev)
+    cur_descr, cur_extra_raw, cur_ctx, cur_pinned = (
+        prev[0] if existed else ("", "{}", "", ""))
+
+    # Weggelassene Felder (None) beim Update beibehalten, beim Create defaulten.
+    eff_descr = description if description is not None else (cur_descr or "")
+    eff_ctx = context if context is not None else (cur_ctx or "")
+    if pinned is not None:
+        eff_pinned = "true" if pinned else ""
+    else:
+        eff_pinned = cur_pinned or ""
+
+    # extra zusammenbauen: explizit übergebenes extra ersetzt das alte, sonst das
+    # bestehende beibehalten. context wird (wie bisher) zusätzlich in extra gespiegelt.
+    if extra is not None:
+        base_extra = dict(extra)
+    else:
+        try:
+            base_extra = json.loads(cur_extra_raw or "{}")
+        except (json.JSONDecodeError, TypeError):
+            base_extra = {}
+    base_extra.pop("context", None)
+    if eff_ctx:
+        base_extra["context"] = eff_ctx
+    extra_json = json.dumps(base_extra, ensure_ascii=False)
+
     db_exec(
         """MERGE (e:Entity {id: $id})
            ON CREATE SET e.name = $name, e.type = $type, e.descr = $descr,
@@ -3339,12 +3367,12 @@ def memory_add(
                          e.extra = $extra, e.context = $ctx, e.pinned = $pinned,
                          e.updated_at = $ts""",
         {"id": eid, "name": name, "type": type,
-         "descr": description, "extra": extra_json,
-         "ctx": context or "", "pinned": pinned_val, "ts": ts},
+         "descr": eff_descr, "extra": extra_json,
+         "ctx": eff_ctx, "pinned": eff_pinned, "ts": ts},
     )
-    _store_embedding(eid, name, description)
+    _store_embedding(eid, name, eff_descr)
     verb = "Aktualisiert" if existed else "Angelegt"
-    pin_marker = " 📌" if pinned else ""
+    pin_marker = " 📌" if eff_pinned == "true" else ""
     return f"{verb}: [{type}] {name}{pin_marker}"
 
 
