@@ -42,6 +42,92 @@ jobs:
             magic3arkus/ai-rem:${{ steps.meta.outputs.version }}
             magic3arkus/ai-rem:latest
 
+  prune-tags:
+    # Räumt alte Docker-Hub-Tags auf. Nur bei Tag-Push, nach erfolgreichem Build.
+    # Behält: latest + aktuelle Version + 3 neueste Patch-Tags derselben Minor-Serie
+    # + 1 höchstes Tag einer älteren Minor-Serie. Löscht den Rest der v*-Tags.
+    needs: [build-and-push]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.build-and-push.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune old tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          REPO: magic3arkus/ai-rem
+          CURRENT: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, sys, urllib.request, urllib.error
+
+          repo    = os.environ["REPO"]
+          current = os.environ["CURRENT"]
+          user    = os.environ["DOCKERHUB_USERNAME"]
+          pw      = os.environ["DOCKERHUB_TOKEN"]
+          base    = "https://hub.docker.com/v2"
+          SEMVER  = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+          def ver(tag):
+              m = SEMVER.match(tag)
+              return tuple(int(x) for x in m.groups()) if m else None
+
+          cur = ver(current)
+          if cur is None:
+              print(f"::warning::CURRENT={current!r} ist kein vX.Y.Z-Tag — Prune übersprungen.")
+              sys.exit(0)
+
+          # --- Docker Hub JWT ---
+          req = urllib.request.Request(
+              f"{base}/users/login",
+              data=json.dumps({"username": user, "password": pw}).encode(),
+              headers={"Content-Type": "application/json"}, method="POST")
+          jwt = json.loads(urllib.request.urlopen(req, timeout=15).read())["token"]
+          if not jwt:
+              print("::error::Docker Hub login lieferte kein JWT.")
+              sys.exit(1)
+          auth = {"Authorization": f"JWT {jwt}"}
+
+          # --- Alle Tags paginiert holen ---
+          tags, url = [], f"{base}/repositories/{repo}/tags?page_size=100"
+          while url:
+              r = json.loads(urllib.request.urlopen(
+                  urllib.request.Request(url, headers=auth), timeout=15).read())
+              tags += [t["name"] for t in r.get("results", [])]
+              url = r.get("next")
+
+          versions = [(ver(t), t) for t in tags if ver(t)]
+
+          # --- Keep-Set berechnen ---
+          same_minor = sorted(
+              (v for v in versions if v[0][:2] == cur[:2] and v[0] < cur),
+              reverse=True)[:3]
+          older_series = sorted(
+              (v for v in versions if v[0][:2] < cur[:2]), reverse=True)
+          keep = {current}
+          keep |= {t for _, t in same_minor}
+          if older_series:
+              keep.add(older_series[0][1])   # höchstes Tag der nächst-älteren Minor-Serie
+
+          delete = sorted((v for v in versions if v[1] not in keep), reverse=True)
+
+          print(f"Aktuell:  {current}")
+          print(f"Behalten: latest, {', '.join(sorted(keep, reverse=True))}")
+          if not delete:
+              print("Nichts zu löschen.")
+              sys.exit(0)
+
+          for _, tag in delete:
+              dreq = urllib.request.Request(
+                  f"{base}/repositories/{repo}/tags/{tag}/", headers=auth, method="DELETE")
+              try:
+                  urllib.request.urlopen(dreq, timeout=15)
+                  print(f"  gelöscht: {tag}")
+              except urllib.error.HTTPError as e:
+                  print(f"::warning::Löschen von {tag} fehlgeschlagen (HTTP {e.code})")
+          print(f"✅ {len(delete)} alte Tags entfernt.")
+          PY
+
   update-description:
     # Läuft nach erfolgreichem Build bei Tag-Push UND eigenständig beim manuellen Dispatch.
     needs: [build-and-push]
