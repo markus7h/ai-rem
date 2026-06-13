@@ -2560,6 +2560,14 @@ def _load_setup_cfg() -> dict:
 @mcp.custom_route("/health", methods=["GET"])
 async def health_route(request: Request) -> PlainTextResponse:
     # Public (kein Token) — vom Docker-Healthcheck und Reachability-Probes genutzt.
+    # Readiness statt nur Liveness: billiger DB-Ping über den Pool. Liefert die
+    # Starlette-App zwar 200, der Kuzu-Pool ist aber wedged, würde der Container
+    # sonst fälschlich als healthy gelten und die Restart-Policy nicht greifen.
+    try:
+        await asyncio.wait_for(db_exec_async("MATCH () RETURN 1 LIMIT 1"), timeout=2.0)
+    except Exception as e:
+        log.warning("Health-Check DB-Ping fehlgeschlagen: %s", e)
+        return PlainTextResponse("db unavailable", status_code=503)
     return PlainTextResponse("ok")
 
 
