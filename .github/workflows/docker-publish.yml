@@ -43,11 +43,15 @@ jobs:
             magic3arkus/ai-rem:latest
 
   prune-tags:
-    # Räumt alte Docker-Hub-Tags auf. Nur bei Tag-Push, nach erfolgreichem Build.
-    # Behält: latest + aktuelle Version + 3 neueste Patch-Tags derselben Minor-Serie
-    # + 1 höchstes Tag einer älteren Minor-Serie. Löscht den Rest der v*-Tags.
+    # Räumt alte Docker-Hub-Tags auf. Bei Tag-Push nach erfolgreichem Build; per
+    # manuellem workflow_dispatch on-demand (dann ohne Build, höchstes vorhandenes
+    # Tag gilt als "aktuell"). Behält: latest + aktuelle Version + 3 neueste Patch-
+    # Tags derselben Minor-Serie + 1 höchstes Tag einer älteren Minor-Serie.
+    # Löscht den Rest der vX.Y.Z-Tags (latest/Nicht-Semver bleiben unberührt).
     needs: [build-and-push]
-    if: startsWith(github.ref, 'refs/tags/v') && needs.build-and-push.result == 'success'
+    if: >-
+      always() && (github.event_name == 'workflow_dispatch'
+      || (startsWith(github.ref, 'refs/tags/v') && needs.build-and-push.result == 'success'))
     runs-on: ubuntu-latest
     steps:
       - name: Prune old tags
@@ -62,20 +66,15 @@ jobs:
           import json, os, re, sys, urllib.request, urllib.error
 
           repo    = os.environ["REPO"]
-          current = os.environ["CURRENT"]
+          current = os.environ.get("CURRENT", "")
           user    = os.environ["DOCKERHUB_USERNAME"]
           pw      = os.environ["DOCKERHUB_TOKEN"]
           base    = "https://hub.docker.com/v2"
           SEMVER  = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
           def ver(tag):
-              m = SEMVER.match(tag)
+              m = SEMVER.match(tag or "")
               return tuple(int(x) for x in m.groups()) if m else None
-
-          cur = ver(current)
-          if cur is None:
-              print(f"::warning::CURRENT={current!r} ist kein vX.Y.Z-Tag — Prune übersprungen.")
-              sys.exit(0)
 
           # --- Docker Hub JWT ---
           req = urllib.request.Request(
@@ -97,6 +96,17 @@ jobs:
               url = r.get("next")
 
           versions = [(ver(t), t) for t in tags if ver(t)]
+
+          # --- "Aktuelle" Version bestimmen ---
+          # Tag-Push: aus dem Ref (CURRENT). Sonst (workflow_dispatch): höchstes
+          # vorhandenes vX.Y.Z-Tag auf Docker Hub als aktuell annehmen.
+          cur = ver(current)
+          if cur is None:
+              if not versions:
+                  print("Keine vX.Y.Z-Tags vorhanden — nichts zu tun.")
+                  sys.exit(0)
+              cur, current = max(versions)
+              print(f"Kein Versions-Ref übergeben → '{current}' als aktuell angenommen.")
 
           # --- Keep-Set berechnen ---
           same_minor = sorted(
