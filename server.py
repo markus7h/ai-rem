@@ -3382,6 +3382,10 @@ def memory_preference_update(
                e.sort_order = $so, e.updated_at = $ts""",
         {"id": eid, "ctx": new_ctx, "pin": new_pin, "so": new_so, "ts": ts},
     )
+    if context is not None:
+        # context steckt in der gecachten Embed-Meta (Filter in _semantic_hits);
+        # auffrischen, da hier kein Embedding-Write den Cache patcht.
+        _refresh_embed_meta(eid, name)
     parts = []
     if context  is not None: parts.append(f"context={new_ctx!r}")
     if pinned   is not None: parts.append(f"pinned={new_pin!r}")
@@ -3581,6 +3585,7 @@ _embed_model_lock = threading.Lock()
 _embed_matrix = None        # numpy (N, D), L2-normalisiert
 _embed_names: list = []
 _embed_meta: dict = {}
+_embed_index: dict = {}      # name → Zeilenindex in _embed_matrix (inkrementelles Patchen)
 _embed_dirty = True
 _embed_cache_lock = threading.Lock()
 
@@ -3618,7 +3623,9 @@ def _store_embedding(eid: str, name: str, descr: str) -> None:
         vec = _embed_texts([_embed_payload(name, descr)], EMBED_PASSAGE_PREFIX)[0]
         db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
                 {"id": eid, "emb": json.dumps([round(float(x), 6) for x in vec])})
-        _invalidate_embed_cache()
+        # Inkrementell die eine Zeile patchen statt den ganzen Cache zu
+        # invalidieren (was pro Write einen O(N)-Vollrebuild ausloeste).
+        _upsert_embed_row(eid, name, vec)
     except Exception as e:
         log.warning("Embedding-Store fehlgeschlagen für %s: %s", name, e)
 
@@ -3629,9 +3636,83 @@ def _invalidate_embed_cache() -> None:
         _embed_dirty = True
 
 
+def _upsert_embed_row(eid: str, name: str, vec) -> None:
+    """Eine Zeile der In-Memory-Matrix inkrementell setzen/anhaengen statt globalem
+    Dirty-Flag + Vollrebuild aus der DB. No-op solange die Matrix noch nicht gebaut
+    ist (oder dirty) — dann holt der naechste _ensure_embed_matrix-Vollaufbau die
+    neue DB-Zeile ohnehin ab. Archivierte Eintraege werden entfernt statt einsortiert
+    (deckt sich mit dem archived-Filter im Vollrebuild)."""
+    import numpy as np
+    global _embed_matrix, _embed_names, _embed_meta, _embed_index
+    with _embed_cache_lock:
+        if _embed_matrix is None or _embed_dirty:
+            return
+    rows = _rows(db_exec(
+        "MATCH (e:Entity {id:$id}) "
+        "RETURN e.type, e.descr, e.context, e.updated_at, e.archived", {"id": eid}))
+    if not rows:
+        return
+    typ, descr, ctx, upd, archived = rows[0]
+    if archived == "true":
+        _remove_embed_row(name)
+        return
+    row = np.asarray(vec, dtype="float32").reshape(-1)
+    meta = {"type": typ, "descr": descr or "", "context": ctx or "", "updated_at": upd or ""}
+    with _embed_cache_lock:
+        if _embed_matrix is None or _embed_dirty:
+            return
+        idx = _embed_index.get(name)
+        if idx is not None:
+            _embed_matrix[idx] = row
+        else:
+            _embed_matrix = np.vstack([_embed_matrix, row[None, :]])
+            _embed_names.append(name)
+            _embed_index[name] = len(_embed_names) - 1
+        _embed_meta[name] = meta
+
+
+def _remove_embed_row(name: str) -> None:
+    """Eine Zeile aus der In-Memory-Matrix entfernen (Delete/Archive). Ohne das
+    blieb ein geloeschtes/archiviertes Embedding bis zum naechsten Vollrebuild als
+    Suchtreffer haengen."""
+    import numpy as np
+    global _embed_matrix, _embed_names, _embed_meta, _embed_index
+    with _embed_cache_lock:
+        if _embed_matrix is None or _embed_dirty:
+            return
+        idx = _embed_index.get(name)
+        if idx is None:
+            return
+        _embed_matrix = np.delete(_embed_matrix, idx, axis=0)
+        _embed_names.pop(idx)
+        _embed_meta.pop(name, None)
+        _embed_index = {nm: i for i, nm in enumerate(_embed_names)}
+        if _embed_matrix.shape[0] == 0:
+            _embed_matrix = None
+
+
+def _refresh_embed_meta(eid: str, name: str) -> None:
+    """Nur die gecachten Meta-Felder (type/descr/context/updated_at) einer Zeile
+    auffrischen, ohne den Vektor neu zu berechnen — fuer Pfade, die Metadaten
+    aendern, aber nicht den Embedding-Text (z.B. context-Wechsel)."""
+    with _embed_cache_lock:
+        if _embed_matrix is None or _embed_dirty or name not in _embed_index:
+            return
+    rows = _rows(db_exec(
+        "MATCH (e:Entity {id:$id}) RETURN e.type, e.descr, e.context, e.updated_at",
+        {"id": eid}))
+    if not rows:
+        return
+    typ, descr, ctx, upd = rows[0]
+    with _embed_cache_lock:
+        if name in _embed_index:
+            _embed_meta[name] = {"type": typ, "descr": descr or "",
+                                 "context": ctx or "", "updated_at": upd or ""}
+
+
 def _ensure_embed_matrix():
     """Lazy (Re)Build der in-memory Matrix aus der DB. Gibt (names, matrix|None)."""
-    global _embed_matrix, _embed_names, _embed_meta, _embed_dirty
+    global _embed_matrix, _embed_names, _embed_meta, _embed_dirty, _embed_index
     with _embed_cache_lock:
         if not _embed_dirty and _embed_matrix is not None:
             return _embed_names, _embed_matrix
@@ -3653,6 +3734,7 @@ def _ensure_embed_matrix():
     matrix = np.asarray(vecs, dtype="float32") if vecs else None
     with _embed_cache_lock:
         _embed_names, _embed_meta, _embed_matrix, _embed_dirty = names, meta, matrix, False
+        _embed_index = {nm: i for i, nm in enumerate(names)}
         return _embed_names, _embed_matrix
 
 
@@ -4106,6 +4188,7 @@ def memory_delete(name: str) -> str:
     if not _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})):
         return f"Nicht gefunden: {name}"
     db_exec("MATCH (e:Entity {id: $id}) DETACH DELETE e", {"id": eid})
+    _remove_embed_row(name)  # sonst bliebe der Vektor bis zum naechsten Vollrebuild Suchtreffer
     return f"Gelöscht: {name}"
 
 
@@ -4153,6 +4236,7 @@ def _set_archived(eid: str, ts: str, *, compressed_description: str = "") -> Opt
         {"id": eid, "descr": new_descr,
          "extra": json.dumps(extra, ensure_ascii=False), "ts": ts},
     )
+    _remove_embed_row(name)  # Archivierte gehoeren nicht in die semantische Suche
     return {"name": name, "type": typ}
 
 
@@ -4221,9 +4305,8 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
                 {"id": cid, "descr": new_c_descr, "ts": ts})
         _store_embedding(cid, canonical_name, new_c_descr)
 
-    _set_archived(did, ts)
+    _set_archived(did, ts)  # entfernt die Dublette inkrementell aus der Embed-Matrix
     _ensure_rel(did, "DUPLIKAT_VON", cid, ts)
-    _invalidate_embed_cache()  # archivierte Dublette aus der Matrix nehmen
     return (f"Gemergt: '{duplicate_name}' → '{canonical_name}' "
             f"({repointed} Relationen umgehängt, Dublette archiviert + DUPLIKAT_VON)")
 
