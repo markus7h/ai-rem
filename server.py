@@ -3345,12 +3345,23 @@ def memory_add(
     ts = _now()
 
     prev = _rows(db_exec(
-        "MATCH (e:Entity {id: $id}) RETURN e.descr, e.extra, e.context, e.pinned",
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned",
         {"id": eid},
     ))
     existed = bool(prev)
+
+    # Kollisions-Guard: _id() normalisiert zu [a-z0-9_], Hash-Suffix erst >64 Zeichen.
+    # Darunter kollidieren verschiedene Namen ("Tool X"/"tool-x"/"tool_x" → tool_x).
+    # Ohne diesen Check würde der MERGE einen fachlich anderen Eintrag still
+    # überschreiben (Datenverlust). Existiert die ID bereits mit ANDEREM Namen →
+    # nicht überschreiben, sondern den Konflikt melden.
+    if existed and prev[0][0] != name:
+        return (f"⚠ ID-Kollision: '{eid}' ist bereits von '{prev[0][0]}' belegt. "
+                f"Bitte einen eindeutigeren Namen wählen — verschiedene Namen, die "
+                f"zur selben ID normalisieren, kollidieren.")
+
     cur_descr, cur_extra_raw, cur_ctx, cur_pinned = (
-        prev[0] if existed else ("", "{}", "", ""))
+        prev[0][1:] if existed else ("", "{}", "", ""))
 
     # Weggelassene Felder (None) beim Update beibehalten, beim Create defaulten.
     eff_descr = description if description is not None else (cur_descr or "")
