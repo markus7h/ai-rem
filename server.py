@@ -1978,8 +1978,12 @@ def _migrate_context_column() -> None:
     try:
         db_exec("ALTER TABLE Entity ADD context STRING DEFAULT ''")
     except Exception as e:
+        # Kritische Spalte: ohne sie schlagen spaetere Queries kryptisch fehl.
+        # Hart fehlschlagen statt still weiterzustarten, damit Restart-Policy/
+        # Operator den Fehler sieht.
         log.error("ALTER TABLE Entity ADD context failed: %s", e)
-        return
+        raise RuntimeError("Schema-Migration der kritischen Spalte 'context' "
+                           "fehlgeschlagen") from e
 
     rows = _rows(db_exec("MATCH (e:Entity) RETURN e.id, e.extra"))
     backfilled = 0
@@ -2044,7 +2048,11 @@ def _migrate_embedding_column() -> None:
         db_exec("ALTER TABLE Entity ADD embedding STRING DEFAULT ''")
         log.info("Schema migration: embedding column added")
     except Exception as e:
+        # Kritische Spalte: ohne sie schlagen die semantischen Such-Queries fehl.
+        # Hart fehlschlagen statt still weiterzustarten.
         log.error("ALTER TABLE Entity ADD embedding failed: %s", e)
+        raise RuntimeError("Schema-Migration der kritischen Spalte 'embedding' "
+                           "fehlgeschlagen") from e
 
 
 init_schema()
