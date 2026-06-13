@@ -158,6 +158,17 @@ def cmd_catchup(c: MCPClient, a):
     print(json.dumps(catchup(client=c), ensure_ascii=False))
 
 
+def cmd_token(c: MCPClient, a):
+    # Token wird beim Client-Aufbau schon aufgeloest (Env AI_REM_TOKEN →
+    # ~/.claude.json header → Vault), siehe lib/mcp_client._resolve_token.
+    if not c.token:
+        sys.stderr.write(
+            "ai-rem: kein Token gefunden (AI_REM_TOKEN, ~/.claude.json oder Vault)\n"
+        )
+        sys.exit(1)
+    _print(f"Bearer {c.token}" if a.header else c.token)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ai-rem", description="ai-rem MCP CLI")
     p.add_argument(
@@ -238,6 +249,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("catchup", help="re-ingest md-fallback queue once Ollama is back")
     s.set_defaults(func=cmd_catchup)
+
+    s = sub.add_parser(
+        "token",
+        help="API-Token ausgeben (Env/~/.claude.json/Vault) — fuer Web-UI-Login/curl",
+    )
+    s.add_argument(
+        "--header",
+        action="store_true",
+        help='vollen Header \'Bearer <token>\' ausgeben (statt nur des Tokens)',
+    )
+    s.set_defaults(func=cmd_token)
 
     return p
 
