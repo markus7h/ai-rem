@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.4.22](https://github.com/markus7h/ai-rem/releases/tag/v0.4.22)**.
+> This documentation describes **[v0.4.23](https://github.com/markus7h/ai-rem/releases/tag/v0.4.23)**.
 > Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
@@ -81,8 +81,16 @@ PORT=3456                                # TCP port (default: 3456)
 KUZU_DB_PATH=/data/kg.db                 # Path to the database
 BACKUP_DIR=/backups                      # Path for backup files
 MAX_BACKUPS=10                           # Maximum number of backups to keep
+AI_REM_BACKUP_KEY=...                     # Optional — encrypt backups (AES-256-GCM); empty = plaintext
 KUZU_POOL_SIZE=4                         # Connection pool size
 ```
+
+When `AI_REM_BACKUP_KEY` is set, backups are written encrypted with AES-256-GCM
+(`backup_<ts>.json.enc`) and downloads return the encrypted blob, so the data
+never leaves the server in clear text. Restore auto-detects encrypted and
+plaintext backups. The key is kept in [mykeyvault](https://github.com/markus7h/mykeyvault)
+(`ai-rem-backup-key`) and pulled in by `deploy.sh`. **Losing the passphrase makes
+encrypted backups unrecoverable.**
 
 Client onboarding can additionally be customised via a `setup-config.json` → **[Personal configuration](docs/configuration.md)**.
 

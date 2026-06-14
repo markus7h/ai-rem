@@ -23,6 +23,12 @@ from typing import Optional
 
 import kuzu
 from fastmcp import FastMCP
+
+from lib.backup_crypto import (
+    decrypt as _decrypt_backup,
+    encrypt as _encrypt_backup,
+    is_encrypted as _is_encrypted,
+)
 from starlette.requests import Request
 from starlette.responses import (
     FileResponse,
@@ -35,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.22"
+VERSION = "0.4.23"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -50,6 +56,16 @@ _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 # Quelle: mykeyvault (Vault-Item ai-rem-api-token), beim Deploy ins Env injiziert.
 # Fail-closed: ohne Token startet der Server nicht (siehe __main__).
 AI_REM_API_TOKEN = os.getenv("AI_REM_API_TOKEN", "")
+
+# Optionaler Backup-Schlüssel: gesetzt → Backups werden mit AES-256-GCM
+# verschlüsselt (Datei backup_<ts>.json.enc), leer → Klartext wie bisher.
+# Quelle: mykeyvault (Vault-Item ai-rem-backup-key), beim Deploy ins Env injiziert.
+AI_REM_BACKUP_KEY = os.getenv("AI_REM_BACKUP_KEY", "")
+
+
+def _backup_key() -> Optional[bytes]:
+    """Passphrase-bytes für die Backup-Verschlüsselung, oder None (= Klartext)."""
+    return AI_REM_BACKUP_KEY.encode("utf-8") if AI_REM_BACKUP_KEY else None
 
 # Browser-Login (Web-UI): /login setzt ein HttpOnly/Secure/SameSite=Strict-Cookie,
 # das die AuthMiddleware zusätzlich zum Bearer akzeptiert. Der Cookie-Wert ist NICHT
@@ -1966,10 +1982,16 @@ def _migrate_context_column() -> None:
     try:
         data = _legacy_dump_pre_context()
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        backup_path = os.path.join(BACKUP_DIR, f"backup_pre_context_{ts}.json")
+        payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        key = _backup_key()
+        if key:
+            backup_path = os.path.join(BACKUP_DIR, f"backup_pre_context_{ts}.json.enc")
+            payload = _encrypt_backup(payload, key)
+        else:
+            backup_path = os.path.join(BACKUP_DIR, f"backup_pre_context_{ts}.json")
         tmp = backup_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with open(tmp, "wb") as f:
+            f.write(payload)
         os.replace(tmp, backup_path)
         log.info("Pre-migration backup written: %s", os.path.basename(backup_path))
     except Exception as e:
@@ -2061,9 +2083,15 @@ init_schema()
 # ─── Backup ─────────────────────────────────────────────────────────────────
 
 
+def _list_backup_files() -> list[str]:
+    """Alle Backup-Dateien (Klartext + verschlüsselt) absolut."""
+    return (glob.glob(os.path.join(BACKUP_DIR, "backup_*.json"))
+            + glob.glob(os.path.join(BACKUP_DIR, "backup_*.json.enc")))
+
+
 def _safe_backup_path(name: str) -> Optional[str]:
     """Resolve `name` under BACKUP_DIR and reject anything escaping it."""
-    if not name or not name.endswith(".json"):
+    if not name or not (name.endswith(".json") or name.endswith(".json.enc")):
         return None
     candidate = os.path.realpath(os.path.join(BACKUP_DIR, name))
     root = os.path.realpath(BACKUP_DIR)
@@ -2145,13 +2173,21 @@ def _graph_signature() -> dict:
 def _do_backup() -> str:
     _ensure_backup_dir()
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"backup_{ts}.json"
-    filepath = os.path.join(BACKUP_DIR, filename)
-    tmp = filepath + ".tmp"
 
     data = _dump_graph()
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    key = _backup_key()
+    if key:
+        filename = f"backup_{ts}.json.enc"
+        blob = _encrypt_backup(payload, key)
+    else:
+        filename = f"backup_{ts}.json"
+        blob = payload
+
+    filepath = os.path.join(BACKUP_DIR, filename)
+    tmp = filepath + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(blob)
     os.replace(tmp, filepath)
 
     cfg = _load_backup_cfg()
@@ -2160,7 +2196,7 @@ def _do_backup() -> str:
     cfg["last_backup_signature"] = _graph_signature()
     _save_backup_cfg(cfg)
 
-    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "backup_*.json")), reverse=True)
+    files = sorted(_list_backup_files(), reverse=True)
     for old in files[MAX_BACKUPS:]:
         try:
             os.remove(old)
@@ -2468,7 +2504,7 @@ async function loadFiles(){
   if(!files.length){el.innerHTML='<p class="empty">No backups yet.</p>';return;}
   el.innerHTML=files.map(f=>`
     <div class="fi">
-      <span class="fn">${f.name}</span>
+      <span class="fn">${f.encrypted?'🔒 ':''}${f.name}</span>
       <span class="fsz">${(f.size/1024).toFixed(1)} KB</span>
       <a href="/api/backup/download?file=${encodeURIComponent(f.name)}">
         <button class="sec">Download</button></a>
@@ -3123,8 +3159,9 @@ async def api_backup_now(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/backup/files", methods=["GET"])
 async def api_backup_files(request: Request) -> JSONResponse:
     _ensure_backup_dir()
-    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "backup_*.json")), reverse=True)
-    result = [{"name": os.path.basename(f), "size": os.path.getsize(f)} for f in files]
+    files = sorted(_list_backup_files(), reverse=True)
+    result = [{"name": os.path.basename(f), "size": os.path.getsize(f),
+               "encrypted": f.endswith(".json.enc")} for f in files]
     return JSONResponse(result)
 
 
@@ -3135,7 +3172,8 @@ async def api_backup_download(request: Request) -> Response:
         return JSONResponse({"error": "invalid filename"}, status_code=400)
     if not os.path.exists(path):
         return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(path, filename=os.path.basename(path), media_type="application/json")
+    media = "application/octet-stream" if path.endswith(".enc") else "application/json"
+    return FileResponse(path, filename=os.path.basename(path), media_type=media)
 
 
 @mcp.custom_route("/api/backup/delete", methods=["POST"])
@@ -3168,8 +3206,21 @@ async def api_restore(request: Request) -> JSONResponse:
     mode = form.get("mode", "merge")
     if mode not in ("merge", "replace"):
         return JSONResponse({"error": "mode must be merge or replace"}, status_code=400)
+    content = await file.read()
+    if _is_encrypted(content):
+        key = _backup_key()
+        if not key:
+            return JSONResponse(
+                {"error": "Backup ist verschlüsselt, aber AI_REM_BACKUP_KEY ist nicht gesetzt"},
+                status_code=400)
+        try:
+            content = _decrypt_backup(content, key)
+        except Exception as e:
+            log.warning("restore decryption failed: %s", e)
+            return JSONResponse(
+                {"error": "Entschlüsselung fehlgeschlagen (falscher AI_REM_BACKUP_KEY?)"},
+                status_code=400)
     try:
-        content = await file.read()
         body = json.loads(content)
     except json.JSONDecodeError as e:
         log.warning("invalid JSON in restore upload: %s", e)
