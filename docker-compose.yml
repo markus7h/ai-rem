@@ -24,6 +24,10 @@ services:
       # Pflicht (fail-closed): ohne Token startet der Server nicht. Quelle:
       # mykeyvault (Item ai-rem-api-token), via deploy.sh in die .env geschrieben.
       - AI_REM_API_TOKEN=${AI_REM_API_TOKEN:?AI_REM_API_TOKEN nicht gesetzt — siehe deploy.sh / .env}
+      # Optional: gesetzt → Backups werden mit AES-256-GCM verschlüsselt
+      # (backup_<ts>.json.enc), leer → Klartext wie bisher. Quelle: mykeyvault
+      # (Item ai-rem-backup-key), via deploy.sh in die .env geschrieben.
+      - AI_REM_BACKUP_KEY=${AI_REM_BACKUP_KEY:-}
     mem_limit: 2g
     healthcheck:
       # /health ist public (kein Token) — bewusst, damit der Healthcheck ohne Secret auskommt.

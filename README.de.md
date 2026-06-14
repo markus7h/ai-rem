@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.4.22](https://github.com/markus7h/ai-rem/releases/tag/v0.4.22)**.
+> Diese Dokumentation bezieht sich auf **[v0.4.23](https://github.com/markus7h/ai-rem/releases/tag/v0.4.23)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes stehen in den [GitHub Releases](https://github.com/markus7h/ai-rem/releases); frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
@@ -82,8 +82,17 @@ PORT=3456                                # TCP-Port (Standard: 3456)
 KUZU_DB_PATH=/data/kg.db                 # Pfad zur Datenbank
 BACKUP_DIR=/backups                      # Pfad für Backup-Dateien
 MAX_BACKUPS=10                           # Maximale Anzahl aufbewahrter Backups
+AI_REM_BACKUP_KEY=...                     # Optional — Backups verschlüsseln (AES-256-GCM); leer = Klartext
 KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 ```
+
+Ist `AI_REM_BACKUP_KEY` gesetzt, werden Backups mit AES-256-GCM verschlüsselt
+geschrieben (`backup_<ts>.json.enc`) und beim Download als verschlüsselter Blob
+ausgegeben — die Daten verlassen den Server nie im Klartext. Restore erkennt
+verschlüsselte und Klartext-Backups automatisch. Der Schlüssel liegt in
+[mykeyvault](https://github.com/markus7h/mykeyvault) (`ai-rem-backup-key`) und
+wird von `deploy.sh` bezogen. **Geht die Passphrase verloren, sind verschlüsselte
+Backups nicht mehr wiederherstellbar.**
 
 Das Client-Onboarding lässt sich zusätzlich über eine `setup-config.json` anpassen → **[Persönliche Konfiguration](docs/configuration.de.md)**.
 
