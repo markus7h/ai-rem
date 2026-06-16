@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.23"
+VERSION = "0.4.24"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -3499,6 +3499,70 @@ def memory_preference_update(
     return f"[{cur_type}] {name}: {', '.join(parts) or 'keine Änderung'}"
 
 
+# Schema-Felder eines Projektkontexts (Reihenfolge = Anzeige-Reihenfolge im Abruf).
+PROJECT_CONTEXT_FIELDS = (
+    "dev_dir", "repo", "deploy_dir", "deploy_host", "deploy_cmd", "skills", "rules",
+)
+
+
+@mcp.tool()
+def memory_set_project_context(
+    name: str,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    dev_dir: Optional[str] = None,
+    repo: Optional[str] = None,
+    deploy_dir: Optional[str] = None,
+    deploy_host: Optional[str] = None,
+    deploy_cmd: Optional[str] = None,
+    skills: Optional[list] = None,
+    rules: Optional[list] = None,
+    context: Optional[str] = None,
+) -> str:
+    """Projektkontext als Project-Entity anlegen/aktualisieren — feldweises Merge.
+
+    Speichert pro Projekt dev_dir/repo, deploy_dir/deploy_host/deploy_cmd, skills
+    und rules im extra-JSON. Anders als memory_add (das extra komplett ERSETZT)
+    bleibt hier jedes nicht übergebene Feld erhalten — nur die gesetzten Parameter
+    werden gemergt. "" bzw. [] leert ein Feld gezielt. status defaultet beim
+    Neuanlegen auf "aktiv". Voller Abruf inkl. Relationen via memory_project_context.
+    """
+    eid = _id(name)
+    prev = _rows(db_exec(
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.type, e.extra",
+        {"id": eid},
+    ))
+    if prev and prev[0][1] != "Project":
+        return (f"⚠ '{name}' existiert als [{prev[0][1]}], nicht als Project — "
+                f"Projektkontext nur auf Project-Entities setzen.")
+
+    try:
+        merged = json.loads(prev[0][2] or "{}") if prev else {}
+    except (json.JSONDecodeError, TypeError):
+        merged = {}
+    merged.pop("context", None)  # context spiegelt memory_add separat aus dem Param
+
+    updates = {
+        "dev_dir": dev_dir, "repo": repo, "deploy_dir": deploy_dir,
+        "deploy_host": deploy_host, "deploy_cmd": deploy_cmd,
+        "skills": skills, "rules": rules,
+    }
+    set_fields = [k for k, v in updates.items() if v is not None]
+    for k in set_fields:
+        merged[k] = updates[k]
+
+    if status is not None:
+        merged["status"] = status
+        set_fields.append("status")
+    elif not prev and "status" not in merged:
+        merged["status"] = "aktiv"
+
+    memory_add(name, "Project", description=description, extra=merged, context=context)
+    verb = "aktualisiert" if prev else "angelegt"
+    suffix = f" (gesetzt: {', '.join(set_fields)})" if set_fields else ""
+    return f"Projektkontext {verb}: {name}{suffix}"
+
+
 @mcp.tool()
 def memory_relate(
     from_name: str,
@@ -4249,6 +4313,86 @@ def memory_get_relations(name: str) -> str:
     if in_rows:
         lines.append("**Eingehend:**")
         lines.extend(f"  ← [{r[1]}] {r[2]}  via [{r[0]}]" for r in in_rows)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def memory_project_context(name: str) -> str:
+    """Vollständigen Projektkontext laden: ungekürzter Project-Record inkl. extra
+    (dev_dir/repo/deploy_dir/deploy_host/skills/rules) PLUS alle direkt verknüpften
+    Entities — der komplette Arbeitskontext eines Projekts in einem Aufruf.
+
+    Anders als memory_get_context/memory_search (die descr kürzen und extra gar
+    nicht zeigen) ist dies der gezielte Voll-Abruf. Name wird exakt aufgelöst;
+    sonst Fuzzy-Treffer auf den jüngsten passenden Project-Namen.
+    """
+    eid = _id(name)
+    row = _rows(db_exec(
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.type, e.descr, e.extra, e.context",
+        {"id": eid},
+    ))
+    if not row:
+        cand = _rows(db_exec(
+            """MATCH (e:Entity {type: 'Project'})
+               WHERE lower(e.name) CONTAINS $q
+               RETURN e.name, e.type, e.descr, e.extra, e.context
+               ORDER BY e.updated_at DESC LIMIT 1""",
+            {"q": name.lower()},
+        ))
+        if not cand:
+            return f"Kein Projektkontext gefunden für: {name}"
+        row = cand
+        eid = _id(row[0][0])
+
+    ename, etype, descr, extra_raw, ctx = row[0]
+    try:
+        extra = json.loads(extra_raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        extra = {}
+    extra.pop("context", None)
+
+    status = extra.get("status", "aktiv")
+    ctx_label = f" · context={ctx}" if ctx else ""
+    lines = [f"## Projektkontext: {ename}  [{status}{ctx_label}]"]
+    if etype != "Project":
+        lines.append(f"_(Hinweis: Entity-Typ ist {etype}, nicht Project)_")
+
+    env_keys = [("dev_dir", "Dev-Verzeichnis"), ("repo", "Repo"),
+                ("deploy_dir", "Deploy-Verzeichnis"), ("deploy_host", "Deploy-Host"),
+                ("deploy_cmd", "Deploy-Befehl")]
+    env = [f"- **{label}:** {extra[k]}" for k, label in env_keys if extra.get(k)]
+    if env:
+        lines.append("\n### Pfade & Umgebung\n" + "\n".join(env))
+
+    for key, head in (("skills", "Skills"), ("rules", "Regeln / Bedingungen")):
+        val = extra.get(key)
+        if val:
+            items = val if isinstance(val, list) else [val]
+            lines.append(f"\n### {head}\n" + "\n".join(f"- {x}" for x in items))
+
+    if descr:
+        lines.append(f"\n### Beschreibung\n{descr}")
+
+    out_rows = _rows(db_exec(
+        "MATCH (a:Entity {id:$id})-[r:Rel]->(b:Entity) RETURN r.name, b.type, b.name, b.descr",
+        {"id": eid}))
+    in_rows = _rows(db_exec(
+        "MATCH (a:Entity)-[r:Rel]->(b:Entity {id:$id}) RETURN r.name, a.type, a.name, a.descr",
+        {"id": eid}))
+    rel_lines = []
+    for arrow, rows in (("→", out_rows), ("←", in_rows)):
+        for rname, rtype, rn, rd in rows:
+            d = f" — {rd[:80]}" if rd else ""
+            rel_lines.append(f"- {arrow} [{rtype}] {rn}{d}  _via {rname}_")
+    if rel_lines:
+        lines.append("\n### Verknüpfte Entities\n" + "\n".join(rel_lines))
+
+    shown = {"status"} | set(PROJECT_CONTEXT_FIELDS)
+    rest = {k: v for k, v in extra.items() if k not in shown}
+    if rest:
+        lines.append("\n### Weitere Felder\n```json\n"
+                     + json.dumps(rest, ensure_ascii=False, indent=2) + "\n```")
+
     return "\n".join(lines)
 
 
