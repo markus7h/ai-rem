@@ -8,3 +8,5 @@ setup-config.json
 .venv/
 .claude/settings.json
 .superpowers/
+
+.pii-guard/

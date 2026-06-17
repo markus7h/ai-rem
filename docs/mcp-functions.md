@@ -32,6 +32,8 @@ Memory-Senke bleibt.
 | `memory_get_relations` | Alle Beziehungen einer Entity anzeigen. |
 | `memory_list` | Entities nach Typ auflisten. |
 | `memory_preference_update` | Einzelne Felder einer Preference ändern (context, pinned, sort_order) ohne die Beschreibung zu überschreiben. |
+| `memory_set_project_context` | Projektkontext als `Project`-Entity anlegen/aktualisieren (dev_dir, repo, deploy_dir, deploy_host, deploy_cmd, skills, rules) — **feldweises Merge**, nicht übergebene Felder bleiben erhalten. |
+| `memory_project_context` | Vollen Projektkontext in einem Aufruf laden: ungekürzter Record inkl. `extra` **plus** alle verknüpften Entities. Exakt oder per Fuzzy-Namenstreffer. |
 | `memory_merge` | Zwei Duplikate nicht-destruktiv zusammenführen. |
 | `memory_archive` | Entity archivieren statt löschen (Historie bleibt erhalten). |
 | `memory_delete` | Entity + alle Kanten löschen. |

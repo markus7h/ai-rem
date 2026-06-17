@@ -12,6 +12,8 @@ insights proactively with `memory_add` / `memory_relate`.
 |---|---|
 | `memory_add(name, type, description, extra, context, pinned)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context` |
 | `memory_preference_update(name, context, pinned, sort_order)` | Update preference fields without overwriting the description |
+| `memory_set_project_context(name, description, status, dev_dir, repo, deploy_dir, deploy_host, deploy_cmd, skills, rules, context)` | Create/update a project's working context as a `Project` entity — **field-wise merge** (unlike `memory_add`, omitted `extra` fields are kept; `""`/`[]` clears one) |
+| `memory_project_context(name)` | Load a project's full working context in one call: untruncated record incl. `extra` (paths/skills/rules) **plus** all directly related entities. Exact match, else fuzzy by project name |
 | `memory_relate(from, relation, to, extra)` | Create a relationship between two entities |
 | `memory_search(query, context, include_archived, limit)` | Hybrid search over name + description: per-token lexical matching plus semantic vector recall (finds multi-word queries even when the words aren't contiguous) |
 | `memory_search_full(query, context)` | Like `memory_search`, but returns the full description without the 400-char truncation |

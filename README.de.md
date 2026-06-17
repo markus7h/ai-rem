@@ -27,6 +27,14 @@ Technisch:
 
 Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontext aus dem Graph und speichert neue Erkenntnisse proaktiv mit `memory_add` / `memory_relate`. Der Graph hält typisierte **Entities** — `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic` — und **Relations** dazwischen. Jede Entity kann ein `context`-Tag tragen (`work` / `private` / global), sodass Arbeits- und Privat-Wissen pro Repo getrennt bleiben.
 
+**Projektkontext.** Der Arbeitskontext eines Projekts — lokales Dev-Verzeichnis, Deploy-Verzeichnis/-Host, relevante Skills und projektspezifische Regeln — liegt im `extra` einer `Project`-Entity. Schreiben mit `memory_set_project_context(...)` (feldweises Merge, d. h. `skills` später ergänzen ohne `dev_dir`/`rules` zu verlieren), in einem Aufruf vollständig laden mit `memory_project_context(name)` — ungekürzter Record plus alle verknüpften Entities. Damit lässt sich eine Sitzung „im Kontext von Projekt X" starten.
+
+```jsonc
+// extra-Schema (alle Felder optional)
+{ "status": "aktiv", "dev_dir": "...", "repo": "...", "deploy_dir": "...",
+  "deploy_host": "...", "deploy_cmd": "...", "skills": [...], "rules": [...] }
+```
+
 → **[MCP-Funktionsreferenz](docs/mcp-functions.md)** — alle `memory_*`-Tools (und die Begleit-MCPs) mit Signaturen und Workflows.
 
 ---

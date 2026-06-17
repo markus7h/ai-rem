@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import kuzu
@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.23"
+VERSION = "0.5.0"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -2160,6 +2160,166 @@ def _dump_graph() -> dict:
     }
 
 
+def _okf_bundle() -> bytes:
+    """Graph als OKF-Bundle zippen (Open Knowledge Format, Google v0.1):
+    je Entity ein Markdown-Concept <typeslug>/<id>.md mit YAML-Frontmatter
+    (required: type), Relationen als bundle-relative Markdown-Links (/typ/id.md),
+    plus reservierte index.md je Ebene. Reine stdlib, keine Deps.
+
+    Spec: github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf
+    """
+    import io, zipfile
+
+    g = _dump_graph()
+    ents = {e["id"]: e for e in g["entities"]}
+
+    def y(v):                       # YAML-sicherer Wert via JSON (YAML ⊇ JSON)
+        return json.dumps(v, ensure_ascii=False)
+
+    def tslug(t):
+        return _id(t or "concept")
+
+    def cpath(e):                   # Concept-Pfad ohne .md
+        return f"{tslug(e['type'])}/{e['id']}"
+
+    out_rel, in_rel = {}, {}
+    for r in g["relations"]:
+        out_rel.setdefault(r["from_id"], []).append((r["relation"], r["to_id"]))
+        in_rel.setdefault(r["to_id"], []).append((r["relation"], r["from_id"]))
+
+    files, by_type = {}, {}
+    for e in g["entities"]:
+        by_type.setdefault(tslug(e["type"]), []).append(e)
+        descr = (e.get("description") or "").strip()
+        summary = descr.splitlines()[0][:200] if descr else ""
+        # source-Marker: kennzeichnet ai-rem als Ursprung → beim Re-Import
+        # (Round-Trip) wird der Eintrag NICHT als "importiert" getaggt.
+        fm = [f"type: {y(e['type'] or 'Concept')}", f"title: {y(e['name'])}",
+              f"source: {y('ai-rem')}"]
+        if summary:
+            fm.append(f"description: {y(summary)}")
+        if e.get("context"):
+            fm.append(f"tags: {y([e['context']])}")
+            fm.append(f"context: {y(e['context'])}")
+        if e.get("updated_at"):
+            fm.append(f"timestamp: {y(e['updated_at'])}")
+        if e.get("archived") == "true":
+            fm.append("archived: true")
+
+        body = ["---", *fm, "---", "", f"# {e['name']}", ""]
+        if descr:
+            body += [descr, ""]
+        rels = ([f"- → {rel} [{ents[t]['name']}](/{cpath(ents[t])}.md)"
+                 for rel, t in out_rel.get(e["id"], []) if t in ents]
+                + [f"- ← {rel} [{ents[f]['name']}](/{cpath(ents[f])}.md)"
+                   for rel, f in in_rel.get(e["id"], []) if f in ents])
+        if rels:
+            body += ["## Relationen", *rels, ""]
+        if e.get("extra"):
+            body += ["## Extra", "```json",
+                     json.dumps(e["extra"], ensure_ascii=False, indent=2), "```", ""]
+        files[f"{cpath(e)}.md"] = "\n".join(body)
+
+    for ts, elist in by_type.items():   # reservierte index.md je Typ (Verzeichnis-Listing)
+        files[f"{ts}/index.md"] = (f"# {ts}\n\n"
+            + "\n".join(f"- [{e['name']}](/{ts}/{e['id']}.md)" for e in elist) + "\n")
+
+    files["index.md"] = ('---\nokf_version: "0.1"\n---\n\n# ai-rem knowledge graph\n\n'
+        + "\n".join(f"- [{ts}](/{ts}/index.md) ({len(el)})"
+                    for ts, el in sorted(by_type.items())) + "\n")
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for path, content in files.items():
+            z.writestr(path, content)
+    return out.getvalue()
+
+
+_OKF_REL_RE = re.compile(r"^\s*[-*]\s*([→←])\s+(\S+)\s+\[[^\]]*\]\(([^)]+)\)")
+
+
+def _split_frontmatter(text: str):
+    """(frontmatter_dict_or_None, body). YAML via pyyaml; fällt auf {} zurück."""
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.DOTALL)
+    if not m:
+        return None, text
+    try:
+        import yaml
+        fm = yaml.safe_load(m.group(1)) or {}
+    except Exception:
+        fm = {}
+    return (fm if isinstance(fm, dict) else {}), m.group(2)
+
+
+def _parse_okf_body(body: str):
+    """(description, extra, rels) aus einem OKF-Concept-Body.
+
+    rels: [(relation, link_target)] nur ausgehende (→), eingehende (←) werden
+    übersprungen — sonst entstünde jede Kante doppelt.
+    """
+    head = re.split(r"\n##\s", "\n" + body, maxsplit=1)[0]
+    head = re.sub(r"^\s*#\s.*\n?", "", head.lstrip("\n"), count=1)  # führende # Überschrift
+    descr = head.strip()
+    extra = {}
+    m = re.search(r"##\s*Extra\s*\n+```json\s*\n(.*?)\n```", body, re.DOTALL)
+    if m:
+        try:
+            extra = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            extra = {}
+    rels = []
+    for line in body.splitlines():
+        rm = _OKF_REL_RE.match(line)
+        if rm and rm.group(1) == "→":
+            rels.append((rm.group(2), rm.group(3)))
+    return descr, extra, rels
+
+
+def _okf_import(zip_bytes: bytes, mode: str = "merge") -> dict:
+    """OKF-Bundle (ZIP) → Graph. Zwei-Pass: erst title_by_path, dann Entities+Relationen."""
+    import io, zipfile
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+        members = [n for n in z.namelist()
+                   if n.endswith(".md") and os.path.basename(n) not in ("index.md", "log.md")]
+        raw = {n: z.read(n).decode("utf-8") for n in members}
+
+    parsed, title_by_path = {}, {}
+    for path, text in raw.items():
+        fm, bd = _split_frontmatter(text)
+        fm = fm or {}
+        name = fm.get("title") or os.path.splitext(os.path.basename(path))[0]
+        parsed[path] = (fm, bd, name)
+        title_by_path[path] = name
+        title_by_path["/" + path] = name
+
+    entities, relations = [], []
+    for path, (fm, bd, name) in parsed.items():
+        descr, extra, rels = _parse_okf_body(bd)
+        ctx = fm.get("context") or ""
+        if not ctx and isinstance(fm.get("tags"), list) and fm["tags"]:
+            ctx = fm["tags"][0]
+        # Fremd-Eintrag → "imported"-Marker; eigener Export (source: ai-rem) bleibt untagged.
+        if fm.get("source") != "ai-rem":
+            extra = {**extra, "imported": _now()}
+        entities.append({
+            "name": name,
+            "type": fm.get("type") or "Concept",
+            "description": descr or (fm.get("description") or ""),
+            "extra": extra,
+            "context": ctx,
+            "archived": fm.get("archived") in (True, "true"),
+        })
+        for rel, target in rels:
+            tgt = title_by_path.get(target) or title_by_path.get(target.lstrip("/"))
+            if not tgt:  # broken link tolerieren (§ Consumer-Pflicht), aus Basename ableiten
+                tgt = os.path.splitext(os.path.basename(target))[0]
+            relations.append({"from_id": _id(name), "relation": rel, "to_id": _id(tgt)})
+
+    res = _apply_import({"entities": entities, "relations": relations}, mode)
+    res["concepts_parsed"] = len(parsed)
+    return res
+
+
 def _graph_signature() -> dict:
     """Fingerprint that changes iff the graph changed. Cheap (4 aggregate queries)."""
     e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
@@ -2434,7 +2594,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </head>
 <body>
 <h1>ai-rem</h1>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/browse">Browse →</a> &nbsp;·&nbsp; <a href="/graph">Graph →</a> &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
 <div class="grid">
 
   <div class="card">
@@ -2476,6 +2636,19 @@ button:disabled{opacity:.45;cursor:not-allowed}
       <button onclick="doRestore()">Restore</button>
     </div>
     <p class="hint">Merge adds missing entries. Replace deletes the entire graph before importing.</p>
+  </div>
+
+  <div class="card">
+    <h2>OKF Import</h2>
+    <div class="row">
+      <input type="file" id="of" accept=".zip">
+      <select id="om">
+        <option value="merge">Merge</option>
+        <option value="replace">Replace (wipe first)</option>
+      </select>
+      <button onclick="doOkfImport()">Import OKF</button>
+    </div>
+    <p class="hint">Open-Knowledge-Format-Bundle (ZIP). Importierte Einträge sind erst nach erneutem Schreiben semantisch durchsuchbar.</p>
   </div>
 
 </div>
@@ -2546,6 +2719,17 @@ async function doRestore(){
   fd.append('mode',document.getElementById('rm').value);
   const r=await fetch('/api/restore',{method:'POST',body:fd}).then(r=>r.json()).catch(e=>({error:e.message}));
   r.error?toast(r.error,'err'):toast(`Restored: ${r.entities_created} entities, ${r.relations_created} relations`,'ok');
+  loadStatus();
+}
+
+async function doOkfImport(){
+  const fi=document.getElementById('of');
+  if(!fi.files.length){toast('Select a .zip first','err');return;}
+  const fd=new FormData();
+  fd.append('file',fi.files[0]);
+  fd.append('mode',document.getElementById('om').value);
+  const r=await fetch('/api/import/okf',{method:'POST',body:fd}).then(r=>r.json()).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):toast(`OKF: ${r.concepts_parsed} Concepts → ${r.entities_created} entities, ${r.relations_created} relations`,'ok');
   loadStatus();
 }
 
@@ -2758,7 +2942,7 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
 </head>
 <body>
 <h1>Cleanup</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/install">Install</a> &nbsp;·&nbsp; nicht-destruktiv: archivieren statt löschen</p>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/install">Install</a> &nbsp;·&nbsp; nicht-destruktiv: archivieren statt löschen</p>
 
 <div class="card">
   <div class="row">
@@ -2767,6 +2951,15 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
     <button onclick="saveCfg()">Speichern</button>
     <button class="ghost" onclick="runNow()">Jetzt ausführen</button>
     <span class="muted" id="lr"></span>
+  </div>
+</div>
+
+<h2>Archiv aufräumen</h2>
+<div class="card">
+  <div class="row">
+    <label>Archivierte der letzten <input type="number" id="kd" min="0" value="30"> Tage behalten</label>
+    <button class="ghost" style="color:var(--err);border-color:var(--err)" onclick="purge()">Ältere endgültig löschen</button>
+    <span class="muted">0 = alle archivierten löschen · destruktiv, kein Undo</span>
   </div>
 </div>
 
@@ -2821,6 +3014,16 @@ async function resolve(id,action){
     body:JSON.stringify({id,action})});
   const j=await r.json();
   toast(j.error?('Fehler: '+j.error):(action==='apply'?(j.result||'Angewandt'):'Verworfen'),!j.error);load();
+}
+async function purge(){
+  const kd=parseInt($('kd').value)||0;
+  const msg=kd>0?`Alle Einträge löschen, die länger als ${kd} Tage archiviert sind? Endgültig, kein Undo.`
+                :'ALLE archivierten Einträge endgültig löschen? Kein Undo.';
+  if(!confirm(msg))return;
+  const r=await fetch('/api/cleanup/purge-archived',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({keep_days:kd})});
+  const j=await r.json();
+  toast(j.error?('Fehler: '+j.error):(`${j.deleted} gelöscht · ${j.kept} behalten`),!j.error);
 }
 load();
 </script>
@@ -2907,9 +3110,190 @@ async def api_cleanup_resolve(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=404 if result.get("error") == "not found" else 200)
 
 
+@mcp.custom_route("/api/cleanup/purge-archived", methods=["POST"])
+async def api_cleanup_purge_archived(request: Request) -> JSONResponse:
+    """Archivierte Einträge löschen; keep_days>0 behält die letzten X Tage."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        keep_days = int(body.get("keep_days") or 0)
+    except (TypeError, ValueError):
+        keep_days = 0
+    res = await asyncio.to_thread(_purge_archived, keep_days)
+    return JSONResponse(res)
+
+
 @mcp.custom_route("/export", methods=["GET"])
 async def export_route(request: Request) -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(_dump_graph))
+
+
+@mcp.custom_route("/export/okf", methods=["GET"])
+async def export_okf_route(request: Request) -> Response:
+    """OKF-Interop: Graph als Open Knowledge Format Bundle (Markdown + YAML, ZIP)."""
+    data = await asyncio.to_thread(_okf_bundle)
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="ai-rem-okf-bundle.zip"'})
+
+
+_BROWSE_HTML = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Browse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--warn:#808080}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px;position:sticky;top:0;background:var(--bg);padding:6px 0}
+input[type=text],select{background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px}
+input[type=text]{flex:1;min-width:180px}
+.muted{color:var(--muted);font-size:12px}
+.e{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:9px;padding:12px 14px;margin-bottom:8px;cursor:pointer}
+.e.arch{border-left-color:var(--warn);opacity:.75}
+.eh{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.nm{font-weight:600}
+.tag{font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:1px 7px;border-radius:4px;border:1px solid var(--accent);color:var(--accent)}
+.tag.ctx{border-color:var(--border);color:var(--muted)}
+.dsc{color:var(--muted);font-size:13px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.det{margin-top:10px;font-size:13px;display:none}
+.e.open .det{display:block}.e.open .dsc{white-space:normal}
+.det h4{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:10px 0 4px}
+.det pre{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;overflow:auto;white-space:pre-wrap}
+.rel{font-size:13px;padding:2px 0}.rel .r{color:var(--muted);font-family:monospace;font-size:12px}
+</style>
+</head>
+<body>
+<h1>Browse</h1>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/graph">Graph</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <a href="/export/okf">OKF-Bundle ↓</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
+<div class="bar">
+  <input type="text" id="q" placeholder="Suche in Name &amp; Beschreibung…" oninput="render()">
+  <select id="t" onchange="render()"><option value="">alle Typen</option></select>
+  <label class="muted"><input type="checkbox" id="arch" onchange="render()"> archivierte zeigen</label>
+</div>
+<div id="list"></div>
+<script>
+const $=id=>document.getElementById(id);
+let ENT=[], NAME={}, OUT={}, INC={};
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+async function init(){
+  const g=await (await fetch('/export')).json();
+  ENT=g.entities; ENT.forEach(e=>NAME[e.id]=e.name);
+  g.relations.forEach(r=>{
+    (OUT[r.from_id]=OUT[r.from_id]||[]).push([r.relation, NAME[r.to_id]||r.to_id]);
+    (INC[r.to_id]=INC[r.to_id]||[]).push([r.relation, NAME[r.from_id]||r.from_id]);
+  });
+  const types=[...new Set(ENT.map(e=>e.type))].sort();
+  $('t').innerHTML='<option value="">alle Typen</option>'+types.map(t=>`<option>${esc(t)}</option>`).join('');
+  render();
+}
+function render(){
+  const q=$('q').value.toLowerCase(), tf=$('t').value, showArch=$('arch').checked;
+  const list=ENT.filter(e=>{
+    if(!showArch && e.archived==='true')return false;
+    if(tf && e.type!==tf)return false;
+    if(q && !((e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q)))return false;
+    return true;
+  }).sort((a,b)=>(b.updated_at||'').localeCompare(a.updated_at||''));
+  $('cnt').textContent=`${list.length} / ${ENT.length} Einträge`;
+  $('list').innerHTML=list.map(e=>{
+    const arch=e.archived==='true';
+    const rels=(OUT[e.id]||[]).map(([r,n])=>`<div class="rel"><span class="r">→ ${esc(r)}</span> ${esc(n)}</div>`).join('')
+             +(INC[e.id]||[]).map(([r,n])=>`<div class="rel"><span class="r">← ${esc(r)}</span> ${esc(n)}</div>`).join('');
+    const ex=Object.keys(e.extra||{}).length?`<h4>Extra</h4><pre>${esc(JSON.stringify(e.extra,null,2))}</pre>`:'';
+    return `<div class="e ${arch?'arch':''}" onclick="this.classList.toggle('open')">
+      <div class="eh"><span class="tag">${esc(e.type)}</span>${e.context?`<span class="tag ctx">${esc(e.context)}</span>`:''}
+        <span class="nm">${esc(e.name)}</span>${arch?'<span class="tag ctx">archiviert</span>':''}${e.extra&&e.extra.imported?'<span class="tag ctx">importiert</span>':''}
+        <span class="muted" style="margin-left:auto">${(e.updated_at||'').slice(0,10)}</span></div>
+      <div class="dsc">${esc(e.description)||'<i>—</i>'}</div>
+      <div class="det">${ex}${rels?`<h4>Relationen</h4>${rels}`:'<span class="muted">keine Relationen</span>'}</div>
+    </div>`;
+  }).join('')||'<p class="muted">nichts gefunden</p>';
+}
+init();
+</script>
+</body>
+</html>"""
+
+
+@mcp.custom_route("/browse", methods=["GET"])
+async def browse_route(request: Request) -> Response:
+    return Response(content=_BROWSE_HTML, media_type="text/html")
+
+
+_GRAPH_HTML = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;padding:20px}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+.bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.muted{color:var(--muted);font-size:12px}
+#net{height:78vh;background:var(--card);border:1px solid var(--border);border-radius:10px}
+#leg{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+#leg span{font-size:12px;display:inline-flex;align-items:center;gap:5px}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+</style>
+</head>
+<body>
+<h1>Graph</h1>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
+<div class="bar">
+  <label class="muted"><input type="checkbox" id="arch" onchange="build()"> archivierte zeigen</label>
+  <label class="muted"><input type="checkbox" id="phys" checked onchange="net&&net.setOptions({physics:{enabled:this.checked}})"> Physik</label>
+</div>
+<div id="net"></div>
+<div id="leg"></div>
+<script>
+const $=id=>document.getElementById(id);
+const PAL=['#388e3c','#1565c0','#c62828','#6a1b9a','#ef6c00','#00838f','#ad1457','#558b00','#4527a0','#795548','#546e7a'];
+let G=null, net=null, COL={};
+function colorFor(t){if(!(t in COL))COL[t]=PAL[Object.keys(COL).length%PAL.length];return COL[t];}
+async function init(){G=await (await fetch('/export')).json();build();}
+function build(){
+  const showArch=$('arch').checked;
+  const ents=G.entities.filter(e=>showArch||e.archived!=='true');
+  const ok=new Set(ents.map(e=>e.id));
+  const nodes=ents.map(e=>({id:e.id,label:e.name,color:colorFor(e.type),
+    shape:'dot',size:14,font:{size:13,color:'#333'},
+    opacity:e.archived==='true'?0.45:1,title:e.type+(e.description?' · '+e.description:'')}));
+  const edges=G.relations.filter(r=>ok.has(r.from_id)&&ok.has(r.to_id)).map(r=>({
+    from:r.from_id,to:r.to_id,label:r.relation,arrows:'to',
+    font:{size:10,color:'#888',strokeWidth:3,strokeColor:'#fafafa'},color:{color:'#ccc'}}));
+  $('cnt').textContent=`${nodes.length} Knoten · ${edges.length} Kanten`;
+  net=new vis.Network($('net'),{nodes,edges},{
+    physics:{enabled:$('phys').checked,stabilization:{iterations:150},barnesHut:{springLength:130}},
+    interaction:{hover:true,tooltipDelay:120}});
+  net.on('doubleClick',p=>{if(p.nodes.length)location.href='/browse';});
+  $('leg').innerHTML=Object.entries(COL).map(([t,c])=>`<span><i class="dot" style="background:${c}"></i>${t}</span>`).join('');
+}
+init();
+</script>
+</body>
+</html>"""
+
+
+@mcp.custom_route("/graph", methods=["GET"])
+async def graph_route(request: Request) -> Response:
+    return Response(content=_GRAPH_HTML, media_type="text/html")
 
 
 @mcp.custom_route("/import", methods=["POST"])
@@ -3230,6 +3614,29 @@ async def api_restore(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+@mcp.custom_route("/api/import/okf", methods=["POST"])
+async def api_import_okf(request: Request) -> JSONResponse:
+    """OKF-Bundle (ZIP) hochladen → Graph. Imported Entities sind nicht semantisch indexiert."""
+    try:
+        form = await request.form()
+    except Exception as e:
+        log.warning("invalid form data in /api/import/okf: %s", e)
+        return JSONResponse({"error": "invalid form data"}, status_code=400)
+    file = form.get("file")
+    if not file:
+        return JSONResponse({"error": "no file uploaded"}, status_code=400)
+    mode = form.get("mode", "merge")
+    if mode not in ("merge", "replace"):
+        return JSONResponse({"error": "mode must be merge or replace"}, status_code=400)
+    content = await file.read()
+    try:
+        result = await asyncio.to_thread(_okf_import, content, mode)
+    except Exception as e:
+        log.warning("OKF import failed: %s", e)
+        return JSONResponse({"error": f"kein gültiges OKF-Bundle: {e}"}, status_code=400)
+    return JSONResponse(result)
+
+
 # ─── helpers ────────────────────────────────────────────────────────────────
 
 
@@ -3357,6 +3764,9 @@ def _apply_import(body: dict, mode: str) -> dict:
         )
         existing_rels.add(key)
         relations_created += 1
+
+    if entities_created:
+        _embed_backfill()  # importierte Einträge semantisch durchsuchbar machen
 
     return {
         "status": "ok", "mode": mode,
@@ -3497,6 +3907,78 @@ def memory_preference_update(
     if pinned   is not None: parts.append(f"pinned={new_pin!r}")
     if sort_order is not None: parts.append(f"sort_order={new_so!r}")
     return f"[{cur_type}] {name}: {', '.join(parts) or 'keine Änderung'}"
+
+
+# Schema-Felder eines Projektkontexts (Reihenfolge = Anzeige-Reihenfolge im Abruf).
+PROJECT_CONTEXT_FIELDS = (
+    "dev_dir", "repo", "deploy_dir", "deploy_host", "deploy_cmd", "skills", "rules",
+    "mcp",
+)
+
+
+@mcp.tool()
+def memory_set_project_context(
+    name: str,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    dev_dir: Optional[str] = None,
+    repo: Optional[str] = None,
+    deploy_dir: Optional[str] = None,
+    deploy_host: Optional[str] = None,
+    deploy_cmd: Optional[str] = None,
+    skills: Optional[list] = None,
+    rules: Optional[list] = None,
+    mcp: Optional[dict] = None,
+    context: Optional[str] = None,
+) -> str:
+    """Projektkontext als Project-Entity anlegen/aktualisieren — feldweises Merge.
+
+    Speichert pro Projekt dev_dir/repo, deploy_dir/deploy_host/deploy_cmd, skills
+    und rules im extra-JSON. Anders als memory_add (das extra komplett ERSETZT)
+    bleibt hier jedes nicht übergebene Feld erhalten — nur die gesetzten Parameter
+    werden gemergt. "" bzw. [] leert ein Feld gezielt. status defaultet beim
+    Neuanlegen auf "aktiv". Voller Abruf inkl. Relationen via memory_project_context.
+
+    mcp: kompletter .mcp.json-Inhalt des Projekts (Dict, i.d.R. {"mcpServers": …}).
+    Da dieser Server remote läuft und kein lokales FS sieht, ist der Workflow:
+    Client liest die lokale .mcp.json des Projekts und übergibt sie hier; beim
+    Abruf via memory_project_context wird sie wieder ausgegeben, damit der Client
+    sie ins dev_dir schreiben kann. {} leert das Feld.
+    """
+    eid = _id(name)
+    prev = _rows(db_exec(
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.type, e.extra",
+        {"id": eid},
+    ))
+    if prev and prev[0][1] != "Project":
+        return (f"⚠ '{name}' existiert als [{prev[0][1]}], nicht als Project — "
+                f"Projektkontext nur auf Project-Entities setzen.")
+
+    try:
+        merged = json.loads(prev[0][2] or "{}") if prev else {}
+    except (json.JSONDecodeError, TypeError):
+        merged = {}
+    merged.pop("context", None)  # context spiegelt memory_add separat aus dem Param
+
+    updates = {
+        "dev_dir": dev_dir, "repo": repo, "deploy_dir": deploy_dir,
+        "deploy_host": deploy_host, "deploy_cmd": deploy_cmd,
+        "skills": skills, "rules": rules, "mcp": mcp,
+    }
+    set_fields = [k for k, v in updates.items() if v is not None]
+    for k in set_fields:
+        merged[k] = updates[k]
+
+    if status is not None:
+        merged["status"] = status
+        set_fields.append("status")
+    elif not prev and "status" not in merged:
+        merged["status"] = "aktiv"
+
+    memory_add(name, "Project", description=description, extra=merged, context=context)
+    verb = "aktualisiert" if prev else "angelegt"
+    suffix = f" (gesetzt: {', '.join(set_fields)})" if set_fields else ""
+    return f"Projektkontext {verb}: {name}{suffix}"
 
 
 @mcp.tool()
@@ -4253,6 +4735,100 @@ def memory_get_relations(name: str) -> str:
 
 
 @mcp.tool()
+def memory_project_context(name: str) -> str:
+    """Vollständigen Projektkontext laden: ungekürzter Project-Record inkl. extra
+    (dev_dir/repo/deploy_dir/deploy_host/skills/rules) PLUS alle direkt verknüpften
+    Entities — der komplette Arbeitskontext eines Projekts in einem Aufruf.
+
+    Anders als memory_get_context/memory_search (die descr kürzen und extra gar
+    nicht zeigen) ist dies der gezielte Voll-Abruf. Name wird exakt aufgelöst;
+    sonst Fuzzy-Treffer auf den jüngsten passenden Project-Namen.
+
+    Enthält das Projekt ein gespeichertes mcp-Setup, wird der .mcp.json-Inhalt mit
+    ausgegeben. CLIENT-AUFGABE (dieser Server hat kein lokales FS): die Datei nach
+    <dev_dir>/.mcp.json schreiben, falls dort nicht identisch vorhanden — und dann
+    den User auf einen Neustart hinweisen, da Claude Code .mcp.json nur beim Start lädt.
+    """
+    eid = _id(name)
+    row = _rows(db_exec(
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.type, e.descr, e.extra, e.context",
+        {"id": eid},
+    ))
+    if not row:
+        cand = _rows(db_exec(
+            """MATCH (e:Entity {type: 'Project'})
+               WHERE lower(e.name) CONTAINS $q
+               RETURN e.name, e.type, e.descr, e.extra, e.context
+               ORDER BY e.updated_at DESC LIMIT 1""",
+            {"q": name.lower()},
+        ))
+        if not cand:
+            return f"Kein Projektkontext gefunden für: {name}"
+        row = cand
+        eid = _id(row[0][0])
+
+    ename, etype, descr, extra_raw, ctx = row[0]
+    try:
+        extra = json.loads(extra_raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        extra = {}
+    extra.pop("context", None)
+
+    status = extra.get("status", "aktiv")
+    ctx_label = f" · context={ctx}" if ctx else ""
+    lines = [f"## Projektkontext: {ename}  [{status}{ctx_label}]"]
+    if etype != "Project":
+        lines.append(f"_(Hinweis: Entity-Typ ist {etype}, nicht Project)_")
+
+    env_keys = [("dev_dir", "Dev-Verzeichnis"), ("repo", "Repo"),
+                ("deploy_dir", "Deploy-Verzeichnis"), ("deploy_host", "Deploy-Host"),
+                ("deploy_cmd", "Deploy-Befehl")]
+    env = [f"- **{label}:** {extra[k]}" for k, label in env_keys if extra.get(k)]
+    if env:
+        lines.append("\n### Pfade & Umgebung\n" + "\n".join(env))
+
+    for key, head in (("skills", "Skills"), ("rules", "Regeln / Bedingungen")):
+        val = extra.get(key)
+        if val:
+            items = val if isinstance(val, list) else [val]
+            lines.append(f"\n### {head}\n" + "\n".join(f"- {x}" for x in items))
+
+    if descr:
+        lines.append(f"\n### Beschreibung\n{descr}")
+
+    mcp_cfg = extra.get("mcp")
+    if mcp_cfg:
+        target = f"{extra['dev_dir'].rstrip('/')}/.mcp.json" if extra.get("dev_dir") else ".mcp.json (Projekt-Root)"
+        lines.append(
+            f"\n### MCP-Setup → `{target}`\n"
+            "Client: diese Datei schreiben, falls dort nicht identisch vorhanden, "
+            "danach **Claude Code neu starten** (.mcp.json wird nur beim Start geladen).\n"
+            "```json\n" + json.dumps(mcp_cfg, ensure_ascii=False, indent=2) + "\n```")
+
+    out_rows = _rows(db_exec(
+        "MATCH (a:Entity {id:$id})-[r:Rel]->(b:Entity) RETURN r.name, b.type, b.name, b.descr",
+        {"id": eid}))
+    in_rows = _rows(db_exec(
+        "MATCH (a:Entity)-[r:Rel]->(b:Entity {id:$id}) RETURN r.name, a.type, a.name, a.descr",
+        {"id": eid}))
+    rel_lines = []
+    for arrow, rows in (("→", out_rows), ("←", in_rows)):
+        for rname, rtype, rn, rd in rows:
+            d = f" — {rd[:80]}" if rd else ""
+            rel_lines.append(f"- {arrow} [{rtype}] {rn}{d}  _via {rname}_")
+    if rel_lines:
+        lines.append("\n### Verknüpfte Entities\n" + "\n".join(rel_lines))
+
+    shown = {"status"} | set(PROJECT_CONTEXT_FIELDS)
+    rest = {k: v for k, v in extra.items() if k not in shown}
+    if rest:
+        lines.append("\n### Weitere Felder\n```json\n"
+                     + json.dumps(rest, ensure_ascii=False, indent=2) + "\n```")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def memory_status() -> str:
     """Kurzstatus: Anzahl Entities und Relationen im Knowledge Graph."""
     e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
@@ -4415,6 +4991,48 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
     _ensure_rel(did, "DUPLIKAT_VON", cid, ts)
     return (f"Gemergt: '{duplicate_name}' → '{canonical_name}' "
             f"({repointed} Relationen umgehängt, Dublette archiviert + DUPLIKAT_VON)")
+
+
+def _purge_archived(keep_days: int = 0) -> dict:
+    """Archivierte Entities endgültig löschen. keep_days>0 verschont alles, dessen
+    Archivierung weniger als keep_days Tage zurückliegt (Stichtag extra.archived_at,
+    Fallback updated_at); keep_days<=0 löscht alle. Returns {deleted, kept, names}."""
+    rows = _rows(db_exec(
+        "MATCH (e:Entity) WHERE e.archived = 'true' "
+        "RETURN e.id, e.name, e.extra, e.updated_at"))
+    cutoff = ((datetime.now() - timedelta(days=keep_days)).isoformat(timespec="seconds")
+              if keep_days and keep_days > 0 else None)
+    to_del = []
+    for eid, name, extra_raw, upd in rows:
+        try:
+            arch_at = json.loads(extra_raw or "{}").get("archived_at") or upd or ""
+        except json.JSONDecodeError:
+            arch_at = upd or ""
+        if cutoff is None or arch_at < cutoff:  # ISO same-format → lexikografisch korrekt
+            to_del.append((eid, name))
+    for eid, name in to_del:
+        db_exec("MATCH (e:Entity {id:$id}) DETACH DELETE e", {"id": eid})
+        _remove_embed_row(name)
+    return {"deleted": len(to_del), "kept": len(rows) - len(to_del),
+            "names": [n for _, n in to_del]}
+
+
+@mcp.tool()
+def memory_purge_archived(keep_days: int = 0) -> str:
+    """Archivierte Einträge endgültig löschen (destruktiv — anders als memory_archive).
+
+    keep_days > 0: nur löschen, was länger als keep_days Tage archiviert ist
+    (Stichtag extra.archived_at, Fallback updated_at).
+    keep_days = 0 (default): ALLE archivierten Einträge löschen.
+    Aktive (nicht archivierte) Einträge bleiben immer unberührt.
+    """
+    res = _purge_archived(keep_days)
+    if not res["deleted"]:
+        return f"Nichts zu löschen — {res['kept']} archivierte Einträge bleiben."
+    head = (f"{res['deleted']} archivierte Einträge gelöscht"
+            + (f" (älter als {keep_days} Tage)" if keep_days > 0 else "")
+            + f", {res['kept']} behalten.")
+    return head + "\n" + "\n".join(f"- {n}" for n in res["names"][:50])
 
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────

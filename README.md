@@ -26,7 +26,15 @@ Technically:
 
 At the start of each session, Claude loads the relevant context from the graph via `memory_get_context()` and saves new insights proactively with `memory_add` / `memory_relate`. The graph holds typed **entities** — `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic` — and **relations** between them. Each entity can carry a `context` tag (`work` / `private` / global) so work and private knowledge stay separated per repo.
 
-→ **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` tool set (13 tools) with signatures, entity types and context separation.
+**Project context.** A project's working context — local dev dir, deployment dir/host, relevant skills and project-specific rules — lives in a `Project` entity's `extra`. Write it with `memory_set_project_context(...)` (field-wise merge, so you can add `skills` later without wiping `dev_dir`/`rules`) and load it whole in one call with `memory_project_context(name)` — the untruncated record plus every related entity. Use it to start a session "in the context of project X".
+
+```jsonc
+// extra schema (all fields optional)
+{ "status": "aktiv", "dev_dir": "...", "repo": "...", "deploy_dir": "...",
+  "deploy_host": "...", "deploy_cmd": "...", "skills": [...], "rules": [...] }
+```
+
+→ **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` tool set (15 tools) with signatures, entity types and context separation.
 
 ---
 
