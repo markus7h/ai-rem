@@ -68,7 +68,8 @@ The idempotent setup registers the MCP server, deploys the hooks, writes a minim
 - **Knowledge-graph memory** — typed entities (`Project · Task · Decision · Preference · …`) and relations; hybrid lexical + semantic search. ([Tool reference](https://github.com/markus7h/ai-rem/blob/main/docs/mcp-tools.md))
 - **Lazy-loaded context** — only the relevant subgraph is loaded per session; cost stays flat as the graph grows.
 - **Cross-machine** — one server, available from every client; no per-repo `CLAUDE.md` ballast.
-- **Web UI** — `/ui` backups (manual/scheduled/restore), `/prefs` preferences manager, `/cleanup` maintenance, `/install` onboarding.
+- **Web UI** — `/ui` backups (manual/scheduled/restore), `/browse` interactive content browser, `/graph` node-link visualization, `/prefs` preferences manager, `/cleanup` maintenance + archive purge, `/install` onboarding.
+- **OKF interop** — export/import the whole graph as an [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/) v0.1 bundle (`/export/okf`, `/api/import/okf`); imported entries are indexed for semantic search.
 - **Auto-Memory** — a session-end hook extracts structured entities/relations from each transcript via Ollama (with an offline md-fallback + catch-up).
 - **Nightly cleanup** — non-destructive dedup/archive (never deletes; preferences & pinned untouched), ambiguous cases go to a review queue.
 - **Plan saving** — finalized plans become open `Task`s, a central cross-machine to-do list.
