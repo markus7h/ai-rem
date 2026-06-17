@@ -93,3 +93,15 @@ def test_refuses_non_project_entity():
 
 def test_unknown_project_returns_message():
     assert "Kein Projektkontext gefunden" in server.memory_project_context("GibtsNicht XYZ")
+
+
+def test_mcp_roundtrip_emits_writable_block():
+    cfg = {"mcpServers": {"foo": {"url": "https://x", "type": "http"}}}
+    server.memory_set_project_context("McpProj", dev_dir="/dev/mcp", mcp=cfg)
+    out = server.memory_project_context("McpProj")
+    assert "/dev/mcp/.mcp.json" in out      # Zielpfad aus dev_dir
+    assert "neu starten" in out.lower()     # Neustart-Hinweis
+    assert '"mcpServers"' in out            # schreibbarer Inhalt
+    # leeren entfernt den Block wieder
+    server.memory_set_project_context("McpProj", mcp={})
+    assert "MCP-Setup" not in server.memory_project_context("McpProj")

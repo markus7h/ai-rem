@@ -3,3 +3,4 @@ kuzu>=0.8.0
 fastembed>=0.3.0
 numpy>=1.26
 cryptography>=42
+pyyaml>=6
