@@ -24,6 +24,7 @@ The script automatically handles:
 7. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
 8. Install slash commands (`/setup-ai-rem`, `/ai-rem:prefedit`, `/memory-cleanup`)
 9. Create preferences & tool entities directly in the knowledge graph via MCP API
+10. **mykeyvault** — build and register locally as a **stdio** MCP (`git clone` + `npm run build` in the `mcp/` folder). Local stdio mode unlocks the exec/file tools (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`), so secrets **never** enter the LLM context — only the locally spawned subprocess. Without Node/Git or on build failure the setup falls back to the HTTP MCP (only `vault_list_items`/`vault_create_item`).
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`. The script is idempotent — running it multiple times on the same machine is safe.
 

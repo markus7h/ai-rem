@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1144,12 +1144,11 @@ def pull_secrets(setup_cfg):
 
 # ── tools-mcp (stdio) klonen+bauen, falls in setup-config ────────────────────
 
-def build_tools_mcp(setup_cfg):
-    stdio = setup_cfg.get('mcp_register', {}).get('tools', {}).get('stdio', {})
-    reg_url = stdio.get('registry_url', '')
-    if not reg_url:
-        return '', ''
-
+def _build_node_mcp(repo, install_dir, entry, subdir, label):
+    # Generisch: git clone/pull + npm install/build eines Node-MCP.
+    # entry ist install_dir-relativ (z.B. dist/index.js oder mcp/dist/index.js);
+    # subdir ist der Ordner mit package.json als npm-cwd ('' = install_dir selbst).
+    # Gibt den Entry-Pfad zurueck oder '' bei fehlenden Tools / Build-Fehler.
     miss = [c for c in ('node', 'npm', 'git') if not shutil.which(c)]
     node_major = 0
     if shutil.which('node'):
@@ -1161,7 +1160,7 @@ def build_tools_mcp(setup_cfg):
     if miss or node_major < 18:
         print('')
         print('================================================================')
-        print('!!  tools-MCP NICHT eingerichtet - Node.js >= 18 inkl. npm + git wird benoetigt.')
+        print('!!  %s NICHT eingerichtet - Node.js >= 18 inkl. npm + git wird benoetigt.' % label)
         if miss:
             print('    Fehlende Programme: %s' % ' '.join(miss))
         elif node_major < 18:
@@ -1175,16 +1174,14 @@ def build_tools_mcp(setup_cfg):
             print('      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs git')
             print('    Alternativ nvm:  https://github.com/nvm-sh/nvm  (nvm install --lts)')
             if PLATFORM == 'wsl':
-                print('    Hinweis WSL: Node IN der WSL-Distribution installieren; tools-mcp nicht unter /mnt/c ablegen (langsam, exec-Probleme).')
+                print('    Hinweis WSL: Node IN der WSL-Distribution installieren; nicht unter /mnt/c ablegen (langsam, exec-Probleme).')
         else:
             print('    Installieren:  Node.js >= 18 inkl. npm + git')
         print('    Danach erneut ausfuehren:  %s' % rerun_hint())
         print('================================================================')
-        return '', reg_url
+        return ''
 
-    repo = stdio.get('repo', '')
-    entry = stdio.get('entry') or 'dist/index.js'
-    tdir = os.path.expanduser(stdio.get('install_dir') or os.path.join('~', 'Code', 'tools-mcp'))
+    tdir = os.path.expanduser(install_dir)
     git = shutil.which('git')
     npm = shutil.which('npm')
 
@@ -1196,13 +1193,14 @@ def build_tools_mcp(setup_cfg):
         if run([git, 'clone', '--depth', '1', repo, tdir], timeout=300).returncode != 0:
             print('✗ git clone %s fehlgeschlagen (Netz/Repo-Zugriff pruefen)' % repo)
 
-    if os.path.isdir(tdir):
+    build_cwd = os.path.join(tdir, subdir) if subdir else tdir
+    if os.path.isdir(build_cwd):
         log = ''
         for cmd in ([npm, 'install', '--no-audit', '--no-fund'], [npm, 'run', 'build']):
-            p = run(cmd, timeout=600, cwd=tdir)
+            p = run(cmd, timeout=600, cwd=build_cwd)
             log += (p.stdout or '') + (p.stderr or '')
             if p.returncode != 0:
-                print('✗ tools-mcp npm-Build fehlgeschlagen - letzte Log-Zeilen:')
+                print('✗ %s npm-Build fehlgeschlagen - letzte Log-Zeilen:' % label)
                 for line in log.splitlines()[-12:]:
                     print('    | ' + line)
                 if re.search(r'SELF_SIGNED_CERT|UNABLE_TO_GET_ISSUER|UNABLE_TO_VERIFY_LEAF|CERT_UNTRUSTED|certificate', log, re.I):
@@ -1210,22 +1208,45 @@ def build_tools_mcp(setup_cfg):
                     print('      npm config set cafile /pfad/zur/root-ca.pem')
                     print('      oder:  NODE_EXTRA_CA_CERTS=/pfad/zur/root-ca.pem setzen')
                 if 'EACCES' in log:
-                    print('  ↳ Rechteproblem (EACCES): Besitzer von %s und ~/.npm pruefen - npm nie mit sudo ausfuehren.' % tdir)
+                    print('  ↳ Rechteproblem (EACCES): Besitzer von %s und ~/.npm pruefen - npm nie mit sudo ausfuehren.' % build_cwd)
                 break
 
     entry_path = os.path.join(tdir, *entry.split('/'))
     if os.path.isfile(entry_path):
-        print('OK tools-mcp gebaut: %s' % entry_path)
-        return entry_path, reg_url
-    print('!! tools-mcp Build fehlgeschlagen - tools nicht registriert. Manuell pruefen: cd %s && npm install && npm run build' % tdir)
-    return '', reg_url
+        print('OK %s gebaut: %s' % (label, entry_path))
+        return entry_path
+    print('!! %s Build fehlgeschlagen - manuell pruefen: cd %s && npm install && npm run build' % (label, build_cwd))
+    return ''
+
+
+def build_tools_mcp(setup_cfg):
+    stdio = setup_cfg.get('mcp_register', {}).get('tools', {}).get('stdio', {})
+    reg_url = stdio.get('registry_url', '')
+    if not reg_url:
+        return '', ''
+    entry = _build_node_mcp(stdio.get('repo', ''),
+                            stdio.get('install_dir') or os.path.join('~', 'Code', 'tools-mcp'),
+                            stdio.get('entry') or 'dist/index.js', '', 'tools-MCP')
+    return entry, reg_url
+
+
+def build_mykeyvault_mcp(setup_cfg):
+    # mykeyvault-MCP lokal bauen (stdio, voller Funktionsumfang). '' wenn kein
+    # stdio-Block konfiguriert oder Build fehlschlaegt -> HTTP-Fallback greift.
+    stdio = setup_cfg.get('mcp_register', {}).get('mykeyvault', {}).get('stdio', {})
+    if not stdio.get('repo'):
+        return ''
+    return _build_node_mcp(stdio['repo'],
+                           stdio.get('install_dir') or os.path.join('~', 'Code', 'mykeyvault'),
+                           stdio.get('entry') or 'mcp/dist/index.js',
+                           stdio.get('subdir', 'mcp'), 'mykeyvault-MCP')
 
 
 # ── ai-rem Bearer setzen + mykeyvault bootstrappen (atomar in ~/.claude.json) ─
 # Damit die ERSTE Session nicht 401t; danach refresht der SessionStart-Hook.
 
 def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
-                       vault_token, tools_entry, tools_reg_url):
+                       vault_token, tools_entry, tools_reg_url, vault_entry=''):
     cj = os.path.join(HOME, '.claude.json')
     if not os.path.exists(cj):
         print('⚠ ~/.claude.json fehlt - claude einmal interaktiv starten, dann Setup erneut ausfuehren')
@@ -1274,38 +1295,48 @@ def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
         else:
             print('  AI_REM_TOKEN=<token> %s' % rerun_hint())
 
-    # (2) mykeyvault als HTTP-MCP registrieren (kein SMB/node noetig).
-    # Kandidaten nur registrieren, wenn der Host von DIESER Maschine aus antwortet
-    # (DNS aufloesbar + TLS vertraut) — eine 4xx-Antwort genuegt als Lebenszeichen.
-    def reachable(url):
-        try:
-            http_get(url, timeout=5)
-            return True
-        except urllib.error.HTTPError:
-            return True
-        except Exception:
-            return False
-
-    reg_http = reg.get('http') or {}
-    ai_https = servers.get('ai-rem', {}).get('url', '').startswith('https')
-    mkv_url = os.environ.get('MYKEYVAULT_URL', '')
-    if not mkv_url:
-        cands = []
-        if ai_https and reg_http.get('https_url'):
-            cands.append(reg_http['https_url'])
-        if reg_http.get('url'):
-            cands.append(reg_http['url'])
-        for c in cands:
-            if reachable(c):
-                mkv_url = c
-                break
-            print('⚠ mykeyvault-Kandidat nicht erreichbar/vertraut, ueberspringe: %s' % c)
-    if mkv_url and tok:
+    # (2) mykeyvault registrieren: bevorzugt lokaler stdio-MCP (voller
+    # Funktionsumfang inkl. exec/file-Tools), sonst HTTP-Fallback (nur list/create).
+    if vault_entry and vault_token:
         existed = 'mykeyvault' in servers
-        servers['mykeyvault'] = {'type': 'http', 'url': mkv_url,
-                                 'headers': {'Authorization': 'Bearer ' + tok}}
-        print('✓ mykeyvault ' + ('migriert' if existed else 'registriert')
-              + (' (https)' if mkv_url.startswith('https') else ' (http)'))
+        servers['mykeyvault'] = {'type': 'stdio', 'command': 'node',
+                                 'args': [vault_entry],
+                                 'env': {'VAULT_API_URL': vault_url,
+                                         'VAULT_API_TOKEN': vault_token}}
+        print('✓ mykeyvault ' + ('migriert' if existed else 'registriert') + ' (stdio)')
+    else:
+        # HTTP-Fallback (kein Build/node noetig). Kandidaten nur registrieren, wenn
+        # der Host von DIESER Maschine aus antwortet (DNS aufloesbar + TLS vertraut)
+        # — eine 4xx-Antwort genuegt als Lebenszeichen.
+        def reachable(url):
+            try:
+                http_get(url, timeout=5)
+                return True
+            except urllib.error.HTTPError:
+                return True
+            except Exception:
+                return False
+
+        reg_http = reg.get('http') or {}
+        ai_https = servers.get('ai-rem', {}).get('url', '').startswith('https')
+        mkv_url = os.environ.get('MYKEYVAULT_URL', '')
+        if not mkv_url:
+            cands = []
+            if ai_https and reg_http.get('https_url'):
+                cands.append(reg_http['https_url'])
+            if reg_http.get('url'):
+                cands.append(reg_http['url'])
+            for c in cands:
+                if reachable(c):
+                    mkv_url = c
+                    break
+                print('⚠ mykeyvault-Kandidat nicht erreichbar/vertraut, ueberspringe: %s' % c)
+        if mkv_url and tok:
+            existed = 'mykeyvault' in servers
+            servers['mykeyvault'] = {'type': 'http', 'url': mkv_url,
+                                     'headers': {'Authorization': 'Bearer ' + tok}}
+            print('✓ mykeyvault ' + ('migriert' if existed else 'registriert')
+                  + (' (https)' if mkv_url.startswith('https') else ' (http)'))
     if vault_token:
         vf = os.path.join(CLAUDE_HOME, 'ai-rem-vault.env')
         fd = os.open(vf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -1641,10 +1672,11 @@ def main():
     mcp_endpoint = choose_mcp_endpoint(setup_cfg)
     ssh_host, ai_rem_token, vault_token = pull_secrets(setup_cfg)
     tools_entry, tools_reg_url = build_tools_mcp(setup_cfg)
+    vault_entry = build_mykeyvault_mcp(setup_cfg)
 
     try:
         tok = update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
-                                 vault_token, tools_entry, tools_reg_url)
+                                 vault_token, tools_entry, tools_reg_url, vault_entry)
     except Exception as ex:
         print('⚠ ~/.claude.json-Update fehlgeschlagen: %s' % ex)
         tok = ai_rem_token
