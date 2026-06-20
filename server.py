@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -3289,8 +3289,16 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
 <h1>Graph</h1>
 <p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
 <div class="bar">
+  <label class="muted">Kontext
+    <select id="ctx" onchange="build()">
+      <option value="">alle</option>
+      <option value="work">work</option>
+      <option value="private">private</option>
+      <option value="__global">global (ohne Tag)</option>
+    </select></label>
   <label class="muted"><input type="checkbox" id="arch" onchange="build()"> archivierte zeigen</label>
   <label class="muted"><input type="checkbox" id="phys" checked onchange="net&&net.setOptions({physics:{enabled:this.checked}})"> Physik</label>
+  <span class="muted">Typ-Filter: Legende anklicken</span>
 </div>
 <div id="net"></div>
 <div id="leg"></div>
@@ -3298,11 +3306,21 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
 const $=id=>document.getElementById(id);
 const PAL=['#388e3c','#1565c0','#c62828','#6a1b9a','#ef6c00','#00838f','#ad1457','#558b00','#4527a0','#795548','#546e7a'];
 let G=null, net=null, COL={};
+const HIDE=new Set();  // ausgeblendete Typen (Tag-Filter via Legende)
 function colorFor(t){if(!(t in COL))COL[t]=PAL[Object.keys(COL).length%PAL.length];return COL[t];}
-async function init(){G=await (await fetch('/export')).json();build();}
+function toggleType(t){HIDE.has(t)?HIDE.delete(t):HIDE.add(t);build();}
+async function init(){
+  G=await (await fetch('/export')).json();
+  G.entities.forEach(e=>colorFor(e.type));  // stabile Farben für ALLE Typen (Legende vollständig)
+  build();
+}
 function build(){
-  const showArch=$('arch').checked;
-  const ents=G.entities.filter(e=>showArch||e.archived!=='true');
+  const showArch=$('arch').checked, cf=$('ctx').value;
+  const ents=G.entities.filter(e=>{
+    if(!showArch&&e.archived==='true')return false;
+    if(cf==='__global'?e.context!=='':cf&&e.context!==cf)return false;
+    return !HIDE.has(e.type);
+  });
   const ok=new Set(ents.map(e=>e.id));
   const nodes=ents.map(e=>({id:e.id,label:e.name,color:colorFor(e.type),
     shape:'dot',size:14,font:{size:13,color:'#333'},
@@ -3315,7 +3333,7 @@ function build(){
     physics:{enabled:$('phys').checked,stabilization:{iterations:150},barnesHut:{springLength:130}},
     interaction:{hover:true,tooltipDelay:120}});
   net.on('doubleClick',p=>{if(p.nodes.length)location.href='/browse';});
-  $('leg').innerHTML=Object.entries(COL).map(([t,c])=>`<span><i class="dot" style="background:${c}"></i>${t}</span>`).join('');
+  $('leg').innerHTML=Object.entries(COL).map(([t,c])=>`<span onclick="toggleType('${t}')" style="cursor:pointer;opacity:${HIDE.has(t)?0.35:1}" title="${HIDE.has(t)?'einblenden':'ausblenden'}"><i class="dot" style="background:${c}"></i>${t}</span>`).join('');
 }
 init();
 </script>
