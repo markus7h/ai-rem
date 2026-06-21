@@ -141,6 +141,69 @@ def cmd_delete(c: MCPClient, a):
     _print(c.call("memory_delete", {"name": a.name}))
 
 
+def cmd_search_full(c: MCPClient, a):
+    args = {"query": a.query, "limit": a.limit}
+    if a.context:
+        args["context"] = a.context
+    if a.include_archived:
+        args["include_archived"] = True
+    _print(c.call("memory_search_full", args))
+
+
+def cmd_check_update(c: MCPClient, _):
+    _print(c.call("memory_check_update"))
+
+
+def cmd_archive(c: MCPClient, a):
+    args = {"name": a.name}
+    if a.compressed:
+        args["compressed_description"] = a.compressed
+    if a.superseded_by:
+        args["superseded_by"] = a.superseded_by
+    _print(c.call("memory_archive", args))
+
+
+def cmd_merge(c: MCPClient, a):
+    _print(c.call("memory_merge",
+                  {"canonical_name": a.canonical, "duplicate_name": a.duplicate}))
+
+
+def cmd_preference_update(c: MCPClient, a):
+    args = {"name": a.name}
+    if a.context is not None:
+        args["context"] = a.context
+    if a.pinned is not None:
+        args["pinned"] = a.pinned
+    if a.sort_order is not None:
+        args["sort_order"] = a.sort_order
+    _print(c.call("memory_preference_update", args))
+
+
+def cmd_project_context(c: MCPClient, a):
+    _print(c.call("memory_project_context", {"name": a.name}))
+
+
+def cmd_set_project_context(c: MCPClient, a):
+    args = {"name": a.name}
+    for key in ("description", "status", "dev_dir", "repo", "deploy_dir",
+                "deploy_host", "deploy_cmd", "context"):
+        val = getattr(a, key)
+        if val is not None:
+            args[key] = val
+    for key in ("skills", "rules"):
+        val = getattr(a, key)
+        if val is not None:
+            args[key] = json.loads(val)
+    _print(c.call("memory_set_project_context", args))
+
+
+def cmd_purge_archived(c: MCPClient, a):
+    if not a.yes:
+        sys.stderr.write("Confirm purge (destructive) with --yes\n")
+        sys.exit(2)
+    _print(c.call("memory_purge_archived", {"keep_days": a.keep_days}))
+
+
 def cmd_ingest(c: MCPClient, a):
     from lib.extractor import ingest_transcript
 
@@ -240,6 +303,60 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name")
     s.add_argument("--yes", action="store_true")
     s.set_defaults(func=cmd_delete)
+
+    s = sub.add_parser("search-full", help="memory_search_full (ungekuerzte descr)")
+    s.add_argument("query")
+    s.add_argument("--limit", "-n", type=int, default=15)
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default="")
+    s.add_argument("--include-archived", action="store_true")
+    s.set_defaults(func=cmd_search_full)
+
+    s = sub.add_parser("check-update", help="memory_check_update")
+    s.set_defaults(func=cmd_check_update)
+
+    s = sub.add_parser("archive", help="memory_archive (nicht-destruktiv)")
+    s.add_argument("name")
+    s.add_argument("--compressed", "--compressed-description", default=None,
+                   help="knappe Kurzfassung; Original wird gesichert")
+    s.add_argument("--superseded-by", dest="superseded_by", default=None)
+    s.set_defaults(func=cmd_archive)
+
+    s = sub.add_parser("merge", help="memory_merge (Dublette → canonical, archiviert)")
+    s.add_argument("canonical")
+    s.add_argument("duplicate")
+    s.set_defaults(func=cmd_merge)
+
+    s = sub.add_parser("preference-update", help="memory_preference_update")
+    s.add_argument("name")
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default=None)
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--pin", dest="pinned", action="store_true", default=None)
+    g.add_argument("--unpin", dest="pinned", action="store_false", default=None)
+    s.add_argument("--sort-order", dest="sort_order", type=int, default=None)
+    s.set_defaults(func=cmd_preference_update)
+
+    s = sub.add_parser("project-context", help="memory_project_context (Voll-Abruf)")
+    s.add_argument("name")
+    s.set_defaults(func=cmd_project_context)
+
+    s = sub.add_parser("set-project-context", help="memory_set_project_context (feldweises Merge)")
+    s.add_argument("name")
+    s.add_argument("--description", "--body", "-d", default=None)
+    s.add_argument("--status", default=None)
+    s.add_argument("--dev-dir", dest="dev_dir", default=None)
+    s.add_argument("--repo", default=None)
+    s.add_argument("--deploy-dir", dest="deploy_dir", default=None)
+    s.add_argument("--deploy-host", dest="deploy_host", default=None)
+    s.add_argument("--deploy-cmd", dest="deploy_cmd", default=None)
+    s.add_argument("--skills", default=None, help="JSON-Liste")
+    s.add_argument("--rules", default=None, help="JSON-Liste")
+    s.add_argument("--context", "-c", choices=["", "work", "private"], default=None)
+    s.set_defaults(func=cmd_set_project_context)
+
+    s = sub.add_parser("purge-archived", help="memory_purge_archived (destruktiv, needs --yes)")
+    s.add_argument("--keep-days", dest="keep_days", type=int, default=0)
+    s.add_argument("--yes", action="store_true")
+    s.set_defaults(func=cmd_purge_archived)
 
     s = sub.add_parser("ingest", help="extract+upsert from transcript")
     s.add_argument("--transcript", required=True)

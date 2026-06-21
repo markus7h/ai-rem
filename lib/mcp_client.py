@@ -156,13 +156,31 @@ class MCPClient:
         return json.loads(resp.read().decode())
 
     def call(self, tool: str, args: Optional[dict] = None) -> str:
-        resp = self._post(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {"name": tool, "arguments": args or {}},
-            },
-            sid=self._session(),
-        )
-        return self._parse(resp)
+        """memory_*-Op über die REST-Route POST /api/tool aufrufen.
+
+        Entkoppelt die CLI/den Extractor davon, welche Tools im MCP-tools/list-
+        Surface liegen (Issue #32): die 4 Kern-Tools bleiben dort, die 12 Admin-Ops
+        sind nur noch über /api/tool erreichbar — die hier alle bedient werden.
+        """
+        url = self.base_url + "/api/tool"
+        body = json.dumps({"name": tool, "arguments": args or {}}).encode()
+        headers = {"Content-Type": "application/json"}
+        headers.update(self._auth_header())
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            resp = urllib.request.urlopen(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = json.loads(e.read().decode()).get("error", "")
+            except Exception:
+                pass
+            raise MCPError(
+                f"{tool} failed (HTTP {e.code})" + (f": {detail}" if detail else "")
+            ) from e
+        except urllib.error.URLError as e:
+            raise MCPError(f"/api/tool unreachable ({url}): {e}") from e
+        obj = json.loads(resp.read().decode())
+        if isinstance(obj, dict) and obj.get("error"):
+            raise MCPError(obj["error"])
+        return obj.get("result", "") if isinstance(obj, dict) else ""
