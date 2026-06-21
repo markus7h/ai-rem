@@ -4103,19 +4103,27 @@ def _smart_truncate(text: str, threshold: int = 400) -> str:
 
 
 def _lexical_hits(query: str, context: str = "", include_archived: bool = False,
-                  limit: int = 15) -> list[dict]:
+                  limit: int = 15, only_discoverable: bool = False) -> list[dict]:
     """Substring-Suche über name/descr. Liefert strukturierte Treffer-Dicts.
 
     Gemeinsame Basis für memory_search (Formatierung) und /discover (Kategorisierung).
+    only_discoverable=True beschränkt auf die Discovery-Oberfläche (tool_/playbook_)
+    — verhindert, dass passende Tools vom LIMIT durch kürzlich aktualisierte
+    Nicht-Tool-Entities verdrängt werden, die dasselbe Keyword erwähnen.
     """
     q = query.lower()
     params: dict = {"q": q, "lim": limit}
     if context:
         params["ctx"] = context
+    disc_clause = (
+        " AND (lower(e.name) CONTAINS 'tool_' OR lower(e.name) CONTAINS 'playbook_')"
+        if only_discoverable else ""
+    )
     rows = _rows(
         db_exec(
             f"""MATCH (e:Entity)
                WHERE (lower(e.name) CONTAINS $q OR lower(e.descr) CONTAINS $q)
+                 {disc_clause}
                  {_ctx_clause('e', context)}
                  {_archived_clause('e', include_archived)}
                RETURN e.type, e.name, e.descr, e.updated_at, e.context
@@ -4462,8 +4470,44 @@ _DISCOVER_MAX_KEYWORDS = 5
 _DISCOVER_KNOWLEDGE_CAP = 3
 _DISCOVER_CACHE_TTL = 90.0
 _DISCOVER_CACHE_MAX = 256
+# Gepinnte Routinen werden bei jedem /discover unabhängig vom Keyword-Match
+# mitgeliefert (generelle Regeln fallen sonst durch das Relevanz-Sieb).
+DISCOVER_ROUTINES_LIMIT = int(os.getenv("DISCOVER_ROUTINES_LIMIT", "8"))
 _discover_cache: dict = {}
 _discover_cache_lock = threading.Lock()
+
+
+def _pinned_routines(context: str, limit: int = DISCOVER_ROUTINES_LIMIT) -> list[dict]:
+    """Gepinnte Preference-Routinen (immer relevant), kontext-gefiltert + global.
+
+    Spiegelt die Pinned-Sektion aus memory_get_context, damit /discover generelle
+    Regeln (z.B. 'erst Tools suchen', 'Default-Design nach Kontext') unabhängig vom
+    Keyword-/Semantik-Match in jeden Prompt injizieren kann. Nur aktive Einträge.
+    """
+    ctx_param = {"ctx": context} if context else {}
+    rows = _rows(
+        db_exec(
+            f"""MATCH (e:Entity {{type: 'Preference'}})
+               WHERE e.pinned = 'true'
+                 {_ctx_clause('e', context)}
+                 {_archived_clause('e', False)}
+               RETURN e.name, e.descr, e.sort_order, e.updated_at""",
+            ctx_param,
+        )
+    )
+
+    def _ord_key(r):
+        try:
+            return (0, int(r[2]))
+        except (TypeError, ValueError):
+            return (1, 0)
+
+    # Stabiler Zwei-Pass-Sort: erst updated_at DESC (neueste zuerst innerhalb der
+    # sort_order-losen Gruppe), dann sort_order ASC als Primärschlüssel.
+    rows.sort(key=lambda r: r[3] or "", reverse=True)
+    rows.sort(key=_ord_key)
+    rows = rows[:limit]
+    return [{"name": r[0], "summary": r[1][:200].rstrip()} for r in rows]
 
 
 def _discover_keywords(prompt: str) -> list[str]:
@@ -4499,7 +4543,14 @@ def _discover_compute(prompt: str, keywords: list[str], context: str, max_hits: 
         elif len(knowledge) < _DISCOVER_KNOWLEDGE_CAP:
             knowledge.append(item); seen.add(name)
 
-    # 1) Lexikalisch: Volltext-Query, dann pro-Token-Fallback.
+    # 0) Tool-/Playbook-fokussiert UND kontextfrei: Tools sind neutrale Fähigkeiten
+    #    (nur der Design-Default ist kontextabhängig — das regelt eine Routine), also
+    #    in jedem Kontext auffindbar. Verhindert zugleich, dass keyword-passende Tools
+    #    von kürzlich aktualisierten Nicht-Tool-Entities aus dem LIMIT verdrängt werden.
+    for q in [" ".join(keywords)] + keywords:
+        for h in _lexical_hits(q, context="", limit=10, only_discoverable=True):
+            consider(h)
+    # 1) Lexikalisch (allgemein): Volltext-Query, dann pro-Token-Fallback.
     for q in [" ".join(keywords)] + keywords:
         for h in _lexical_hits(q, context=context, limit=10):
             consider(h)
@@ -4513,7 +4564,9 @@ def _discover_compute(prompt: str, keywords: list[str], context: str, max_hits: 
 def _discover(prompt: str, context: str, max_hits: int) -> dict:
     keywords = _discover_keywords(prompt)
     if not keywords:
-        return {"keywords": [], "tools": [], "playbooks": [], "knowledge": [], "cached": False}
+        # Auch ohne Keyword-Treffer die gepinnten Routinen mitgeben.
+        return {"keywords": [], "tools": [], "playbooks": [], "knowledge": [],
+                "routines": _pinned_routines(context), "cached": False}
     # Cache auf den normalisierten Prompt (deckt Debug-Schleifen mit identischem
     # Prompt ab; semantischer Pfad hängt am vollen Prompt, nicht nur an Keywords).
     norm = " ".join(prompt.lower().split())
@@ -4522,8 +4575,10 @@ def _discover(prompt: str, context: str, max_hits: int) -> dict:
     with _discover_cache_lock:
         hit = _discover_cache.get(cache_key)
         if hit and now - hit[0] < _DISCOVER_CACHE_TTL:
+            # Cached payload enthält bereits die kontext-passenden routines.
             return {**hit[1], "cached": True}
     payload = _discover_compute(prompt, keywords, context, max_hits)
+    payload["routines"] = _pinned_routines(context)
     with _discover_cache_lock:
         if len(_discover_cache) >= _DISCOVER_CACHE_MAX:
             oldest = min(_discover_cache, key=lambda k: _discover_cache[k][0])
@@ -4541,7 +4596,7 @@ async def discover_route(request: Request) -> JSONResponse:
     prompt = (body.get("prompt") or "").strip()
     if len(prompt) < 5:
         return JSONResponse({"keywords": [], "tools": [], "playbooks": [],
-                             "knowledge": [], "cached": False})
+                             "knowledge": [], "routines": [], "cached": False})
     context = body.get("context", "private")
     max_hits = int(body.get("max_hits", 5))
     payload = await asyncio.to_thread(_discover, prompt, context, max_hits)
