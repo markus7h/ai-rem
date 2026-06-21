@@ -32,6 +32,21 @@ jobs:
         id: meta
         run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
+      - name: VERSION ↔ Tag-Konsistenz
+        # Kein Release-/Code-Drift: VERSION in server.py muss dem Tag entsprechen
+        # (Tag v1.2.3 → VERSION "1.2.3"). Bei Mismatch hart fehlschlagen.
+        run: |
+          set -euo pipefail
+          CODE_VERSION=$(python3 -c "import re,sys; m=re.search(r'^VERSION\s*=\s*[\"\x27]([^\"\x27]+)', open('server.py').read(), re.M); print(m.group(1) if m else sys.exit('VERSION nicht in server.py gefunden'))")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "server.py VERSION = ${CODE_VERSION}"
+          echo "Tag             = ${GITHUB_REF_NAME} (→ ${TAG_VERSION})"
+          if [ "$CODE_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::VERSION (${CODE_VERSION}) ≠ Tag (${TAG_VERSION}) — server.py:44 vor dem Tag anpassen."
+            exit 1
+          fi
+          echo "✅ VERSION und Tag stimmen überein."
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
