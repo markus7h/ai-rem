@@ -161,6 +161,17 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && do
 
 ---
 
+## Development
+
+CI runs on every push and pull request (`.github/workflows/ci.yml`): a `ruff` check for
+critical error classes (syntax, undefined names), a `compileall` smoke, and an import smoke
+against a throwaway env. `main` is protected — changes land via PR with green CI.
+
+Releases are tag-triggered (`.github/workflows/docker-publish.yml`); a `VERSION ↔ Tag`
+step fails the build if `VERSION` in `server.py` does not match the pushed tag (`v1.2.3` → `1.2.3`).
+
+---
+
 ## Related Projects
 
 - [tools-mcp](https://github.com/markus7h/tools-mcp) — MCP server exposing small scripts as tools via a central registry. ai-rem tracks a `Tool` entity per script (the `ai_rem_entity` convention) so the catalog stays discoverable.
