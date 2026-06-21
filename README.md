@@ -34,7 +34,9 @@ At the start of each session, Claude loads the relevant context from the graph v
   "deploy_host": "...", "deploy_cmd": "...", "skills": [...], "rules": [...] }
 ```
 
-→ **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` tool set (15 tools) with signatures, entity types and context separation.
+**Lean tool surface.** Only **4 always-on MCP tools** (`memory_get_context`, `memory_search`, `memory_add`, `memory_relate`) sit in `tools/list` and cost per-session context; the other 12 admin ops (list, merge, archive, project-context, …) are reachable over HTTP via `POST /api/tool` or the [`ai-rem` CLI](bin/ai-rem), keeping the session footprint small. `AI_REM_ADMIN_TOOLS=1` re-exposes all of them as MCP tools.
+
+→ **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` set (4 always-on + 12 admin) with signatures, entity types and context separation.
 
 ---
 
@@ -95,6 +97,7 @@ BACKUP_DIR=/backups                      # Path for backup files
 MAX_BACKUPS=10                           # Maximum number of backups to keep
 AI_REM_BACKUP_KEY=...                     # Optional — encrypt backups (AES-256-GCM); empty = plaintext
 KUZU_POOL_SIZE=4                         # Connection pool size
+AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
 ```
 
 When `AI_REM_BACKUP_KEY` is set, backups are written encrypted with AES-256-GCM
