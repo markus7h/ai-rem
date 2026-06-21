@@ -36,3 +36,21 @@ Net ≈ 660,000 tokens / month saved
 **The savings grow as the graph grows.** Because only the *relevant* subgraph is loaded on demand, ai-rem's per-session cost stays flat regardless of graph size, while the `CLAUDE.md` alternative scales **linearly** — every new fact is paid for in *every* session forever. The numbers above (262 entities) are an early-stage snapshot; at 500+ entities the same usage pattern saves substantially more.
 
 > The session count, recall rate, and retrieval payload are **measured** from real usage (141 sessions over 33 days, 2026-05-11 – 2026-06-12, re-measured from the Claude Code transcripts via `bin/measure-savings.py`). The per-session savings (8–16k) is a model, not a measurement — the "what it would have cost without ai-rem" can't be observed directly. Treat the totals as an informed estimate, not a benchmark.
+
+---
+
+## Bonus: trimming the built-in tool surface
+
+Independent of the knowledge graph, a second lever sits in the **baseline** that Claude Code loads on *every* session before any work begins. The biggest single category there is **System tools** — the JSON schemas of all built-in tools (`Bash`, `Workflow`, `DesignSync`, `Monitor`, the Cron/Worktree family …), loaded in full whether you use them or not.
+
+There is no official per-tool toggle yet ([anthropics/claude-code#54716](https://github.com/anthropics/claude-code/issues/54716)), but listing a tool name in `permissions.deny` removes its instructions/schema from the system prompt (every built-in tool is internally an MCP server, so its description costs real tokens).
+
+The ai-rem setup therefore installs a default `permissions.deny` set for rarely-used, schema-heavy built-ins:
+
+```
+DesignSync, Workflow, NotebookEdit, RemoteTrigger, ScheduleWakeup,
+CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree,
+Monitor, PushNotification, ListMcpResourcesTool, ReadMcpResourceTool
+```
+
+**Measured effect (Opus 4.8, `/context`):** System tools dropped from **33.2k → 10.6k tokens** — a one-time **~22k saving on every session's baseline**, on top of the lazy-loading savings above. Core tools (`Bash`, `Read`/`Edit`/`Write`, `Skill`, plan mode) are untouched. To restore a denied capability, remove its line from `permissions.deny` in `~/.claude/settings.json`. Re-running the setup is idempotent — it only adds missing entries and never duplicates.

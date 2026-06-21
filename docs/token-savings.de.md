@@ -36,3 +36,21 @@ Netto ≈ 660.000 Token / Monat gespart
 **Die Ersparnis steigt, je größer der Graph wird.** Weil immer nur der *relevante* Subgraph bedarfsweise geladen wird, bleiben ai-rems Kosten pro Session flach — unabhängig von der Graph-Größe —, während der `CLAUDE.md`-Ansatz **linear** skaliert: Jeder neue Fakt wird in *jeder* Session aufs Neue bezahlt, für immer. Die Zahlen oben (262 Entities) sind eine Momentaufnahme der Frühphase; bei 500+ Entities spart dasselbe Nutzungsmuster deutlich mehr.
 
 > Session-Zahl, Recall-Rate und Retrieval-Payload sind aus echter Nutzung **gemessen** (141 Sessions über 33 Tage, 11.05.–12.06.2026, nachgemessen aus den Claude-Code-Transcripts via `bin/measure-savings.py`). Die Ersparnis pro Session (8–16k) ist ein Modell, keine Messung — das „was es ohne ai-rem gekostet hätte" lässt sich nicht direkt beobachten. Die Summen sind also eine fundierte Schätzung, kein Benchmark.
+
+---
+
+## Bonus: Built-in-Tool-Surface verschlanken
+
+Unabhängig vom Knowledge Graph gibt es einen zweiten Hebel im **Sockel**, den Claude Code bei *jeder* Session vor der ersten Aufgabe lädt. Größter Einzelposten dort sind die **System tools** — die JSON-Schemas aller eingebauten Tools (`Bash`, `Workflow`, `DesignSync`, `Monitor`, die Cron-/Worktree-Familie …), vollständig geladen, egal ob genutzt oder nicht.
+
+Einen offiziellen Per-Tool-Schalter gibt es noch nicht ([anthropics/claude-code#54716](https://github.com/anthropics/claude-code/issues/54716)), aber ein Tool-Name in `permissions.deny` entfernt dessen Instruktionen/Schema aus dem Systemprompt (jedes Built-in ist intern ein MCP-Server, dessen Beschreibung echte Token kostet).
+
+Das ai-rem-Setup trägt deshalb einen Default-`permissions.deny`-Satz für selten genutzte, schema-schwere Built-ins ein:
+
+```
+DesignSync, Workflow, NotebookEdit, RemoteTrigger, ScheduleWakeup,
+CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree,
+Monitor, PushNotification, ListMcpResourcesTool, ReadMcpResourceTool
+```
+
+**Gemessener Effekt (Opus 4.8, `/context`):** System tools von **33,2k → 10,6k Token** — eine einmalige **~22k-Ersparnis im Sockel jeder Session**, zusätzlich zur Lazy-Loading-Ersparnis oben. Kernwerkzeuge (`Bash`, `Read`/`Edit`/`Write`, `Skill`, Plan-Modus) bleiben unangetastet. Um eine geblockte Fähigkeit zurückzuholen, die entsprechende Zeile aus `permissions.deny` in `~/.claude/settings.json` entfernen. Ein erneuter Setup-Lauf ist idempotent — er ergänzt nur Fehlendes und dupliziert nie.

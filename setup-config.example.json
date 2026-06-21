@@ -48,7 +48,21 @@
     "Read(**/*.pem)",
     "Read(**/*secret*)",
     "Read(**/id_rsa)",
-    "Read(**/id_ed25519)"
+    "Read(**/id_ed25519)",
+    "DesignSync",
+    "Workflow",
+    "NotebookEdit",
+    "RemoteTrigger",
+    "ScheduleWakeup",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "EnterWorktree",
+    "ExitWorktree",
+    "Monitor",
+    "PushNotification",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool"
   ],
   "entities": [
     {

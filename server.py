@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1580,14 +1580,16 @@ Nutzungsregeln kommen über die MCP Server Instructions, Verhaltensregeln aus de
         with open(path, encoding='utf-8') as f:
             text = f.read()
 
-    # Bestehenden ai-rem-Block (alt oder neu) entfernen
-    for pat in (re.compile(r'\n## Knowledge Graph Memory \(ai-rem\)[\s\S]*?(?=\n## |\Z)'),
-                re.compile(r'\n## ai-rem[\s\S]*?(?=\n## |\Z)')):
+    # Bestehenden ai-rem-Block (alt oder neu) entfernen — auch am Dateianfang
+    # (ohne fuehrendes \n) und mehrfach vorhandene Bloecke (Idempotenz).
+    for pat in (re.compile(r'(?:^|\n)## Knowledge Graph Memory \(ai-rem\)[\s\S]*?(?=\n## |\Z)'),
+                re.compile(r'(?:^|\n)## ai-rem[\s\S]*?(?=\n## |\Z)')):
         text = pat.sub('', text)
 
-    if not text.endswith('\n'):
-        text += '\n'
-    text += new_block
+    text = text.strip()
+    if text:
+        text += '\n\n'
+    text += new_block.lstrip('\n')
     with open(path, 'w', encoding='utf-8') as f:
         f.write(text)
     print('✓ CLAUDE.md aktualisiert (minimaler ai-rem Pointer)')
