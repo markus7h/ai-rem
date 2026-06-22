@@ -28,7 +28,7 @@ services:
       # (backup_<ts>.json.enc), leer → Klartext wie bisher. Quelle: mykeyvault
       # (Item ai-rem-backup-key), via deploy.sh in die .env geschrieben.
       - AI_REM_BACKUP_KEY=${AI_REM_BACKUP_KEY:-}
-    mem_limit: 2g
+    mem_limit: 3g
     healthcheck:
       # /health ist public (kein Token) — bewusst, damit der Healthcheck ohne Secret auskommt.
       test: ["CMD-SHELL", "python -c \"import urllib.request,os; p=os.getenv('PORT','3456'); urllib.request.urlopen(f'http://localhost:{p}/health',timeout=3)\""]
