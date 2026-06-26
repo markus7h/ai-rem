@@ -1,0 +1,15 @@
+# Kontrollierte Dependency-Bumps als PR (Issue #27, Tier 2). CI (lint/compile +
+# image-smoke) ist das Gate — ein Bump, der das Image bricht, wird im PR rot.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

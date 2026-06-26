@@ -42,3 +42,42 @@ jobs:
           AI_REM_API_TOKEN: ci-dummy-token
           EMBED_ENABLED: '0'
         run: python -c "import server; print('import OK, VERSION=', server.VERSION)"
+
+  # Tier-2-Gate (Issue #27): Image im PR bauen statt erst beim Tag-Push, und den
+  # gestarteten Container per /health (DB-Ping) prüfen. Fängt Build-Breakage UND
+  # einen beim Start wedged Container ab, bevor `latest` veröffentlicht wird —
+  # `main` ist protected, also durchläuft der später getaggte Commit dieses Gate.
+  # amd64-only: eine Arch reicht, um Breakage zu sehen; Multi-Arch bleibt dem Release.
+  image-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (amd64, in den Runner-Docker laden)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ai-rem:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke — Container starten + /health pollen
+        run: |
+          set -euo pipefail
+          docker run -d --name ai-rem-ci -e AI_REM_API_TOKEN=ci-smoke -p 3456:3456 ai-rem:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3456/health | grep -qx ok; then
+              echo "✅ /health = ok (nach ${i}s)"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::/health wurde nicht innerhalb von 30s healthy"
+          docker logs ai-rem-ci || true
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f ai-rem-ci || true
