@@ -63,4 +63,4 @@ status: offen
 
 Der Hook liest das Frontmatter der zuletzt geänderten Plan-Datei und upsertet via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert über `name` → keine Dubletten. Erledigte Pläne werden archiviert (`memory_archive`); der Status liegt zentral in ai-rem (cross-machine). Fail-silent: blockiert nie `ExitPlanMode`.
 
-**Installation:** `hooks/save-plan.py` nach `~/.claude/hooks/` kopieren, `chmod +x`, und den `PostToolUse: ExitPlanMode`-Hook in `~/.claude/settings.json` registrieren (siehe Datei-Header).
+**Installation:** wird vom Client-Setup automatisch deployt — `install_hooks()` holt `save-plan.py` nach `~/.claude/hooks/` (chmod +x) und registriert den `PostToolUse: ExitPlanMode`-Hook in `~/.claude/settings.json`. Kein manueller Schritt (der Datei-Header dokumentiert die Standalone-Installation als Referenz).

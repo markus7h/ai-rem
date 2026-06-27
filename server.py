@@ -904,6 +904,150 @@ if __name__ == "__main__":
     sys.exit(0)
 '''
 
+# save-plan.py: PostToolUse-Hook auf ExitPlanMode — speichert den finalisierten Plan
+# als offenen Task in ai-rem (Frontmatter name/description/status). Fail-silent.
+SAVE_PLAN_PY = r'''#!/usr/bin/env python3
+# Claude Code PostToolUse hook for ExitPlanMode: stores the just-finalized plan as
+# an open Task in ai-rem so plans become a central, cross-machine list ("any open
+# plans?") instead of just slug files on disk.
+#
+# Source of the fields is the plan file's YAML-style frontmatter (name / description
+# / status) — no heuristic extraction from prose. Claude is expected to start every
+# plan file with such a block:
+#
+#   ---
+#   name: "Plan: <title>"
+#   description: "<one short sentence>"
+#   status: offen
+#   ---
+#
+# Install: copy to ~/.claude/hooks/save-plan.py (chmod +x) and register in
+# ~/.claude/settings.json:
+#
+#   "hooks": { "PostToolUse": [
+#     { "matcher": "ExitPlanMode",
+#       "hooks": [{ "type": "command",
+#                   "command": "<HOME>/.claude/hooks/save-plan.py",
+#                   "timeout": 10 }] } ] }
+#
+# Transport mirrors the other ai-rem hooks (initialize -> notifications/initialized
+# -> tools/call). Auth: AI_REM_TOKEN env, else the Bearer header already written to
+# ~/.claude.json by the SessionStart hook. Fail-silent: never blocks ExitPlanMode.
+import datetime
+import glob
+import json
+import os
+import re
+import urllib.request
+
+ENDPOINT = os.environ.get("AI_REM_ENDPOINT", "http://localhost:3456/mcp")
+TIMEOUT = 8
+PLANS_DIR = os.path.expanduser("~/.claude/plans")
+
+
+def auth_header():
+    tok = os.environ.get("AI_REM_TOKEN")
+    if tok:
+        return tok if tok.lower().startswith("bearer ") else f"Bearer {tok}"
+    try:
+        cfg = json.load(open(os.path.expanduser("~/.claude.json")))
+        return cfg["mcpServers"]["ai-rem"]["headers"]["Authorization"]
+    except Exception:
+        return None
+
+
+AUTH = auth_header()
+
+
+def post(body, sid=None):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if AUTH:
+        headers["Authorization"] = AUTH
+    if sid:
+        headers["mcp-session-id"] = sid
+    req = urllib.request.Request(
+        ENDPOINT, data=json.dumps(body).encode(), headers=headers, method="POST"
+    )
+    return urllib.request.urlopen(req, timeout=TIMEOUT)
+
+
+def strip_quotes(v):
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        return v[1:-1]
+    return v
+
+
+def parse_frontmatter(path):
+    """Only the block between the first two '---' lines; simple key: value."""
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fm = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        m = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
+        if m:
+            fm[m.group(1)] = strip_quotes(m.group(2))
+    return fm
+
+
+def newest_plan():
+    files = glob.glob(os.path.join(PLANS_DIR, "*.md"))
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def main():
+    path = newest_plan()
+    if not path:
+        return
+    fm = parse_frontmatter(path)
+    name = fm.get("name")
+    if not name:
+        return  # no frontmatter / no name -> deliberately write nothing
+    args = {
+        "name": name,
+        "type": "Task",
+        "description": fm.get("description", ""),
+        "extra": {
+            "kind": "plan",
+            "status": fm.get("status", "offen") or "offen",
+            "plan_file": os.path.abspath(path),
+            "created": datetime.date.today().isoformat(),
+        },
+        "context": "private",
+    }
+
+    resp = post({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "claude-code-save-plan", "version": "1.0"}},
+    })
+    sid = resp.headers.get("mcp-session-id")
+    resp.read()
+    if not sid:
+        return
+    try:
+        post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=sid).read()
+    except Exception:
+        pass
+    post({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "memory_add", "arguments": args},
+    }, sid=sid).read()
+
+
+try:
+    main()
+except Exception:
+    pass
+'''
+
 # setup.py: die GESAMTE Setup-Logik, plattformneutral (macOS/Linux/WSL/Windows).
 # Eine Quelle der Wahrheit - die /setup- (bash) und /setup.ps1-Wrapper laden und
 # starten nur dieses Script.
@@ -912,7 +1056,7 @@ SETUP_PY = r"""#!/usr/bin/env python3
 # Wird von den Wrappern geholt+gestartet:
 #   bash <(curl -s __KG_URL__/setup)          (macOS/Linux/WSL)
 #   irm __KG_URL__/setup.ps1 | iex            (Windows PowerShell)
-# Harte Abhaengigkeiten: python3, claude CLI. Optional (nur tools-mcp): git, node >= 18, npm.
+# Harte Abhaengigkeiten: python3, claude CLI. Optional (nur tools-registry): git, node >= 18, npm.
 import glob
 import json
 import os
@@ -1077,7 +1221,7 @@ def load_setup_config():
     except Exception:
         cfg = {}
     if not cfg:
-        print('⚠ setup-config nicht ladbar - personalisierte Teile (tools-mcp, Vault, Entities) werden uebersprungen')
+        print('⚠ setup-config nicht ladbar - personalisierte Teile (tools-registry, Vault, Entities) werden uebersprungen')
     return cfg
 
 
@@ -1163,7 +1307,7 @@ def pull_secrets(setup_cfg):
     return ssh_host, ai_rem_token, vault_token
 
 
-# ── tools-mcp (stdio) klonen+bauen, falls in setup-config ────────────────────
+# ── tools-registry (stdio) klonen+bauen, falls in setup-config ────────────────────
 
 def _build_node_mcp(repo, install_dir, entry, subdir, label):
     # Generisch: git clone/pull + npm install/build eines Node-MCP.
@@ -1246,8 +1390,8 @@ def build_tools_mcp(setup_cfg):
     if not reg_url:
         return '', ''
     entry = _build_node_mcp(stdio.get('repo', ''),
-                            stdio.get('install_dir') or os.path.join('~', 'Code', 'tools-mcp'),
-                            stdio.get('entry') or 'dist/index.js', '', 'tools-MCP')
+                            stdio.get('install_dir') or os.path.join('~', 'Code', 'tools-registry'),
+                            stdio.get('entry') or 'dist/index.js', '', 'tools-registry')
     return entry, reg_url
 
 
@@ -1369,7 +1513,7 @@ def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
         existed = 'tools' in servers
         servers['tools'] = {'type': 'stdio', 'command': 'node',
                             'args': [tools_entry],
-                            'env': {'TOOLS_MCP_REGISTRY_URL': tools_reg_url}}
+                            'env': {'TOOLS_REGISTRY_URL': tools_reg_url}}
         print('✓ tools ' + ('migriert' if existed else 'registriert') + ' (stdio)')
 
     tmp = cj + '.tmp'
@@ -1403,6 +1547,7 @@ def write_settings_template(setup_cfg, mcp_endpoint):
             'SessionStart': ['system-check.py (ai-rem, SMB, MCP, settings-sync, tools)'],
             'UserPromptSubmit': ['Tool-Discovery'],
             'PreToolUse': ['claude-md-guard.py (warnt bei CLAUDE.md-Edits → ai-rem)'],
+            'PostToolUse': ['save-plan.py (ExitPlanMode → offener Task in ai-rem)'],
         },
         'additional_directories_templates': ['{HOME}/.claude', '{HOME}'],
         'path_mappings': setup_cfg.get('path_mappings', {}),
@@ -1419,7 +1564,8 @@ def install_hooks():
     paths = {}
     for fname, label in (('system-check.py', 'SessionStart-Hook'),
                          ('auto-memory.py', 'Auto-Memory-Hook'),
-                         ('claude-md-guard.py', 'CLAUDE.md-Guard-Hook')):
+                         ('claude-md-guard.py', 'CLAUDE.md-Guard-Hook'),
+                         ('save-plan.py', 'Plan-Saving-Hook')):
         dst = os.path.join(CLAUDE_HOME, 'hooks', fname)
         if fetch_to(KG_URL + '/hooks/' + fname, dst):
             if not IS_WIN:
@@ -1521,6 +1667,14 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
             g['hooks'].append({'type': 'command', 'command': hook_command(guard), 'timeout': 10})
             guard_added = True
 
+    save_plan = hook_paths.get('save-plan.py', '')
+    save_plan_added = False
+    if save_plan:
+        g = hook_group('PostToolUse', 'ExitPlanMode')
+        if not has_hook(g, save_plan):
+            g['hooks'].append({'type': 'command', 'command': hook_command(save_plan), 'timeout': 10})
+            save_plan_added = True
+
     # Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
     # - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
     # - AI_REM_CLI per Discovery (inkl. SMB-Mount /Volumes/<x>/myCode auf macOS)
@@ -1555,6 +1709,7 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
                  '  SessionStart-Hook' if hook_added else '',
                  '  Auto-Memory-Hooks: %s' % ', '.join(auto_mem_added) if auto_mem_added else '',
                  '  CLAUDE.md-Guard-Hook' if guard_added else '',
+                 '  Plan-Saving-Hook' if save_plan_added else '',
                  '  autoMemoryEnabled=false'):
         if line:
             print(line)
@@ -2830,6 +2985,11 @@ async def claude_md_guard_hook_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(CLAUDE_MD_GUARD_PY, media_type="text/x-python")
 
 
+@mcp.custom_route("/hooks/save-plan.py", methods=["GET"])
+async def save_plan_hook_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(SAVE_PLAN_PY, media_type="text/x-python")
+
+
 @mcp.custom_route("/setup-config", methods=["GET"])
 async def setup_config_route(request: Request) -> JSONResponse:
     return JSONResponse(_load_setup_cfg())
@@ -3397,7 +3557,7 @@ li{margin-bottom:4px}
     <h2>Voraussetzungen</h2>
     <ul>
       <li><b>Pflicht:</b> <code>python3</code> + <code>claude</code> CLI — fehlt etwas, bricht das Setup mit plattformspezifischem Install-Hinweis ab</li>
-      <li><b>Optional (nur tools-mcp):</b> <code>git</code>, Node.js &ge; 18 inkl. <code>npm</code></li>
+      <li><b>Optional (nur tools-registry):</b> <code>git</code>, Node.js &ge; 18 inkl. <code>npm</code></li>
       <li><b>Secrets:</b> per SSH vom Server gezogen (SSH-Key vorausgesetzt) — alternativ Token im Env: <code>AI_REM_TOKEN=&lt;token&gt;</code> bzw. <code>$env:AI_REM_TOKEN</code></li>
     </ul>
     <p class="hint">Beide Wrapper laden dieselbe plattformneutrale Logik (<a href="/setup.py">setup.py</a>) — Verhalten auf allen Plattformen identisch. Details: <a href="/cmd">/setup-ai-rem Anleitung</a></p>

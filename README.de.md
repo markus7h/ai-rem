@@ -165,5 +165,5 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && do
 
 ## Verwandte Projekte
 
-- [tools-mcp](https://github.com/markus7h/tools-mcp) — MCP-Server, der kleine Scripts via zentrale Registry als Tools bereitstellt. ai-rem führt pro Script eine `Tool`-Entity (Konvention `ai_rem_entity`), damit der Katalog auffindbar bleibt.
+- [tools-registry](https://github.com/markus7h/tools-registry) — MCP-Server, der kleine Scripts via zentrale Registry als Tools bereitstellt. ai-rem führt pro Script eine `Tool`-Entity (Konvention `ai_rem_entity`), damit der Katalog auffindbar bleibt.
 - [mykeyvault](https://github.com/markus7h/mykeyvault) — self-hosted Secrets-Vault (Vaultwarden + REST/MCP). ai-rem speichert bewusst **keine Secrets**; Credentials liegen stattdessen in mykeyvault.

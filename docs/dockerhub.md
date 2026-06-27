@@ -105,5 +105,5 @@ Full documentation lives on GitHub:
 
 ## Related projects
 
-- [tools-mcp](https://github.com/markus7h/tools-mcp) — MCP server exposing small scripts as tools via a central registry.
+- [tools-registry](https://github.com/markus7h/tools-registry) — MCP server exposing small scripts as tools via a central registry.
 - [mykeyvault](https://github.com/markus7h/mykeyvault) — self-hosted secrets vault. ai-rem deliberately stores **no secrets**; credentials live in mykeyvault instead.

@@ -178,5 +178,5 @@ step fails the build if `VERSION` in `server.py` does not match the pushed tag (
 
 ## Related Projects
 
-- [tools-mcp](https://github.com/markus7h/tools-mcp) — MCP server exposing small scripts as tools via a central registry. ai-rem tracks a `Tool` entity per script (the `ai_rem_entity` convention) so the catalog stays discoverable.
+- [tools-registry](https://github.com/markus7h/tools-registry) — MCP server exposing small scripts as tools via a central registry. ai-rem tracks a `Tool` entity per script (the `ai_rem_entity` convention) so the catalog stays discoverable.
 - [mykeyvault](https://github.com/markus7h/mykeyvault) — self-hosted secrets vault (Vaultwarden + REST/MCP). ai-rem deliberately stores **no secrets**; credentials live in mykeyvault instead.

@@ -63,4 +63,4 @@ status: offen
 
 The hook reads the newest plan file's frontmatter and upserts via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert is keyed by `name`, so re-finalizing a plan never duplicates. Completed plans are archived (`memory_archive`) — the status lives in ai-rem, so it stays consistent across machines. Fail-silent: never blocks `ExitPlanMode`.
 
-**Install:** copy `hooks/save-plan.py` to `~/.claude/hooks/`, `chmod +x`, and register the `PostToolUse: ExitPlanMode` hook in `~/.claude/settings.json` (see the file header).
+**Install:** deployed automatically by the client setup — `install_hooks()` fetches `save-plan.py` to `~/.claude/hooks/` (chmod +x) and registers the `PostToolUse: ExitPlanMode` hook in `~/.claude/settings.json`. No manual step (the file header documents the standalone install for reference).
