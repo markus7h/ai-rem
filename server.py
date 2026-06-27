@@ -5471,6 +5471,42 @@ def _cleanup_candidates() -> dict:
     return {"auto_archive": auto_archive, "auto_merge": auto_merge, "review": review}
 
 
+def _graph_invariants() -> list[str]:
+    """Korruptions-artige Graph-Verstöße als Assertions (nicht Cleanup-Geschmack).
+
+    Leere Liste = sauber. Prüft genau das, was real brechen und Backups/Lookups
+    still sabotieren kann: ungültiges extra-JSON (bricht _dump_graph), nicht-kanonische
+    Flag-Spalten, kaputtes embedding, und id-vs-_id(name)-Drift.
+    Dangling-Rels sind in Kuzu durch `FROM Entity TO Entity` strukturell ausgeschlossen
+    — daher bewusst nicht geprüft.
+    ponytail: Voll-Scan über alle Entities; erst sampeln, falls der nightly-Lauf das je spürt."""
+    violations: list[str] = []
+    rows = _rows(db_exec(
+        "MATCH (e:Entity) RETURN e.id, e.name, e.extra, e.pinned, e.archived, e.embedding"
+    ))
+    for eid, name, extra, pinned, archived, embedding in rows:
+        try:
+            json.loads(extra or "{}")
+        except (json.JSONDecodeError, TypeError):
+            violations.append(f"{eid}: ungültiges extra-JSON")
+        if (pinned or "") not in ("", "true"):
+            violations.append(f"{eid}: pinned nicht kanonisch ({pinned!r})")
+        if (archived or "") not in ("", "true"):
+            violations.append(f"{eid}: archived nicht kanonisch ({archived!r})")
+        if embedding:
+            try:
+                vec = json.loads(embedding)
+                if not isinstance(vec, list) or not all(
+                    isinstance(x, (int, float)) for x in vec
+                ):
+                    raise ValueError
+            except (json.JSONDecodeError, ValueError, TypeError):
+                violations.append(f"{eid}: embedding kein Float-Array")
+        if eid != _id(name):
+            violations.append(f"{eid}: id != _id(name) (name={name!r})")
+    return violations
+
+
 def _cleanup_run(triggered_by: str = "scheduler") -> dict:
     """One nightly cleanup pass. Non-destructive (archive/merge only). Backs up first."""
     ts = _now()
@@ -5481,6 +5517,13 @@ def _cleanup_run(triggered_by: str = "scheduler") -> dict:
         return {"ts": ts, "error": f"backup failed: {e}"}
     if not (backup_file and os.path.exists(os.path.join(BACKUP_DIR, backup_file))):
         return {"ts": ts, "error": "backup not verified — aborted"}
+
+    # Graph-Invarianten: nur protokollieren, nicht abbrechen — der Cleanup soll auch
+    # auf einem leicht angeknacksten Graphen laufen, der Verstoß landet im Log/Warning.
+    invariants = _graph_invariants()
+    if invariants:
+        log.warning("cleanup: %d Graph-Invarianten-Verstöße: %s",
+                    len(invariants), "; ".join(invariants[:10]))
 
     cands = _cleanup_candidates()
     ollama = _ollama_up()
@@ -5531,7 +5574,8 @@ def _cleanup_run(triggered_by: str = "scheduler") -> dict:
     log_obj = {"ts": ts, "triggered_by": triggered_by, "backup": backup_file,
                "ollama_used": ollama, "applied": applied,
                "applied_count": len(applied), "pending_added": pending_added,
-               "pending_total": len(_load_pending())}
+               "pending_total": len(_load_pending()),
+               "invariant_violations": invariants}
     log_obj["log_file"] = _write_cleanup_log(log_obj)
     cfg = _load_cleanup_cfg()
     cfg["last_run"] = ts

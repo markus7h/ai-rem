@@ -167,8 +167,9 @@ ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && do
 ## Development
 
 CI runs on every push and pull request (`.github/workflows/ci.yml`): a `ruff` check for
-critical error classes (syntax, undefined names), a `compileall` smoke, and an import smoke
-against a throwaway env. `main` is protected — changes land via PR with green CI.
+critical error classes (syntax, undefined names), a `compileall` smoke, an import smoke
+against a throwaway env, the `pytest` suite under `tests/`, and an image-smoke that builds
+the Docker image and polls `/health`. `main` is protected — changes land via PR with green CI.
 
 Releases are tag-triggered (`.github/workflows/docker-publish.yml`); a `VERSION ↔ Tag`
 step fails the build if `VERSION` in `server.py` does not match the pushed tag (`v1.2.3` → `1.2.3`).

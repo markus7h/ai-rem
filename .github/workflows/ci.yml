@@ -43,6 +43,30 @@ jobs:
           EMBED_ENABLED: '0'
         run: python -c "import server; print('import OK, VERSION=', server.VERSION)"
 
+  # Tier-3-Gate (Issue #28): die tests/ liefen bisher nirgends — jetzt gaten sie jeden
+  # PR. Deckt Schema-Migration (Alt-Schema-Fixture), Backup→Restore-Roundtrip und
+  # Graph-Invarianten ab. Jeder Test setzt KUZU_DB_PATH/BACKUP_DIR selbst auf tempdirs.
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      EMBED_ENABLED: '0'
+      AI_REM_API_TOKEN: ci-dummy-token
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime deps + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements.txt
+
+      - name: pytest
+        run: pytest -q tests/
+
   # Tier-2-Gate (Issue #27): Image im PR bauen statt erst beim Tag-Push, und den
   # gestarteten Container per /health (DB-Ping) prüfen. Fängt Build-Breakage UND
   # einen beim Start wedged Container ab, bevor `latest` veröffentlicht wird —
