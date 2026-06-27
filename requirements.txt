@@ -1,6 +1,11 @@
-fastmcp>=2.0.0
-kuzu>=0.8.0
-fastembed>=0.3.0
-numpy>=1.26
-cryptography>=42
-pyyaml>=6
+# Exakt gepinnt (Issue #27, Tier 2): reproduzierbarer Build, kein stilles Brechen
+# durch Upstream-Bumps. Versionen = pip freeze aus dem laufenden, known-good Image.
+# Kontrollierte Bumps laufen über Dependabot-PRs (CI-gated).
+# ponytail: nur Top-Level gepinnt — Transitive floaten noch; echtes Lockfile
+# (uv/pip-compile) erst nachrüsten, wenn ein Transitiv-Bump real beißt.
+fastmcp==3.4.2
+kuzu==0.11.3
+fastembed==0.8.0
+numpy==2.5.0
+cryptography==49.0.0
+pyyaml==6.0.3

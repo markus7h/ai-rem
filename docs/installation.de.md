@@ -22,7 +22,7 @@ Das Skript erledigt automatisch:
 5. `~/.claude/hooks/claude-md-guard.py` — PreToolUse-Hook deployen, der (non-blocking) warnt, wenn `~/.claude/CLAUDE.md` editiert wird
 6. `~/.claude/settings.json` — Permissions, Deny-Rules und alle Hooks eintragen; alte Hooks entfernen; `autoMemoryEnabled: false`
 7. `~/.claude/CLAUDE.md` — minimalen Pointer auf ai-rem anlegen oder aktualisieren
-8. Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`, `/memory-cleanup`)
+8. Slash-Commands installieren (`/setup-ai-rem`, `/memory-cleanup`)
 9. Preferences & Tool-Entities direkt via MCP API im Knowledge Graph anlegen
 10. **mykeyvault** lokal als **stdio**-MCP bauen und registrieren (git clone + `npm run build` im `mcp/`-Ordner). Lokaler stdio-Betrieb schaltet die exec/file-Tools frei (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`) — Secrets landen damit **nie** im LLM-Kontext, sondern nur im lokal gestarteten Subprozess. Ohne Node/Git oder bei Build-Fehler fällt das Setup auf den HTTP-MCP zurück (nur `vault_list_items`/`vault_create_item`).
 

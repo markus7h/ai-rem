@@ -1598,15 +1598,14 @@ Nutzungsregeln kommen über die MCP Server Instructions, Verhaltensregeln aus de
 # ── Slash-Commands installieren ──────────────────────────────────────────────
 
 def install_commands():
-    legacy = os.path.join(CLAUDE_HOME, 'commands', 'setup-kg-memory.md')
-    if os.path.isfile(legacy):
-        os.unlink(legacy)
-        print('✓ Alter /setup-kg-memory Command entfernt')
+    for stale in ('setup-kg-memory.md', os.path.join('ai-rem', 'prefedit.md')):
+        path = os.path.join(CLAUDE_HOME, 'commands', stale)
+        if os.path.isfile(path):
+            os.unlink(path)
+            print('✓ Alter Command entfernt: %s' % stale)
 
     if fetch_to(KG_URL + '/cmd', os.path.join(CLAUDE_HOME, 'commands', 'setup-ai-rem.md')):
         print('✓ /setup-ai-rem Command angelegt')
-    if fetch_to(KG_URL + '/cmd/prefedit', os.path.join(CLAUDE_HOME, 'commands', 'ai-rem', 'prefedit.md')):
-        print('✓ /ai-rem:prefedit Command angelegt')
     if fetch_to(KG_URL + '/cmd/memory-cleanup', os.path.join(CLAUDE_HOME, 'commands', 'memory-cleanup.md')):
         print('✓ /memory-cleanup Command angelegt')
 
@@ -1670,8 +1669,6 @@ def create_entities(setup_cfg, ai_rem_token):
     entities = setup_cfg.get('entities', [
         {'name': 'skill_setup_ai_rem', 'type': 'Tool',
          'description': 'Slash-Command /setup-ai-rem: ai-rem MCP-Server auf neuem System einrichten.'},
-        {'name': 'skill_ai_rem_prefedit', 'type': 'Tool',
-         'description': 'Slash-Command /ai-rem:prefedit: interaktiver Preferences-Manager.'},
     ])
     try:
         for e in entities:
@@ -1812,75 +1809,15 @@ Invoke-AiRemSetup
 CMD_MD = """\
 # ai-rem einrichten
 
-Das Setup holt ein Skript vom ai-rem-Server und fuehrt es aus. Der Auto-Mode-Klassifizierer
-blockt „Remote-Code holen + ausfuehren" als harte Grenze — **der Agent darf `curl|bash`
-und `irm|iex` NICHT selbst ausfuehren** (und keine Permission-/Config-Umgehung dafuer bauen).
-
-**Anweisung an den Agenten:** Versuche NICHT, den Befehl selbst auszufuehren oder den Block
-zu umgehen. Lege dem User stattdessen die Zeile zum Selbst-Ausfuehren hin und erklaere den
-`!`-Prefix. In der User-Shell laeuft sie ohne Klassifizierer — jedes Mal, ohne Block.
-
-Auf jeder Maschine im Terminal ausfuehren — macOS/Linux/WSL:
-
-```
-bash <(curl -s __KG_URL__/setup)
-```
-
-…Windows (PowerShell, claude CLI nativ):
-
-```
-irm __KG_URL__/setup.ps1 | iex
-```
-
-…oder aus dem Claude-Code-Prompt mit vorangestelltem `!` (fuehrt es in deiner Shell aus):
-
-```
-! bash <(curl -s __KG_URL__/setup)
-```
-
-(Hinter Caddy/TLS stattdessen den https-Host nehmen, z. B. `https://airem.lan/setup`.)
-
-Beide Wrapper laden dieselbe plattformneutrale Logik (`__KG_URL__/setup.py`) —
-das Verhalten ist auf allen Plattformen identisch.
-
-## Voraussetzungen (prueft das Skript selbst, mit Installations-Hinweisen)
-
-- **Pflicht:** `python3` und `claude` CLI — fehlt etwas, bricht das Setup
-  mit plattformspezifischem Installations-Hinweis ab (Ubuntu/WSL: apt, macOS: brew,
-  Windows: winget; claude CLI: `curl -fsSL https://claude.ai/install.sh | bash`
-  bzw. Windows `irm https://claude.ai/install.ps1 | iex`).
-- **Optional (nur tools-mcp):** `git`, Node.js >= 18 inkl. `npm`. Zu altes Node
-  (Ubuntu-apt!) wird erkannt; Hinweis auf NodeSource/nvm (Windows: winget). npm-Build-Fehler
-  werden mit Log-Auszug gemeldet, inkl. Diagnose fuer Proxy-/Zertifikatsprobleme
-  (`npm config set cafile …` / `NODE_EXTRA_CA_CERTS`).
-- **TLS:** Ist der https-Endpoint erreichbar, aber das Zertifikat nicht vertraut,
-  bleibt das Setup bei http und zeigt, wie die Caddy-Root-CA installiert wird
-  (Ubuntu/WSL: `update-ca-certificates`, macOS: `security add-trusted-cert`,
-  Windows: `certutil -addstore -f Root root.crt`).
-- **WSL:** Alles (claude, node, git) gehoert IN die WSL-Distribution, nicht auf die
-  Windows-Seite; der Windows-Zertifikatsspeicher gilt in WSL nicht.
-- **Windows nativ:** OpenSSH-Client (ab Windows 10 vorinstalliert) fuer den
-  Secret-Pull; alternativ Token via `$env:AI_REM_TOKEN` setzen.
-
-Das Skript erledigt automatisch:
-- MCP-Server registrieren
-- Konsolidiertes system-check.py Hook deployen (ai-rem, SMB, MCP, Settings-Sync, Tools)
-- auto-memory.py Hook deployen (PreCompact + SessionEnd → ai-rem ingest via Ollama)
-- settings-template.json + settings.json konfigurieren (Permissions, Deny-Rules, Hooks,
-  inkl. AI_REM_ENDPOINT + AI_REM_CLI in env)
-- CLAUDE.md aktualisieren
-- Slash-Commands installieren (`/setup-ai-rem`, `/ai-rem:prefedit`, `/memory-cleanup`)
-- Preferences & Tool-Entities im Knowledge Graph anlegen
-
-Danach Claude Code neu starten — fertig.
-""".replace("__KG_URL__", _KG_URL)
-
-PREFEDIT_CMD_MD = """\
-# Preferences verwalten
-
 Antworte dem User mit genau diesem Text (URL nicht verändern):
 
-Preferences-Manager: __KG_URL__/prefs
+Setup-Anleitung mit den Befehlen pro Plattform (macOS/Linux/WSL/Windows): __KG_URL__/install
+
+Seite im Browser öffnen und den dort gezeigten Befehl in der eigenen Shell ausführen.
+
+**Anweisung an den Agenten:** Den `curl|bash` / `irm|iex`-Befehl NICHT selbst ausführen —
+der Auto-Mode-Klassifizierer blockt „Remote-Code holen + ausführen" als harte Grenze.
+Nur die Install-Seite verlinken; bei Bedarf den `!`-Prefix für die User-Shell erklären.
 """.replace("__KG_URL__", _KG_URL)
 
 MEMORY_CLEANUP_CMD_MD = """\
@@ -2901,11 +2838,6 @@ async def setup_config_route(request: Request) -> JSONResponse:
 @mcp.custom_route("/cmd", methods=["GET"])
 async def cmd_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(CMD_MD, media_type="text/plain")
-
-
-@mcp.custom_route("/cmd/prefedit", methods=["GET"])
-async def cmd_prefedit_route(request: Request) -> PlainTextResponse:
-    return PlainTextResponse(PREFEDIT_CMD_MD, media_type="text/plain")
 
 
 @mcp.custom_route("/cmd/memory-cleanup", methods=["GET"])

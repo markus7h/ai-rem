@@ -21,7 +21,12 @@ _CLAUDE_JSON = os.path.expanduser("~/.claude.json")
 def _resolve_token(timeout: float = 15.0) -> str:
     """ai-rem-API-Token beziehen: Env AI_REM_TOKEN → bereits in ~/.claude.json
     hinterlegter Bearer-Header (vom system-check-Hook geschrieben) → Runtime-Fetch
-    aus mykeyvault (vault-api-Koordinaten ebenfalls aus ~/.claude.json)."""
+    aus mykeyvault (vault-api-Koordinaten ebenfalls aus ~/.claude.json).
+
+    Der Header in ~/.claude.json ist der einzige Kanal, über den Claudes built-in
+    /mcp-Tool den Token bekommt (statischer Config-Read — kann nicht selbst aus dem
+    Vault lesen). Vault = Rotationsquelle, Header = Session-Cache; darum bleibt der
+    Header-Sync tragend und nicht entfernbar (vgl. Issue #35)."""
     tok = os.environ.get("AI_REM_TOKEN", "")
     if tok:
         return tok
