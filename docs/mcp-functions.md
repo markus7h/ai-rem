@@ -1,6 +1,6 @@
 # MCP-Funktionsreferenz & Workflows
 
-Funktionsbeschreibung der drei MCP-Server (ai-rem, mykeyvault, tools-mcp) und der
+Funktionsbeschreibung der drei MCP-Server (ai-rem, mykeyvault, tools-registry) und der
 typischen End-to-End-Abläufe. Topologie siehe [`architecture.md`](./architecture.md).
 
 > Die Tool-Listen beschreiben den **aktuell registrierten** Stand (was Claude in der
@@ -106,7 +106,7 @@ Designprinzip: Secrets gelangen **nie als Klartext** in den Chat/Prompt.
 
 ---
 
-## 3. tools-mcp — Scripts als Tools (lokal, live nachgeladen)
+## 3. tools-registry — Scripts als Tools (lokal, live nachgeladen)
 
 Lokaler stdio-MCP-Server am Mac. Registriert Scripts aus `scripts/<name>/` als Tools und
 synchronisiert sie alle 5 s von der zentralen `tools-registry` (HTTP `:3457`) — **neue/geänderte
@@ -130,19 +130,19 @@ Scripts ohne MCP-Neustart**.
 
 **Script-Konvention:** je Script ein Verzeichnis mit `manifest.yaml` (name, description,
 exec, inputs, requires, optional `ai_rem_entity: tool_<name>`) + ausführbarem `run.sh`/`run.py`.
-Inputs kommen als `INPUT_<NAME>` + `TOOLS_MCP_INPUTS_JSON`; Outputs schreibt das Script nach
+Inputs kommen als `INPUT_<NAME>` + `TOOLS_INPUTS_JSON`; Outputs schreibt das Script nach
 `<run_dir>/outputs.json`.
 
 ### Workflows
 
 **A) Script-Distribution / Live-Reload**
 1. Script wird im Repo unter `scripts/<name>/` ergänzt/geändert; `tools-registry` mountet den Ordner read-only.
-2. `tools-mcp` (lokal) pollt `/registry`; ändert sich der SHA256-Versionshash, lädt es geänderte Dateien via `/registry/file` und cached nach `~/.cache/tools-mcp/scripts`.
+2. `tools-registry` (lokal) pollt `/registry`; ändert sich der SHA256-Versionshash, lädt es geänderte Dateien via `/registry/file` und cached nach `~/.cache/tools-registry/scripts`.
 3. Tool wird registriert/aktualisiert/entfernt; SDK meldet `tools/list_changed` → sofort nutzbar.
 
 **B) Script ausführen**
 1. Claude ruft das Tool mit den Manifest-Inputs auf.
-2. `tools-mcp` legt ein Run-Dir (`/tmp/tools-runs/<uuid>`) an, setzt `INPUT_*`/`TOOLS_MCP_*` und führt `exec` via `execFile` aus.
+2. `tools-registry` legt ein Run-Dir (`/tmp/tools-runs/<uuid>`) an, setzt `INPUT_*`/`TOOLS_*` und führt `exec` via `execFile` aus.
 3. `outputs.json` wird geparst und als Ergebnis zurückgegeben.
 
 **C) Pipeline**
@@ -155,6 +155,6 @@ Inputs kommen als `INPUT_<NAME>` + `TOOLS_MCP_INPUTS_JSON`; Outputs schreibt das
 
 ## Zusammenspiel der drei (Gesamt-Workflow)
 
-1. **Session-Start:** `system-check.py` → ai-rem `memory_get_context`; Bearer-Token (aus mykeyvault) ist im `~/.claude.json`-Header; `tools-mcp` hat seine Scripts vom Registry frisch.
-2. **Arbeit:** Claude nutzt ai-rem-Tools für Kontext/Speichern, mykeyvault-Tools für Secrets (ohne Leak), tools-mcp-Scripts für wiederkehrende Aktionen (PDF, settings-sync, Token-Lookup …).
+1. **Session-Start:** `system-check.py` → ai-rem `memory_get_context`; Bearer-Token (aus mykeyvault) ist im `~/.claude.json`-Header; `tools-registry` hat seine Scripts vom Registry frisch.
+2. **Arbeit:** Claude nutzt ai-rem-Tools für Kontext/Speichern, mykeyvault-Tools für Secrets (ohne Leak), tools-registry-Scripts für wiederkehrende Aktionen (PDF, settings-sync, Token-Lookup …).
 3. **Session-Ende:** der ai-rem Ingest-Hook `auto-memory.py` → Ollama-Extraktion → ai-rem-Upsert (bei kaltem/langsamem Ollama via `pending.jsonl` + `catchup` nachgezogen). Nachts räumt ai-rem den Graphen auf (Ollama-Urteile + Review-Queue).

@@ -44,7 +44,7 @@ Ersetzt die Bash-Logik vollständig; die bestehenden Python-Heredocs werden fast
   Python nutzt auf Windows den System-Zertifikatsspeicher automatisch.
 - **SSH-Secret-Pull:** wie bisher (`ssh -o BatchMode=yes <host> grep …`); Windows 10+
   hat OpenSSH-Client an Bord. Fehlt ssh → Hinweis + Env-Fallback (`AI_REM_TOKEN=… `).
-- **tools-mcp clone+build:** git/node/npm via `shutil.which`, Node>=18-Check,
+- **tools-registry clone+build:** git/node/npm via `shutil.which`, Node>=18-Check,
   npm-Fehlerdiagnose (Cert/EACCES) wie bisher. `npm`-Aufruf auf Windows via
   `npm.cmd` (which löst das auf).
 - **Dateien schreiben:** `~/.claude.json`, `settings-template.json`, `settings.json`,

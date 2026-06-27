@@ -912,7 +912,7 @@ SETUP_PY = r"""#!/usr/bin/env python3
 # Wird von den Wrappern geholt+gestartet:
 #   bash <(curl -s __KG_URL__/setup)          (macOS/Linux/WSL)
 #   irm __KG_URL__/setup.ps1 | iex            (Windows PowerShell)
-# Harte Abhaengigkeiten: python3, claude CLI. Optional (nur tools-mcp): git, node >= 18, npm.
+# Harte Abhaengigkeiten: python3, claude CLI. Optional (nur tools-registry): git, node >= 18, npm.
 import glob
 import json
 import os
@@ -1077,7 +1077,7 @@ def load_setup_config():
     except Exception:
         cfg = {}
     if not cfg:
-        print('⚠ setup-config nicht ladbar - personalisierte Teile (tools-mcp, Vault, Entities) werden uebersprungen')
+        print('⚠ setup-config nicht ladbar - personalisierte Teile (tools-registry, Vault, Entities) werden uebersprungen')
     return cfg
 
 
@@ -1163,7 +1163,7 @@ def pull_secrets(setup_cfg):
     return ssh_host, ai_rem_token, vault_token
 
 
-# ── tools-mcp (stdio) klonen+bauen, falls in setup-config ────────────────────
+# ── tools-registry (stdio) klonen+bauen, falls in setup-config ────────────────────
 
 def _build_node_mcp(repo, install_dir, entry, subdir, label):
     # Generisch: git clone/pull + npm install/build eines Node-MCP.
@@ -1246,8 +1246,8 @@ def build_tools_mcp(setup_cfg):
     if not reg_url:
         return '', ''
     entry = _build_node_mcp(stdio.get('repo', ''),
-                            stdio.get('install_dir') or os.path.join('~', 'Code', 'tools-mcp'),
-                            stdio.get('entry') or 'dist/index.js', '', 'tools-MCP')
+                            stdio.get('install_dir') or os.path.join('~', 'Code', 'tools-registry'),
+                            stdio.get('entry') or 'dist/index.js', '', 'tools-registry')
     return entry, reg_url
 
 
@@ -1369,7 +1369,7 @@ def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
         existed = 'tools' in servers
         servers['tools'] = {'type': 'stdio', 'command': 'node',
                             'args': [tools_entry],
-                            'env': {'TOOLS_MCP_REGISTRY_URL': tools_reg_url}}
+                            'env': {'TOOLS_REGISTRY_URL': tools_reg_url}}
         print('✓ tools ' + ('migriert' if existed else 'registriert') + ' (stdio)')
 
     tmp = cj + '.tmp'
@@ -3397,7 +3397,7 @@ li{margin-bottom:4px}
     <h2>Voraussetzungen</h2>
     <ul>
       <li><b>Pflicht:</b> <code>python3</code> + <code>claude</code> CLI — fehlt etwas, bricht das Setup mit plattformspezifischem Install-Hinweis ab</li>
-      <li><b>Optional (nur tools-mcp):</b> <code>git</code>, Node.js &ge; 18 inkl. <code>npm</code></li>
+      <li><b>Optional (nur tools-registry):</b> <code>git</code>, Node.js &ge; 18 inkl. <code>npm</code></li>
       <li><b>Secrets:</b> per SSH vom Server gezogen (SSH-Key vorausgesetzt) — alternativ Token im Env: <code>AI_REM_TOKEN=&lt;token&gt;</code> bzw. <code>$env:AI_REM_TOKEN</code></li>
     </ul>
     <p class="hint">Beide Wrapper laden dieselbe plattformneutrale Logik (<a href="/setup.py">setup.py</a>) — Verhalten auf allen Plattformen identisch. Details: <a href="/cmd">/setup-ai-rem Anleitung</a></p>

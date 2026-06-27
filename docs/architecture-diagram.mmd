@@ -3,8 +3,8 @@ flowchart TB
     CC["Claude Code"]
     HOOKS["Hooks: system-check / auto-memory<br/>claude-md-guard / save-plan"]
     CLI["bin/ai-rem CLI"]
-    TMCP["tools-mcp (MCP stdio, lokal)"]
-    CACHE[("~/.cache/tools-mcp/scripts")]
+    TMCP["tools-registry (MCP stdio, lokal)"]
+    CACHE[("~/.cache/tools-registry/scripts")]
   end
 
   subgraph UBU["myubuntu - 192.168.2.11"]
@@ -33,7 +33,7 @@ flowchart TB
   CADDY -. "https://mykeyvault.lan/secret/* u. a. (pfadbasiert)" .-> VAPI
   CADDY -. "https://mykeyvault.lan (Rest)" .-> VW
 
-  %% tools-mcp lokal
+  %% tools-registry lokal
   CC --> TMCP
   TMCP -- "Poll /registry (HTTP :3457)" --> REG
   TMCP --> CACHE

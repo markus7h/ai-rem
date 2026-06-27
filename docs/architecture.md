@@ -1,12 +1,12 @@
-# Architektur: ai-rem · mykeyvault · tools-mcp
+# Architektur: ai-rem · mykeyvault · tools-registry
 
 Drei zusammengehörige MCP-Systeme für den Claude-Code-Betrieb im LAN:
 
 - **ai-rem** — persistentes Langzeit-Gedächtnis (Knowledge Graph) als FastMCP-Server mit eingebetteter Kuzu-DB.
 - **mykeyvault** — Secrets-Verbund: Vaultwarden als Store, `vault-api` als Token-authentifiziertes REST-Gateway, `mykeyvault-mcp` als MCP-Frontend.
-- **tools-mcp** — lokaler MCP-Server, der Scripts als Tools registriert und sie live von einem zentralen HTTP-`tools-registry` bezieht.
+- **tools-registry** — lokaler MCP-Server, der Scripts als Tools registriert und sie live von einem zentralen HTTP-`tools-registry` bezieht.
 
-Sie spielen so zusammen: Alle HTTP-MCP-Kanäle laufen über **Caddy** (TLS internal, `*.lan`) auf **mystorage**; authentifiziert wird mit **einem gemeinsamen Bearer-Token** (`ai-rem-api-token`), das ursprünglich aus Vaultwarden stammt und über `vault-api` verteilt wird. **Ollama** läuft separat auf **myubuntu** (GPU) und liefert ai-rem die Transcript-Extraktion und die nächtlichen Cleanup-Urteile. **tools-mcp** läuft als stdio-Prozess lokal auf dem Mac und synchronisiert seine Scripts per HTTP vom `tools-registry`.
+Sie spielen so zusammen: Alle HTTP-MCP-Kanäle laufen über **Caddy** (TLS internal, `*.lan`) auf **mystorage**; authentifiziert wird mit **einem gemeinsamen Bearer-Token** (`ai-rem-api-token`), das ursprünglich aus Vaultwarden stammt und über `vault-api` verteilt wird. **Ollama** läuft separat auf **myubuntu** (GPU) und liefert ai-rem die Transcript-Extraktion und die nächtlichen Cleanup-Urteile. **tools-registry** läuft als stdio-Prozess lokal auf dem Mac und synchronisiert seine Scripts per HTTP vom `tools-registry`.
 
 ```mermaid
 flowchart TB
@@ -14,8 +14,8 @@ flowchart TB
     CC["Claude Code"]
     HOOKS["Hooks: system-check / auto-memory<br/>claude-md-guard / save-plan"]
     CLI["bin/ai-rem CLI"]
-    TMCP["tools-mcp (MCP stdio, lokal)"]
-    CACHE[("~/.cache/tools-mcp/scripts")]
+    TMCP["tools-registry (MCP stdio, lokal)"]
+    CACHE[("~/.cache/tools-registry/scripts")]
   end
 
   subgraph UBU["myubuntu - 192.168.2.11"]
@@ -44,7 +44,7 @@ flowchart TB
   CADDY -. "https://mykeyvault.lan/secret/* u. a. (pfadbasiert)" .-> VAPI
   CADDY -. "https://mykeyvault.lan (Rest)" .-> VW
 
-  %% tools-mcp lokal
+  %% tools-registry lokal
   CC --> TMCP
   TMCP -- "Poll /registry (HTTP :3457)" --> REG
   TMCP --> CACHE
@@ -74,7 +74,7 @@ flowchart TB
 | vault-api | mystorage | 8223→8000 | REST via `https://mykeyvault.lan` (Caddy, pfadbasiert: `/secret/*`, `/items*`, `/item/*`, `/ssh-key/*`, `/ssh-keys`, `/health`), Bearer | Token-Gateway um die Bitwarden-CLI; hält `bw serve` (`:8087`) entsperrt |
 | Vaultwarden | mystorage | 8222→80 | `https://mykeyvault.lan` (Caddy, alle übrigen Pfade) | Eigentlicher Secrets-Store |
 | tools-registry | mystorage | 3457 | reines HTTP (LAN-only, keine Auth) | Verteilt die Scripts (`/registry`, `/registry/file`) |
-| tools-mcp | Mac (lokal) | — | MCP stdio (Node-Prozess) | Registriert Scripts als Tools; pollt den Registry alle 5 s |
+| tools-registry | Mac (lokal) | — | MCP stdio (Node-Prozess) | Registriert Scripts als Tools; pollt den Registry alle 5 s |
 | Ollama | myubuntu | 11434 | HTTP | Transcript-Extraktion + Nightly-Cleanup-Urteile für ai-rem |
 | Caddy | mystorage | — | Reverse-Proxy, `tls internal` | Terminiert TLS für alle `*.lan`-Endpunkte |
 
