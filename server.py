@@ -4724,11 +4724,44 @@ async def discover_route(request: Request) -> JSONResponse:
 
 
 @mcp.tool()
+def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
+    """Offene Tasks + (falls verlinkt) zugehöriges Project.
+
+    Liefert (task_name, descr, status, project_name|None). Ein Task ohne
+    Project-Relation hat project_name=None; mit mehreren Projekten erscheint er
+    pro Project einmal. 'Offen' = Status nicht in erledigt/done/closed.
+    ponytail: ungerichteter Rel-Match (Task↔Project), ein Task hat real ein Projekt.
+    """
+    ctx_param: dict = {"ctx": context} if context else {}
+    rows = _rows(
+        db_exec(
+            f"""MATCH (t:Entity {{type: 'Task'}})
+               {_ctx_clause('t', context, where=True)}
+               {_archived_clause('t', include_archived, where=not context)}
+               OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
+               RETURN t.name, t.descr, t.extra, p.name
+               ORDER BY t.updated_at DESC""",
+            ctx_param,
+        )
+    )
+    out: list[tuple] = []
+    for name, descr, extra_s, proj in rows:
+        try:
+            status = (json.loads(extra_s or "{}").get("status") or "offen")
+        except json.JSONDecodeError:
+            status = "offen"
+        if status.lower() in ("erledigt", "done", "closed"):
+            continue
+        out.append((name, descr or "", status, proj))
+    return out
+
+
 def memory_get_context(topic: str = "", context: str = "", include_archived: bool = False) -> str:
     """Relevanten Kontext aus dem Knowledge Graph laden.
 
-    Ohne topic: offene Tasks + aktive Projekte + letzte Einträge.
-    Mit topic: direkt relevanter Subgraph zu diesem Thema.
+    Ohne topic: offene Tasks nach Projekt gruppiert (nur Zähler) + aktive Projekte + letzte Einträge.
+    Mit topic: direkt relevanter Subgraph zu diesem Thema; ist topic ein Projektname,
+               werden dessen offene Tasks ausgeklappt (Drill-down).
     context: "work" | "private" | "" (alles, default)
              Ungetaggte (globale) Entities erscheinen immer.
     include_archived: True → auch archivierte (alte/überholte) Einträge (default: aus)
@@ -4736,6 +4769,7 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
     ctx_label = f" [{context}]" if context else ""
     sections: list[str] = []
     ctx_param: dict = {"ctx": context} if context else {}
+    open_tasks = _open_task_rows(context, include_archived)
 
     if topic:
         q = topic.lower()
@@ -4772,6 +4806,12 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
             lines = [f"{r[0]} -[{r[1]}]-> {r[2]}" for r in rel_rows]
             sections.append("### Relationen\n" + "\n".join(lines))
 
+        # Drill-down: offene Tasks der Projektgruppe(n) ausklappen, deren Name auf topic matcht.
+        drill = [(n, d, s) for n, d, s, p in open_tasks if p and q in p.lower()]
+        if drill:
+            lines = [f"- [{s}] **{n}**: {d[:120]}" for n, d, s in drill]
+            sections.append(f"## Offene Tasks: {topic}{ctx_label}\n" + "\n".join(lines))
+
     # Routinen & Anweisungen (Preferences) — surface near the top so they are
     # acted on, not just read. Topic-specific block above still wins when set.
     # Sort: pinned first → sort_order (numeric, empty last) → updated_at DESC.
@@ -4800,29 +4840,20 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
         ]
         sections.append(f"## Routinen & Anweisungen{ctx_label}\n" + "\n".join(lines))
 
-    # Offene Tasks
-    task_rows = _rows(
-        db_exec(
-            f"""MATCH (e:Entity {{type: 'Task'}})
-               {_ctx_clause('e', context, where=True)}
-               {_archived_clause('e', include_archived, where=not context)}
-               RETURN e.name, e.descr, e.extra, e.updated_at
-               ORDER BY e.updated_at DESC
-               LIMIT 10""",
-            ctx_param,
+    # Offene Tasks — nach Projekt gruppiert, nur Zähler (Details on demand via topic=<Projekt>).
+    if open_tasks:
+        groups: dict[str, set] = {}
+        for name, _descr, _status, proj in open_tasks:
+            groups.setdefault(proj or "_ohne Projekt_", set()).add(name)
+        total = len({name for name, _d, _s, _p in open_tasks})
+        lines = [
+            f"- **{g}** — {len(names)} offen"
+            for g, names in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        ]
+        sections.append(
+            f"## Offene Tasks{ctx_label} ({total})\n" + "\n".join(lines)
+            + "\n→ Details: `memory_get_context(topic=\"<Projekt>\")`"
         )
-    )
-    tasks = []
-    for r in task_rows:
-        try:
-            extra = json.loads(r[2] or "{}")
-        except json.JSONDecodeError:
-            extra = {}
-        status = extra.get("status", "offen")
-        if status.lower() not in ("erledigt", "done", "closed"):
-            tasks.append(f"- [{status}] **{r[0]}**: {r[1][:80]}")
-    if tasks:
-        sections.append(f"## Offene Tasks{ctx_label}\n" + "\n".join(tasks))
 
     # Aktive Projekte
     proj_rows = _rows(
