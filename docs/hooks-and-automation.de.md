@@ -14,7 +14,7 @@ Das eingebaute Markdown-Auto-Memory von Claude Code wird durch einen Transcript-
 
 **Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → Ollama (qwen3:14b auf `AI_REM_OLLAMA_URL`, default `http://localhost:11434`) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
 
-**CLI** (`bin/ai-rem`, eigene `.venv`):
+**CLI** (`bin/ai-rem`, reine stdlib — kein venv nötig, läuft auf jedem `python3 ≥3.8` unter Windows/Linux/macOS):
 
 ```bash
 ai-rem status

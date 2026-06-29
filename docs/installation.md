@@ -34,7 +34,7 @@ The script automatically handles:
 ai-rem/
 ├── server.py                   # MCP server (FastMCP + Kuzu + web UI + backup + cleanup
 │                               #   + embedded setup.py/bash/PS1 scripts and hooks)
-├── bin/ai-rem                  # CLI (status/search/ingest/catchup, own .venv)
+├── bin/ai-rem                  # CLI (status/search/ingest/catchup, pure stdlib, no venv)
 ├── lib/                        # extractor (+ md-fallback/catchup), heuristic, mcp_client
 ├── hooks/save-plan.py          # PostToolUse hook: ExitPlanMode → open Task in ai-rem
 ├── docs/                       # architecture (md + Mermaid + PDF), MCP function docs,

@@ -6,14 +6,14 @@ Endpoint: $AI_REM_ENDPOINT (default http://localhost:3456/mcp)
 Subcommands map 1:1 onto MCP tools; `upsert` and `ingest` add convenience
 on top.
 """
-import os
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-_VENV_PY = REPO / ".venv" / "bin" / "python3"
-if _VENV_PY.exists() and Path(sys.executable).resolve() != _VENV_PY.resolve():
-    os.execv(str(_VENV_PY), [str(_VENV_PY), __file__, *sys.argv[1:]])
+# ponytail: CLI ist reine stdlib (urllib/json/argparse) — kein venv-re-exec.
+# Laeuft so auf jedem python3 >=3.8 unter Windows/Linux/macOS ohne Bruch;
+# ein plattformfremdes .venv (z.B. macOS-Symlink auf shared storage) kann es
+# nicht mehr kapern. Server-Deps (fastmcp/kuzu) gehoeren in den Docker-Container.
 
 import argparse
 import json

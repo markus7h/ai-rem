@@ -14,7 +14,7 @@ The built-in Claude Code auto-memory (markdown file) is replaced by a transcript
 
 **Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://localhost:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
 
-**CLI** (`bin/ai-rem`, own `.venv`):
+**CLI** (`bin/ai-rem`, pure stdlib — no venv needed, runs on any `python3 ≥3.8` on Windows/Linux/macOS):
 
 ```bash
 ai-rem status
