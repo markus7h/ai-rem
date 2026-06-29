@@ -1533,6 +1533,7 @@ def write_settings_template(setup_cfg, mcp_endpoint):
         'smb': setup_cfg.get('smb', {}),
         'mcp_stdio_servers': setup_cfg.get('mcp_stdio_servers', {}),
         'tools_scripts_dir': setup_cfg.get('tools_scripts_dir', ''),
+        'ollama_url': setup_cfg.get('ollama_url', 'http://myubuntu:11434'),
         'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto'},
         'permissions_allow_portable': setup_cfg.get('permissions_allow_portable', [
             # Nur noch die 4 Kern-MCP-Tools (Issue #32). Admin-Ops laufen über
@@ -5352,7 +5353,9 @@ async def api_tool(request: Request) -> JSONResponse:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-AI_REM_OLLAMA_URL = os.getenv("AI_REM_OLLAMA_URL", "http://myubuntu:11434")
+# AI_REM_OLLAMA_URL kommt config-aware vom Modul-Anfang (Env > setup-config
+# 'ollama_url' > Default myubuntu) — hier bewusst NICHT neu aus os.getenv setzen,
+# sonst wuerde der Config-Wert ueberschrieben.
 # Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
 # geladene Chat-Modell (siehe _cleanup_model), sonst CLEANUP_OLLAMA_MODEL_FALLBACK.
 CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "").strip()

@@ -12,7 +12,7 @@ halten: **Auto-Memory** (Session → Graph), **Nightly-Cleanup** (Dedup/Archivie
 
 Das eingebaute Markdown-Auto-Memory von Claude Code wird durch einen Transcript-Extraktor ersetzt, der **strukturierte Entities und Relations** in ai-rem schreibt.
 
-**Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → Ollama (qwen3:14b auf `AI_REM_OLLAMA_URL`, default `http://localhost:11434`) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
+**Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → Ollama (qwen3:14b auf `AI_REM_OLLAMA_URL`, default `http://myubuntu:11434`) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, reine stdlib — kein venv nötig, läuft auf jedem `python3 ≥3.8` unter Windows/Linux/macOS):
 
@@ -32,7 +32,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
 
 **Konfigurations-Env:**
 - `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)
-- `AI_REM_OLLAMA_URL` — Ollama-Basis-URL (default `http://localhost:11434`)
+- `AI_REM_OLLAMA_URL` — Ollama-Basis-URL (Env hat Vorrang; sonst `ollama_url` aus setup-config / settings-template; default `http://myubuntu:11434`)
 - `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`)
 
 ---

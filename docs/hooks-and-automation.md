@@ -12,7 +12,7 @@ ai-rem ships three Claude Code hooks that keep the graph fed and tidy without ma
 
 The built-in Claude Code auto-memory (markdown file) is replaced by a transcript extractor that writes **structured entities and relations** into ai-rem.
 
-**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://localhost:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
+**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://myubuntu:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, pure stdlib — no venv needed, runs on any `python3 ≥3.8` on Windows/Linux/macOS):
 
@@ -32,7 +32,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
 
 **Configuration env:**
 - `AI_REM_ENDPOINT` — MCP URL (default `http://localhost:3456/mcp`)
-- `AI_REM_OLLAMA_URL` — Ollama base URL (default `http://localhost:11434`)
+- `AI_REM_OLLAMA_URL` — Ollama base URL (env wins; otherwise `ollama_url` from setup-config / settings-template; default `http://myubuntu:11434`)
 - `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`)
 
 ---
