@@ -9,4 +9,6 @@ setup-config.json
 .claude/settings.json
 .superpowers/
 
-.pii-guard/
+.kaiguard*
+context-dump.md
+.pii-guard*
