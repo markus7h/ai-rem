@@ -1,0 +1,22 @@
+# Lokale Hygiene-Hooks (Issue #29). Installation: pipx install pre-commit && pre-commit install
+exclude: '^test-transcript\.jsonl$'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+        # gleiches Gate wie CI (lint-compile)
+        args: [--select, "E9,F63,F7,F82"]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]

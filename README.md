@@ -171,6 +171,10 @@ critical error classes (syntax, undefined names), a `compileall` smoke, an impor
 against a throwaway env, the `pytest` suite under `tests/`, and an image-smoke that builds
 the Docker image and polls `/health`. `main` is protected — changes land via PR with green CI.
 
+Local hygiene hooks mirror the CI ruff gate and add whitespace/EOF fixes plus a
+`detect-secrets` scan (baseline: `.secrets.baseline`). One-time setup:
+`pipx install pre-commit && pre-commit install`.
+
 Releases are tag-triggered (`.github/workflows/docker-publish.yml`); a `VERSION ↔ Tag`
 step fails the build if `VERSION` in `server.py` does not match the pushed tag (`v1.2.3` → `1.2.3`).
 
