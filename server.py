@@ -5360,9 +5360,12 @@ async def api_tool(request: Request) -> JSONResponse:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-# AI_REM_OLLAMA_URL kommt config-aware vom Modul-Anfang (Env > setup-config
-# 'ollama_url' > Default myubuntu) — hier bewusst NICHT neu aus os.getenv setzen,
-# sonst wuerde der Config-Wert ueberschrieben.
+# Ollama-Basis-URL config-aware: Env > setup-config 'ollama_url' > Default.
+# (a60e9b5 hatte die Definition nur im eingebetteten SYSTEM_CHECK_PY-String —
+# im Server-Scope fehlte sie ⇒ NameError im Nightly-Cleanup, ruff F821.)
+AI_REM_OLLAMA_URL = os.environ.get(
+    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myubuntu:11434")
+)
 # Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
 # geladene Chat-Modell (siehe _cleanup_model), sonst CLEANUP_OLLAMA_MODEL_FALLBACK.
 CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "").strip()
