@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.7.2"
+VERSION = "0.7.3"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1359,12 +1359,15 @@ def _build_node_mcp(repo, install_dir, entry, subdir, label):
             print('✗ git clone %s fehlgeschlagen (Netz/Repo-Zugriff pruefen)' % repo)
 
     build_cwd = os.path.join(tdir, subdir) if subdir else tdir
+    build_ok = False
     if os.path.isdir(build_cwd):
         log = ''
+        build_ok = True
         for cmd in ([npm, 'install', '--no-audit', '--no-fund'], [npm, 'run', 'build']):
             p = run(cmd, timeout=600, cwd=build_cwd)
             log += (p.stdout or '') + (p.stderr or '')
             if p.returncode != 0:
+                build_ok = False
                 print('✗ %s npm-Build fehlgeschlagen - letzte Log-Zeilen:' % label)
                 for line in log.splitlines()[-12:]:
                     print('    | ' + line)
@@ -1378,7 +1381,11 @@ def _build_node_mcp(repo, install_dir, entry, subdir, label):
 
     entry_path = os.path.join(tdir, *entry.split('/'))
     if os.path.isfile(entry_path):
-        print('OK %s gebaut: %s' % (label, entry_path))
+        if build_ok:
+            print('OK %s gebaut: %s' % (label, entry_path))
+        else:
+            # fail-soft: alter Build bleibt nutzbar, aber ehrlich melden statt "OK"
+            print('⚠ %s Build fehlgeschlagen - verwende vorhandenen ALTEN Build: %s' % (label, entry_path))
         return entry_path
     print('!! %s Build fehlgeschlagen - manuell pruefen: cd %s && npm install && npm run build' % (label, build_cwd))
     return ''
