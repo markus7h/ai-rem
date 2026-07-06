@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.7.5"
+VERSION = "0.7.6"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -110,8 +110,14 @@ import threading
 import time
 import urllib.request
 
-SETTINGS = os.path.expanduser("~/.claude/settings.json")
-TEMPLATE = os.path.expanduser("~/.claude/settings-template.json")
+# Config-Verzeichnis: CLAUDE_CONFIG_DIR hat Vorrang (Claude liest dann von dort),
+# sonst ~/.claude bzw. ~/.claude.json. Ohne das landet alles im toten ~/.claude.
+_CC = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+CLAUDE_DIR = _CC or os.path.expanduser("~/.claude")
+CLAUDE_JSON = os.path.join(_CC, ".claude.json") if _CC else os.path.expanduser("~/.claude.json")
+
+SETTINGS = os.path.join(CLAUDE_DIR, "settings.json")
+TEMPLATE = os.path.join(CLAUDE_DIR, "settings-template.json")
 
 
 def _load_template():
@@ -133,8 +139,6 @@ AI_REM_TIMEOUT = 5
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myubuntu:11434")
 )
-
-CLAUDE_JSON = os.path.expanduser("~/.claude.json")
 
 
 def _header_token():
@@ -160,7 +164,7 @@ def _vault_coords():
         pass
     try:
         d = {}
-        with open(os.path.expanduser("~/.claude/ai-rem-vault.env")) as f:
+        with open(os.path.join(CLAUDE_DIR, "ai-rem-vault.env")) as f:
             for line in f:
                 line = line.strip()
                 if "=" in line and not line.startswith("#"):
@@ -606,7 +610,7 @@ def check_ollama_and_catchup():
 
 def check_auto_memory():
     """Sichtbarkeit: was der Extraktor zuletzt gespeichert hat + offene md-Fallback-Queue."""
-    base = os.path.expanduser("~/.claude/auto-memory")
+    base = os.path.join(CLAUDE_DIR, "auto-memory")
     parts = []
     try:
         with open(os.path.join(base, "last-run.json")) as f:
@@ -697,7 +701,9 @@ import sys
 import time
 from pathlib import Path
 
-AUTO_MEM_DIR = Path(os.path.expanduser("~/.claude/auto-memory"))
+_CC = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+CLAUDE_DIR = _CC or os.path.expanduser("~/.claude")
+AUTO_MEM_DIR = Path(CLAUDE_DIR) / "auto-memory"
 PROCESSED = AUTO_MEM_DIR / ".processed"
 ERRORS = AUTO_MEM_DIR / "errors.log"
 TIMEOUT_S = 120
@@ -884,7 +890,9 @@ def main():
     if not fp:
         return
     target = os.path.realpath(os.path.expanduser(fp))
-    claude_md = os.path.realpath(os.path.expanduser("~/.claude/CLAUDE.md"))
+    _cc = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+    _cdir = _cc or os.path.expanduser("~/.claude")
+    claude_md = os.path.realpath(os.path.join(_cdir, "CLAUDE.md"))
     if target != claude_md:
         return
     msg = (
@@ -942,7 +950,10 @@ import urllib.request
 
 ENDPOINT = os.environ.get("AI_REM_ENDPOINT", "http://localhost:3456/mcp")
 TIMEOUT = 8
-PLANS_DIR = os.path.expanduser("~/.claude/plans")
+_CC = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+CLAUDE_DIR = _CC or os.path.expanduser("~/.claude")
+CLAUDE_JSON = os.path.join(_CC, ".claude.json") if _CC else os.path.expanduser("~/.claude.json")
+PLANS_DIR = os.path.join(CLAUDE_DIR, "plans")
 
 
 def auth_header():
@@ -950,7 +961,7 @@ def auth_header():
     if tok:
         return tok if tok.lower().startswith("bearer ") else f"Bearer {tok}"
     try:
-        cfg = json.load(open(os.path.expanduser("~/.claude.json")))
+        cfg = json.load(open(CLAUDE_JSON))
         return cfg["mcpServers"]["ai-rem"]["headers"]["Authorization"]
     except Exception:
         return None
@@ -1071,7 +1082,12 @@ import urllib.request
 
 KG_URL = '__KG_URL__'
 HOME = os.path.expanduser('~')
-CLAUDE_HOME = os.path.join(HOME, '.claude')
+_CC = os.environ.get('CLAUDE_CONFIG_DIR', '').strip()
+# ponytail: nimmt bei Doppelpunkt-Liste (mehrere Config-Dirs) das erste; reicht fuer den Normalfall
+if _CC:
+    _CC = _CC.split(os.pathsep)[0]
+CLAUDE_HOME = _CC or os.path.join(HOME, '.claude')
+CLAUDE_JSON = os.path.join(_CC, '.claude.json') if _CC else os.path.join(HOME, '.claude.json')
 IS_WIN = sys.platform == 'win32'
 
 # Windows-Konsole (cp850/cp1252) wuerde sonst an ✓/✗ scheitern.
@@ -1419,7 +1435,7 @@ def build_mykeyvault_mcp(setup_cfg):
 
 def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
                        vault_token, tools_entry, tools_reg_url, vault_entry=''):
-    cj = os.path.join(HOME, '.claude.json')
+    cj = CLAUDE_JSON
     if not os.path.exists(cj):
         print('⚠ ~/.claude.json fehlt - claude einmal interaktiv starten, dann Setup erneut ausfuehren')
         return ''
@@ -1781,7 +1797,7 @@ def create_entities(setup_cfg, ai_rem_token):
     token = ai_rem_token or os.environ.get('AI_REM_TOKEN', '')
     if not token:
         try:
-            with open(os.path.join(HOME, '.claude.json'), encoding='utf-8') as f:
+            with open(CLAUDE_JSON, encoding='utf-8') as f:
                 auth = json.load(f)['mcpServers']['ai-rem']['headers']['Authorization']
             token = auth.split()[-1] if auth else ''
         except Exception:
