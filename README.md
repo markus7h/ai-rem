@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.7.6](https://github.com/markus7h/ai-rem/releases/tag/v0.7.6)**.
+> This documentation describes **[v0.8.0](https://github.com/markus7h/ai-rem/releases/tag/v0.8.0)**.
 > Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
