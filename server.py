@@ -3497,7 +3497,17 @@ h1{font-size:22px;font-weight:700;margin-bottom:4px}
 a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
 .bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
 .muted{color:var(--muted);font-size:12px}
+#netwrap{position:relative}
 #net{height:78vh;background:var(--card);border:1px solid var(--border);border-radius:10px}
+#info{position:absolute;left:12px;right:12px;bottom:12px;max-height:38%;overflow:auto;
+  background:var(--card);border:1px solid var(--border);border-radius:8px;
+  padding:10px 13px;box-shadow:0 3px 16px rgba(0,0,0,.10);font-size:13px;line-height:1.5;
+  display:none;pointer-events:none}
+#info .hd{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+#info .chip{color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+#info .nm{font-weight:700;font-size:14px}
+#info .ctx{color:var(--muted);font-size:12px}
+#info .d{color:var(--text);white-space:pre-wrap;word-break:break-word}
 #leg{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
 #leg span{font-size:12px;display:inline-flex;align-items:center;gap:5px}
 .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
@@ -3518,12 +3528,13 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
   <label class="muted"><input type="checkbox" id="phys" checked onchange="net&&net.setOptions({physics:{enabled:this.checked}})"> Physik</label>
   <span class="muted">Typ-Filter: Legende anklicken</span>
 </div>
-<div id="net"></div>
+<div id="netwrap"><div id="net"></div><div id="info"></div></div>
 <div id="leg"></div>
 <script>
 const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const PAL=['#388e3c','#1565c0','#c62828','#6a1b9a','#ef6c00','#00838f','#ad1457','#558b00','#4527a0','#795548','#546e7a'];
-let G=null, net=null, COL={};
+let G=null, net=null, COL={}, EMAP={};
 const HIDE=new Set();  // ausgeblendete Typen (Tag-Filter via Legende)
 function colorFor(t){if(!(t in COL))COL[t]=PAL[Object.keys(COL).length%PAL.length];return COL[t];}
 function toggleType(t){HIDE.has(t)?HIDE.delete(t):HIDE.add(t);build();}
@@ -3531,6 +3542,14 @@ async function init(){
   G=await (await fetch('/export')).json();
   G.entities.forEach(e=>colorFor(e.type));  // stabile Farben für ALLE Typen (Legende vollständig)
   build();
+}
+function showInfo(e){
+  if(!e){return;}
+  const ctx=e.context?' · '+esc(e.context):(e.archived==='true'?' · archiviert':'');
+  const d=e.description?`<div class="d">${esc(e.description)}</div>`:'';
+  $('info').innerHTML=`<div class="hd"><span class="chip" style="background:${colorFor(e.type)}">${esc(e.type)}</span>`
+    +`<span class="nm">${esc(e.name)}</span><span class="ctx">${ctx}</span></div>${d}`;
+  $('info').style.display='block';
 }
 function build(){
   const showArch=$('arch').checked, cf=$('ctx').value;
@@ -3540,16 +3559,19 @@ function build(){
     return !HIDE.has(e.type);
   });
   const ok=new Set(ents.map(e=>e.id));
+  EMAP={}; ents.forEach(e=>EMAP[e.id]=e);
   const nodes=ents.map(e=>({id:e.id,label:e.name,color:colorFor(e.type),
     shape:'dot',size:14,font:{size:13,color:'#333'},
-    opacity:e.archived==='true'?0.45:1,title:e.type+(e.description?' · '+e.description:'')}));
+    opacity:e.archived==='true'?0.45:1}));
   const edges=G.relations.filter(r=>ok.has(r.from_id)&&ok.has(r.to_id)).map(r=>({
     from:r.from_id,to:r.to_id,label:r.relation,arrows:'to',
     font:{size:10,color:'#888',strokeWidth:3,strokeColor:'#fafafa'},color:{color:'#ccc'}}));
   $('cnt').textContent=`${nodes.length} Knoten · ${edges.length} Kanten`;
   net=new vis.Network($('net'),{nodes,edges},{
     physics:{enabled:$('phys').checked,stabilization:{iterations:150},barnesHut:{springLength:130}},
-    interaction:{hover:true,tooltipDelay:120}});
+    interaction:{hover:true}});
+  net.on('hoverNode',p=>showInfo(EMAP[p.node]));
+  net.on('blurNode',()=>{$('info').style.display='none';});
   net.on('doubleClick',p=>{if(p.nodes.length)location.href='/browse';});
   $('leg').innerHTML=Object.entries(COL).map(([t,c])=>`<span onclick="toggleType('${t}')" style="cursor:pointer;opacity:${HIDE.has(t)?0.35:1}" title="${HIDE.has(t)?'einblenden':'ausblenden'}"><i class="dot" style="background:${c}"></i>${t}</span>`).join('');
 }
