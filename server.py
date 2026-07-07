@@ -3570,8 +3570,7 @@ function build(){
   net=new vis.Network($('net'),{nodes,edges},{
     physics:{enabled:$('phys').checked,stabilization:{iterations:150},barnesHut:{springLength:130}},
     interaction:{hover:true}});
-  net.on('hoverNode',p=>showInfo(EMAP[p.node]));
-  net.on('blurNode',()=>{$('info').style.display='none';});
+  net.on('click',p=>{p.nodes.length?showInfo(EMAP[p.nodes[0]]):($('info').style.display='none');});
   net.on('doubleClick',p=>{if(p.nodes.length)location.href='/browse';});
   $('leg').innerHTML=Object.entries(COL).map(([t,c])=>`<span onclick="toggleType('${t}')" style="cursor:pointer;opacity:${HIDE.has(t)?0.35:1}" title="${HIDE.has(t)?'einblenden':'ausblenden'}"><i class="dot" style="background:${c}"></i>${t}</span>`).join('');
 }
