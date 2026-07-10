@@ -3526,6 +3526,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
     </select></label>
   <label class="muted"><input type="checkbox" id="arch" onchange="build()"> archivierte zeigen</label>
   <label class="muted"><input type="checkbox" id="phys" checked onchange="net&&net.setOptions({physics:{enabled:this.checked}})"> Physik</label>
+  <label class="muted"><input type="checkbox" id="focus" onchange="setFocus()"> nur Verbundene</label>
   <span class="muted">Typ-Filter: Legende anklicken</span>
 </div>
 <div id="netwrap"><div id="net"></div><div id="info"></div></div>
@@ -3534,10 +3535,11 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const PAL=['#388e3c','#1565c0','#c62828','#6a1b9a','#ef6c00','#00838f','#ad1457','#558b00','#4527a0','#795548','#546e7a'];
-let G=null, net=null, COL={}, EMAP={};
+let G=null, net=null, COL={}, EMAP={}, SEL=null, FOCUS=null;
 const HIDE=new Set();  // ausgeblendete Typen (Tag-Filter via Legende)
 function colorFor(t){if(!(t in COL))COL[t]=PAL[Object.keys(COL).length%PAL.length];return COL[t];}
 function toggleType(t){HIDE.has(t)?HIDE.delete(t):HIDE.add(t);build();}
+function setFocus(){FOCUS=$('focus').checked?SEL:null;build();}  // Anker = aktuelle Auswahl
 async function init(){
   G=await (await fetch('/export')).json();
   G.entities.forEach(e=>colorFor(e.type));  // stabile Farben für ALLE Typen (Legende vollständig)
@@ -3553,11 +3555,16 @@ function showInfo(e){
 }
 function build(){
   const showArch=$('arch').checked, cf=$('ctx').value;
-  const ents=G.entities.filter(e=>{
+  let ents=G.entities.filter(e=>{
     if(!showArch&&e.archived==='true')return false;
     if(cf==='__global'?e.context!=='':cf&&e.context!==cf)return false;
     return !HIDE.has(e.type);
   });
+  if($('focus').checked&&FOCUS){  // fixer Anker + direkte Nachbarn
+    const nb=new Set([FOCUS]);
+    G.relations.forEach(r=>{if(r.from_id===FOCUS)nb.add(r.to_id);if(r.to_id===FOCUS)nb.add(r.from_id);});
+    ents=ents.filter(e=>nb.has(e.id));
+  }
   const ok=new Set(ents.map(e=>e.id));
   EMAP={}; ents.forEach(e=>EMAP[e.id]=e);
   const nodes=ents.map(e=>({id:e.id,label:e.name,color:colorFor(e.type),
@@ -3570,8 +3577,13 @@ function build(){
   net=new vis.Network($('net'),{nodes,edges},{
     physics:{enabled:$('phys').checked,stabilization:{iterations:150},barnesHut:{springLength:130}},
     interaction:{hover:true}});
-  net.on('click',p=>{p.nodes.length?showInfo(EMAP[p.nodes[0]]):($('info').style.display='none');});
-  net.on('doubleClick',p=>{if(p.nodes.length)location.href='/browse';});
+  net.on('click',p=>{  // Einfachklick: nur Info, Anker bleibt fix
+    if(p.nodes.length){SEL=p.nodes[0];showInfo(EMAP[SEL]);}
+    else{SEL=null;$('info').style.display='none';}
+  });
+  net.on('doubleClick',p=>{  // Doppelklick im Fokus-Modus: Anker umsetzen
+    if(p.nodes.length&&$('focus').checked){FOCUS=SEL=p.nodes[0];showInfo(EMAP[FOCUS]);build();}
+  });
   $('leg').innerHTML=Object.entries(COL).map(([t,c])=>`<span onclick="toggleType('${t}')" style="cursor:pointer;opacity:${HIDE.has(t)?0.35:1}" title="${HIDE.has(t)?'einblenden':'ausblenden'}"><i class="dot" style="background:${c}"></i>${t}</span>`).join('');
 }
 init();
