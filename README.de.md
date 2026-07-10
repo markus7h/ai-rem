@@ -53,7 +53,7 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 |---|---|
 | `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore (Export v2 erhält `pinned`/`sort_order`/`archived`); zusätzlich OKF-Bundle-Import; Kopfzeile zeigt die Server-Version |
 | `/browse` | Interaktiver Inhalts-Browser: Suche und Typ-Filter, archivierte ein-/ausblenden, Eintrag aufklappen für Beschreibung, Extra und Relationen; importierte Einträge sind gebadged |
-| `/graph` | Node-Link-Visualisierung (vis-network): Knoten nach Typ eingefärbt, Kanten mit Relationsnamen; Filter nach Kontext (work / privat / global) und Typ-Toggle über die Legende; Physik- und Archiv-Toggle |
+| `/graph` | Node-Link-Visualisierung (vis-network): Knoten nach Typ eingefärbt, Kanten mit Relationsnamen; Filter nach Kontext (work / privat / global) und Typ-Toggle über die Legende; Physik- und Archiv-Toggle; „nur Verbundene" blendet auf den angeklickten Knoten samt direkten Nachbarn aus |
 | `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen; archivierte Preferences sind gedimmt, gebadged und stehen unter einer Trennzeile (laden nie in den Session-Kontext). |
 | `/cleanup` | Nightly-Cleanup: Konfiguration, manueller Lauf, Pending-Reviews, Lauf-Log; plus Archiv-Purge (archivierte Einträge endgültig löschen, optional die letzten *X* Tage behalten) |
 | `/install` | Client-Setup-Befehle pro Plattform (bash / PowerShell) mit Kopier-Buttons, inkl. Schritt-für-Schritt-SSH-Key-Anleitung — public, fürs Onboarding neuer Maschinen |
