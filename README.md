@@ -97,8 +97,16 @@ BACKUP_DIR=/backups                      # Path for backup files
 MAX_BACKUPS=10                           # Maximum number of backups to keep
 AI_REM_BACKUP_KEY=...                     # Optional — encrypt backups (AES-256-GCM); empty = plaintext
 KUZU_POOL_SIZE=4                         # Connection pool size
+KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu buffer pool in MiB (0 = default: 80% of host RAM)
+KUZU_WAL_CHECKPOINT_MB=2                  # self-checkpoint the WAL above this size (0/empty = off)
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
 ```
+
+> **Note (memory):** Without `KUZU_BUFFER_POOL_SIZE_MB`, kuzu sizes its buffer pool to
+> ~80 % of **host** RAM and ignores the container `mem_limit`. Normal operation on this
+> DB needs only ~32 MB, so 256 MiB is plenty. `KUZU_WAL_CHECKPOINT_MB` keeps the WAL
+> small (periodically + on shutdown) — a bloated WAL would trigger an expensive recovery
+> on open (several GB → OOM).
 
 When `AI_REM_BACKUP_KEY` is set, backups are written encrypted with AES-256-GCM
 (`backup_<ts>.json.enc`) and downloads return the encrypted blob, so the data

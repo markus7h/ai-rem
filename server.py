@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.8.1"
+VERSION = "0.8.2"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -50,6 +50,16 @@ CONTEXT_PREF_LIMIT = int(os.getenv("CONTEXT_PREF_LIMIT", "15"))
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
 KUZU_POOL_SIZE = max(1, int(os.getenv("KUZU_POOL_SIZE", "4")))
+# ponytail: Buffer-Pool explizit deckeln — sonst nimmt kuzu 80% des HOST-RAMs
+# (nicht des cgroup/mem_limit) als Ziel. Der Normalbetrieb braucht bei dieser
+# kleinen DB nur ~32 MB; 256 MiB sind üppig (auch WAL-Recovery bis ~6 MB getestet).
+# 0 = kuzu-Default (80% Host-RAM).
+KUZU_BUFFER_POOL_SIZE_MB = int(os.getenv("KUZU_BUFFER_POOL_SIZE_MB", "256"))
+# Kuzu checkpointet die WAL nicht zuverlässig, solange Pool-Connections offen sind.
+# Eine aufgestaute WAL löst beim NÄCHSTEN Öffnen eine absurd teure Recovery aus
+# (6.9 MB WAL → ~2.4 GB Buffer-Peak → OOM). Darum checkpointen wir selbst, sobald
+# die WAL diese Schwelle überschreitet (Scheduler, 60s-Takt) + einmal beim Shutdown.
+KUZU_WAL_CHECKPOINT_MB = float(os.getenv("KUZU_WAL_CHECKPOINT_MB", "2"))
 _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 
 # API-Token für alle sensiblen HTTP-Routen (/mcp, /api/*, /export, /import …).
@@ -2092,7 +2102,10 @@ Pointer + `@`-Includes stehen lassen. Projekt-CLAUDE.md → knapper Verweis auf 
 Project-Entity. Danach greift der Guard-Hook sauber (kein Wissen mehr in den Dateien).
 """.replace("__KG_URL__", _KG_URL)
 
-db = kuzu.Database(DB_PATH)
+db = kuzu.Database(
+    DB_PATH,
+    buffer_pool_size=KUZU_BUFFER_POOL_SIZE_MB * 1024 * 1024 if KUZU_BUFFER_POOL_SIZE_MB else 0,
+)
 
 # Kuzu Connection objects are not thread-safe, but a Database can host many.
 # A small pool lets independent requests run truly concurrently — under the
@@ -2610,9 +2623,28 @@ def _do_backup() -> str:
 _shutdown = threading.Event()
 
 
+def _checkpoint_wal(force: bool = False) -> None:
+    """WAL in die DB mergen, damit sie nicht aufstaut. `force` checkpointet
+    unabhängig von der Größe (Shutdown); sonst nur ab KUZU_WAL_CHECKPOINT_MB.
+    Fehler sind unkritisch — der nächste Lauf versucht es erneut."""
+    wal = DB_PATH + ".wal"
+    try:
+        mb = os.path.getsize(wal) / 1024 / 1024
+    except OSError:
+        return
+    if not force and mb < KUZU_WAL_CHECKPOINT_MB:
+        return
+    try:
+        db_exec("CHECKPOINT")
+        log.info("WAL-Checkpoint: %.1f MB gemerged", mb)
+    except Exception as e:
+        log.warning("WAL-Checkpoint fehlgeschlagen (WAL=%.1f MB): %s", mb, e)
+
+
 def _scheduler_loop() -> None:
     thresholds = {"hourly": 3600, "daily": 86400, "weekly": 604800}
     while not _shutdown.wait(60):
+        _checkpoint_wal()
         cfg = _load_backup_cfg()
         if not cfg.get("enabled"):
             continue
@@ -2635,7 +2667,15 @@ def _scheduler_loop() -> None:
 
 
 threading.Thread(target=_scheduler_loop, daemon=True, name="backup-scheduler").start()
-atexit.register(_shutdown.set)
+
+
+def _on_exit() -> None:
+    # Scheduler stoppen und WAL final mergen → nächster Start öffnet ohne teure Recovery.
+    _shutdown.set()
+    _checkpoint_wal(force=True)
+
+
+atexit.register(_on_exit)
 
 
 # ─── Web UI ──────────────────────────────────────────────────────────────────

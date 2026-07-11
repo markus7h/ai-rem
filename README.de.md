@@ -96,7 +96,15 @@ BACKUP_DIR=/backups                      # Pfad für Backup-Dateien
 MAX_BACKUPS=10                           # Maximale Anzahl aufbewahrter Backups
 AI_REM_BACKUP_KEY=...                     # Optional — Backups verschlüsseln (AES-256-GCM); leer = Klartext
 KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
+KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu Buffer-Pool in MiB (0 = Default: 80% Host-RAM)
+KUZU_WAL_CHECKPOINT_MB=2                 # WAL selbst mergen ab dieser Größe (0/leer = aus)
 ```
+
+> **Hinweis (Speicher):** Ohne `KUZU_BUFFER_POOL_SIZE_MB` dimensioniert kuzu seinen
+> Buffer-Pool auf ~80 % des **Host**-RAMs und ignoriert das Container-`mem_limit`.
+> Der Normalbetrieb braucht bei dieser DB nur ~32 MB, daher genügen 256 MiB.
+> `KUZU_WAL_CHECKPOINT_MB` hält die WAL klein (periodisch + beim Shutdown) — eine
+> aufgestaute WAL würde beim Öffnen eine teure Recovery auslösen (mehrere GB → OOM).
 
 Ist `AI_REM_BACKUP_KEY` gesetzt, werden Backups mit AES-256-GCM verschlüsselt
 geschrieben (`backup_<ts>.json.enc`) und beim Download als verschlüsselter Blob
