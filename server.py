@@ -599,15 +599,15 @@ def _cli_cmd(cli, *args):
 
 
 def check_ollama_and_catchup():
-    """Ollama-Reachability; wenn erreichbar, Catch-up der md-Fallback-Queue im
+    """llama-server-Reachability; wenn erreichbar, Catch-up der md-Fallback-Queue im
     Hintergrund anstoßen (non-blocking). Nur bei Ausfall sichtbar melden."""
     try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/api/tags", timeout=2) as r:
+        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/health", timeout=2) as r:
             up = getattr(r, "status", 200) == 200
     except Exception:
         up = False
     if not up:
-        results.append("ollama ✗")
+        results.append("llm ✗")
         return
     cli = _ai_rem_cli()
     if cli:
@@ -3567,7 +3567,8 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
   <label class="muted"><input type="checkbox" id="arch" onchange="build()"> archivierte zeigen</label>
   <label class="muted"><input type="checkbox" id="phys" checked onchange="net&&net.setOptions({physics:{enabled:this.checked}})"> Physik</label>
   <label class="muted"><input type="checkbox" id="focus" onchange="setFocus()"> nur Verbundene</label>
-  <span class="muted">Typ-Filter: Legende anklicken</span>
+  <label class="muted">Distanz <input type="number" id="depth" value="1" min="1" style="width:3em" onchange="build()"></label>
+  <span class="muted">Typ-Filter: Legende anklicken · <a href="#" onclick="toggleAll();return false">alle an/aus</a></span>
 </div>
 <div id="netwrap"><div id="net"></div><div id="info"></div></div>
 <div id="leg"></div>
@@ -3579,6 +3580,7 @@ let G=null, net=null, COL={}, EMAP={}, SEL=null, FOCUS=null;
 const HIDE=new Set();  // ausgeblendete Typen (Tag-Filter via Legende)
 function colorFor(t){if(!(t in COL))COL[t]=PAL[Object.keys(COL).length%PAL.length];return COL[t];}
 function toggleType(t){HIDE.has(t)?HIDE.delete(t):HIDE.add(t);build();}
+function toggleAll(){HIDE.size?HIDE.clear():Object.keys(COL).forEach(t=>HIDE.add(t));build();}  // was ausgeblendet ist → alle an, sonst alle aus
 function setFocus(){FOCUS=$('focus').checked?SEL:null;build();}  // Anker = aktuelle Auswahl
 async function init(){
   G=await (await fetch('/export')).json();
@@ -3600,9 +3602,13 @@ function build(){
     if(cf==='__global'?e.context!=='':cf&&e.context!==cf)return false;
     return !HIDE.has(e.type);
   });
-  if($('focus').checked&&FOCUS){  // fixer Anker + direkte Nachbarn
+  if($('focus').checked&&FOCUS){  // fixer Anker + Nachbarn bis Distanz n (BFS)
+    const depth=Math.max(1,+$('depth').value||1);
     const nb=new Set([FOCUS]);
-    G.relations.forEach(r=>{if(r.from_id===FOCUS)nb.add(r.to_id);if(r.to_id===FOCUS)nb.add(r.from_id);});
+    for(let d=0;d<depth;d++){
+      const cur=new Set(nb);  // Snapshot: genau eine Distanz pro Runde
+      G.relations.forEach(r=>{if(cur.has(r.from_id))nb.add(r.to_id);if(cur.has(r.to_id))nb.add(r.from_id);});
+    }
     ents=ents.filter(e=>nb.has(e.id));
   }
   const ok=new Set(ents.map(e=>e.id));
@@ -4129,6 +4135,7 @@ def memory_add(
     extra: Optional[dict] = None,
     context: Optional[str] = None,
     pinned: Optional[bool] = None,
+    supersedes: str = "",
 ) -> str:
     """Entity im Knowledge Graph anlegen oder aktualisieren.
 
@@ -4136,18 +4143,24 @@ def memory_add(
     extra: beliebige JSON-Properties (z.B. {"status": "offen", "priority": "hoch"})
     context: "work" | "private" | "" (global — erscheint in allen Context-Abfragen)
     pinned: True → Preference erscheint immer ganz oben in get_context, unabhängig von updated_at
+    supersedes: Name eines abgelösten Eintrags → wird archiviert + via VERALTET_DURCH auf
+        diesen neuen Eintrag verlinkt (für neu benannte Nachfolger).
 
     Partial-Update: Beim Aktualisieren eines bestehenden Eintrags werden nur
     übergebene Felder gesetzt. Weggelassene Felder (description/extra/context/pinned
     = None) behalten ihren bisherigen Wert; um ein Feld gezielt zu leeren, "" bzw.
     {} bzw. False explizit übergeben. Beim Neuanlegen gelten die alten Defaults
     ("" / {} / False).
+
+    Versionierung: Ändert ein Update die description, wird der bisherige Stand als
+    Snapshot in extra.history[] gesichert (neueste vorn, letzte 10). Unsichtbar für
+    get_context/search, lesbar beim Voll-Read der Entity.
     """
     eid = _id(name)
     ts = _now()
 
     prev = _rows(db_exec(
-        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned",
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned, e.updated_at",
         {"id": eid},
     ))
     existed = bool(prev)
@@ -4162,8 +4175,8 @@ def memory_add(
                 f"Bitte einen eindeutigeren Namen wählen — verschiedene Namen, die "
                 f"zur selben ID normalisieren, kollidieren.")
 
-    cur_descr, cur_extra_raw, cur_ctx, cur_pinned = (
-        prev[0][1:] if existed else ("", "{}", "", ""))
+    cur_descr, cur_extra_raw, cur_ctx, cur_pinned, cur_updated = (
+        prev[0][1:] if existed else ("", "{}", "", "", ""))
 
     # Weggelassene Felder (None) beim Update beibehalten, beim Create defaulten.
     eff_descr = description if description is not None else (cur_descr or "")
@@ -4185,6 +4198,22 @@ def memory_add(
     base_extra.pop("context", None)
     if eff_ctx:
         base_extra["context"] = eff_ctx
+
+    # Versionierung: alte descr snapshotten, wenn ein Update den Text real ändert.
+    # history bleibt über einen expliziten extra-Ersatz hinweg erhalten (sonst ginge
+    # sie verloren, weil sie ja selbst in extra lebt).
+    try:
+        prev_hist = json.loads(cur_extra_raw or "{}").get("history", [])
+    except (json.JSONDecodeError, TypeError):
+        prev_hist = []
+    if not isinstance(prev_hist, list):
+        prev_hist = []
+    if existed and description is not None and description != cur_descr and cur_descr:
+        prev_hist = [{"descr": cur_descr, "ts": cur_updated or ts}, *prev_hist][:10]
+    if prev_hist:
+        base_extra["history"] = prev_hist
+    else:
+        base_extra.pop("history", None)
     extra_json = json.dumps(base_extra, ensure_ascii=False)
 
     db_exec(
@@ -4202,7 +4231,18 @@ def memory_add(
     _store_embedding(eid, name, eff_descr)
     verb = "Aktualisiert" if existed else "Angelegt"
     pin_marker = " 📌" if eff_pinned == "true" else ""
-    return f"{verb}: [{type}] {name}{pin_marker}"
+    msg = f"{verb}: [{type}] {name}{pin_marker}"
+
+    if supersedes.strip():
+        old_id = _id(supersedes)
+        if old_id == eid:
+            msg += " (⚠ supersedes == name — übersprungen)"
+        elif _set_archived(old_id, ts) is None:
+            msg += f" (⚠ supersedes '{supersedes}' nicht gefunden — übersprungen)"
+        else:
+            _ensure_rel(old_id, "VERALTET_DURCH", eid, ts)
+            msg += f" → archiviert '{supersedes}' (VERALTET_DURCH)"
+    return msg
 
 
 def memory_preference_update(
@@ -5520,16 +5560,15 @@ async def api_tool(request: Request) -> JSONResponse:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-# Ollama-Basis-URL config-aware: Env > setup-config 'ollama_url' > Default.
-# (a60e9b5 hatte die Definition nur im eingebetteten SYSTEM_CHECK_PY-String —
-# im Server-Scope fehlte sie ⇒ NameError im Nightly-Cleanup, ruff F821.)
+# llama-server-Basis-URL (OpenAI-kompatibel) config-aware: Env > setup-config
+# 'ollama_url' > Default. Var-Name bleibt AI_REM_OLLAMA_URL für Env-Rückwärts-
+# kompatibilität; /v1 wird in den Calls angehängt.
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myubuntu:11434")
 )
-# Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
-# geladene Chat-Modell (siehe _cleanup_model), sonst CLEANUP_OLLAMA_MODEL_FALLBACK.
-CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "").strip()
-CLEANUP_OLLAMA_MODEL_FALLBACK = os.getenv("CLEANUP_OLLAMA_MODEL_FALLBACK", "mistral-small3.2:24b").strip()
+# llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
+CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
+                          os.getenv("CLEANUP_OLLAMA_MODEL", "mistral-small3.2:24b")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "30"))
 CLEANUP_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "cleanup")
@@ -5690,55 +5729,39 @@ def _write_cleanup_log(obj: dict) -> str:
 def _ollama_up() -> bool:
     import urllib.request
     try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/api/tags", timeout=3) as r:
+        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/health", timeout=3) as r:
             return getattr(r, "status", 200) == 200
     except Exception:
         return False
 
 
-def _cleanup_model() -> str:
-    """Modell für den Cleanup wählen, ohne ein festes Modell zu erzwingen: das
-    bereits in Ollama geladene Chat-Modell (GET /api/ps) nutzen, damit wir kein
-    anderes Modell aus dem VRAM verdrängen. Embedding-Modelle (family enthält
-    'bert') überspringen. Reihenfolge: Env-Override > geladenes Chat-Modell >
-    CLEANUP_OLLAMA_MODEL_FALLBACK."""
-    if CLEANUP_OLLAMA_MODEL:
-        return CLEANUP_OLLAMA_MODEL
-    import urllib.request
-    try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/api/ps", timeout=3) as r:
-            data = json.loads(r.read().decode())
-        for m in data.get("models", []):
-            fam = ((m.get("details") or {}).get("family") or "").lower()
-            if "bert" in fam:  # Embedding-Modelle (bge-m3, mxbai, nomic) ignorieren
-                continue
-            name = m.get("model") or m.get("name")
-            if name:
-                return name
-    except Exception:
-        pass
-    return CLEANUP_OLLAMA_MODEL_FALLBACK
-
-
 def _ollama_chat(system: str, user: str, *, as_json: bool, timeout: int = 60) -> Optional[str]:
     import urllib.request
     body = json.dumps({
-        "model": _cleanup_model(),
+        "model": CLEANUP_MODEL,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
         "stream": False,
-        "options": {"temperature": 0.1},
-        **({"format": "json"} if as_json else {}),
+        "temperature": 0.1,
+        **({"response_format": {"type": "json_object"}} if as_json else {}),
     }).encode()
     try:
         req = urllib.request.Request(
-            AI_REM_OLLAMA_URL + "/api/chat", data=body,
+            AI_REM_OLLAMA_URL + "/v1/chat/completions", data=body,
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             env = json.loads(resp.read().decode())
-        return env.get("message", {}).get("content", "").strip() or None
+        content = (env.get("choices", [{}])[0]
+                   .get("message", {}).get("content", "") or "").strip()
+        # llama-server umschließt json_object-Antworten teils mit ```json-Fences.
+        if as_json and content.startswith("```"):
+            content = content.strip("`")
+            if content[:4].lower() == "json":
+                content = content[4:]
+            content = content.strip()
+        return content or None
     except Exception as e:
-        log.warning("Ollama call failed: %s", e)
+        log.warning("llama-server call failed: %s", e)
         return None
 
 

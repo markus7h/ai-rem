@@ -18,7 +18,7 @@ The script automatically handles:
 1. `claude mcp add` — register ai-rem as a user-scoped HTTP MCP server
 2. `~/.claude/settings-template.json` — (re)generate base template for permissions, deny rules and hooks from the live setup config
 3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count, open tasks/plans)
-4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → Ollama-Extraktor → structured entities)
+4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → llama-server extractor → structured entities)
 5. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md
 6. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook; remove old hooks; set `autoMemoryEnabled: false`
 7. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
@@ -66,7 +66,7 @@ The setup script writes only a **minimal pointer** to `~/.claude/CLAUDE.md`:
 ai-rem is the only knowledge source for persistent context. Auto-memory is disabled.
 Usage rules come via MCP Server Instructions, behavioural rules from ai-rem Preferences.
 
-<!-- Auto-memory md-fallback: filled when Ollama is down, emptied by catchup -->
+<!-- Auto-memory md-fallback: filled when llama-server is down, emptied by catchup -->
 @~/.claude/auto-memory/fallback.md
 ```
 

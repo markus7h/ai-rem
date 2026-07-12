@@ -54,14 +54,14 @@ Memory-Senke bleibt.
 
 **C) ai-rem Ingest-Hook (Session-Ende)** — *nicht* Claude Codes natives Auto-Memory (das ist aus)
 1. `auto-memory.py` (PreCompact/SessionEnd) reicht das Transcript an `ai-rem ingest`.
-2. Der Extractor schickt es an **Ollama** (`myubuntu:11434`, geladenes Chat-Modell, Default `mistral-small3.2:24b`, `format=json`).
+2. Der Extractor schickt es an **llama-server** (`myubuntu:11434`, OpenAI-kompatibel `/v1/chat/completions`, festes Modell, Default `mistral-small3.2:24b`, JSON-Antwort).
 3. Strukturierte Entities/Relations → Bulk-Upsert über `/mcp`.
-4. Ollama langsam/kalt/nicht erreichbar → Transcript wandert in die Queue (`pending.jsonl`); `ai-rem catchup` (läuft zu Beginn jedes Hook-Laufs) zieht es nach, sobald Ollama warm/erreichbar ist.
+4. llama-server langsam/kalt/nicht erreichbar → Transcript wandert in die Queue (`pending.jsonl`); `ai-rem catchup` (läuft zu Beginn jedes Hook-Laufs) zieht es nach, sobald llama-server warm/erreichbar ist.
 5. Voraussetzung in der Hook-Umgebung: `AI_REM_CLI` (CLI-Pfad) und `AI_REM_ENDPOINT` (z. B. `https://airem.lan/mcp`) — sonst kein Ingest.
 
 **D) Nightly-Cleanup**
 1. Daemon-Thread im Container sucht Dubletten/veraltete Einträge.
-2. Ollama fällt Merge-/Archiv-Urteile; klare Fälle werden angewandt, unklare landen in der Review-Queue der Web-UI (`/cleanup`).
+2. llama-server fällt Merge-/Archiv-Urteile; klare Fälle werden angewandt, unklare landen in der Review-Queue der Web-UI (`/cleanup`).
 
 ---
 
@@ -157,4 +157,4 @@ Inputs kommen als `INPUT_<NAME>` + `TOOLS_INPUTS_JSON`; Outputs schreibt das Scr
 
 1. **Session-Start:** `system-check.py` → ai-rem `memory_get_context`; Bearer-Token (aus mykeyvault) ist im `~/.claude.json`-Header; `tools-registry` hat seine Scripts vom Registry frisch.
 2. **Arbeit:** Claude nutzt ai-rem-Tools für Kontext/Speichern, mykeyvault-Tools für Secrets (ohne Leak), tools-registry-Scripts für wiederkehrende Aktionen (PDF, settings-sync, Token-Lookup …).
-3. **Session-Ende:** der ai-rem Ingest-Hook `auto-memory.py` → Ollama-Extraktion → ai-rem-Upsert (bei kaltem/langsamem Ollama via `pending.jsonl` + `catchup` nachgezogen). Nachts räumt ai-rem den Graphen auf (Ollama-Urteile + Review-Queue).
+3. **Session-Ende:** der ai-rem Ingest-Hook `auto-memory.py` → llama-server-Extraktion → ai-rem-Upsert (bei kaltem/langsamem llama-server via `pending.jsonl` + `catchup` nachgezogen). Nachts räumt ai-rem den Graphen auf (llama-server-Urteile + Review-Queue).
