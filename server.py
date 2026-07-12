@@ -3567,7 +3567,8 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
   <label class="muted"><input type="checkbox" id="arch" onchange="build()"> archivierte zeigen</label>
   <label class="muted"><input type="checkbox" id="phys" checked onchange="net&&net.setOptions({physics:{enabled:this.checked}})"> Physik</label>
   <label class="muted"><input type="checkbox" id="focus" onchange="setFocus()"> nur Verbundene</label>
-  <span class="muted">Typ-Filter: Legende anklicken</span>
+  <label class="muted">Distanz <input type="number" id="depth" value="1" min="1" style="width:3em" onchange="build()"></label>
+  <span class="muted">Typ-Filter: Legende anklicken · <a href="#" onclick="toggleAll();return false">alle an/aus</a></span>
 </div>
 <div id="netwrap"><div id="net"></div><div id="info"></div></div>
 <div id="leg"></div>
@@ -3579,6 +3580,7 @@ let G=null, net=null, COL={}, EMAP={}, SEL=null, FOCUS=null;
 const HIDE=new Set();  // ausgeblendete Typen (Tag-Filter via Legende)
 function colorFor(t){if(!(t in COL))COL[t]=PAL[Object.keys(COL).length%PAL.length];return COL[t];}
 function toggleType(t){HIDE.has(t)?HIDE.delete(t):HIDE.add(t);build();}
+function toggleAll(){HIDE.size?HIDE.clear():Object.keys(COL).forEach(t=>HIDE.add(t));build();}  // was ausgeblendet ist → alle an, sonst alle aus
 function setFocus(){FOCUS=$('focus').checked?SEL:null;build();}  // Anker = aktuelle Auswahl
 async function init(){
   G=await (await fetch('/export')).json();
@@ -3600,9 +3602,13 @@ function build(){
     if(cf==='__global'?e.context!=='':cf&&e.context!==cf)return false;
     return !HIDE.has(e.type);
   });
-  if($('focus').checked&&FOCUS){  // fixer Anker + direkte Nachbarn
+  if($('focus').checked&&FOCUS){  // fixer Anker + Nachbarn bis Distanz n (BFS)
+    const depth=Math.max(1,+$('depth').value||1);
     const nb=new Set([FOCUS]);
-    G.relations.forEach(r=>{if(r.from_id===FOCUS)nb.add(r.to_id);if(r.to_id===FOCUS)nb.add(r.from_id);});
+    for(let d=0;d<depth;d++){
+      const cur=new Set(nb);  // Snapshot: genau eine Distanz pro Runde
+      G.relations.forEach(r=>{if(cur.has(r.from_id))nb.add(r.to_id);if(cur.has(r.to_id))nb.add(r.from_id);});
+    }
     ents=ents.filter(e=>nb.has(e.id));
   }
   const ok=new Set(ents.map(e=>e.id));
