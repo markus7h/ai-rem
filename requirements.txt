@@ -6,6 +6,6 @@
 fastmcp==3.4.2
 kuzu==0.11.3
 fastembed==0.8.0
-numpy==2.5.0
+numpy==2.5.1
 cryptography==49.0.0
 pyyaml==6.0.3
