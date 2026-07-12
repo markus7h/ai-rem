@@ -4135,6 +4135,7 @@ def memory_add(
     extra: Optional[dict] = None,
     context: Optional[str] = None,
     pinned: Optional[bool] = None,
+    supersedes: str = "",
 ) -> str:
     """Entity im Knowledge Graph anlegen oder aktualisieren.
 
@@ -4142,18 +4143,24 @@ def memory_add(
     extra: beliebige JSON-Properties (z.B. {"status": "offen", "priority": "hoch"})
     context: "work" | "private" | "" (global — erscheint in allen Context-Abfragen)
     pinned: True → Preference erscheint immer ganz oben in get_context, unabhängig von updated_at
+    supersedes: Name eines abgelösten Eintrags → wird archiviert + via VERALTET_DURCH auf
+        diesen neuen Eintrag verlinkt (für neu benannte Nachfolger).
 
     Partial-Update: Beim Aktualisieren eines bestehenden Eintrags werden nur
     übergebene Felder gesetzt. Weggelassene Felder (description/extra/context/pinned
     = None) behalten ihren bisherigen Wert; um ein Feld gezielt zu leeren, "" bzw.
     {} bzw. False explizit übergeben. Beim Neuanlegen gelten die alten Defaults
     ("" / {} / False).
+
+    Versionierung: Ändert ein Update die description, wird der bisherige Stand als
+    Snapshot in extra.history[] gesichert (neueste vorn, letzte 10). Unsichtbar für
+    get_context/search, lesbar beim Voll-Read der Entity.
     """
     eid = _id(name)
     ts = _now()
 
     prev = _rows(db_exec(
-        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned",
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned, e.updated_at",
         {"id": eid},
     ))
     existed = bool(prev)
@@ -4168,8 +4175,8 @@ def memory_add(
                 f"Bitte einen eindeutigeren Namen wählen — verschiedene Namen, die "
                 f"zur selben ID normalisieren, kollidieren.")
 
-    cur_descr, cur_extra_raw, cur_ctx, cur_pinned = (
-        prev[0][1:] if existed else ("", "{}", "", ""))
+    cur_descr, cur_extra_raw, cur_ctx, cur_pinned, cur_updated = (
+        prev[0][1:] if existed else ("", "{}", "", "", ""))
 
     # Weggelassene Felder (None) beim Update beibehalten, beim Create defaulten.
     eff_descr = description if description is not None else (cur_descr or "")
@@ -4191,6 +4198,22 @@ def memory_add(
     base_extra.pop("context", None)
     if eff_ctx:
         base_extra["context"] = eff_ctx
+
+    # Versionierung: alte descr snapshotten, wenn ein Update den Text real ändert.
+    # history bleibt über einen expliziten extra-Ersatz hinweg erhalten (sonst ginge
+    # sie verloren, weil sie ja selbst in extra lebt).
+    try:
+        prev_hist = json.loads(cur_extra_raw or "{}").get("history", [])
+    except (json.JSONDecodeError, TypeError):
+        prev_hist = []
+    if not isinstance(prev_hist, list):
+        prev_hist = []
+    if existed and description is not None and description != cur_descr and cur_descr:
+        prev_hist = [{"descr": cur_descr, "ts": cur_updated or ts}, *prev_hist][:10]
+    if prev_hist:
+        base_extra["history"] = prev_hist
+    else:
+        base_extra.pop("history", None)
     extra_json = json.dumps(base_extra, ensure_ascii=False)
 
     db_exec(
@@ -4208,7 +4231,18 @@ def memory_add(
     _store_embedding(eid, name, eff_descr)
     verb = "Aktualisiert" if existed else "Angelegt"
     pin_marker = " 📌" if eff_pinned == "true" else ""
-    return f"{verb}: [{type}] {name}{pin_marker}"
+    msg = f"{verb}: [{type}] {name}{pin_marker}"
+
+    if supersedes.strip():
+        old_id = _id(supersedes)
+        if old_id == eid:
+            msg += " (⚠ supersedes == name — übersprungen)"
+        elif _set_archived(old_id, ts) is None:
+            msg += f" (⚠ supersedes '{supersedes}' nicht gefunden — übersprungen)"
+        else:
+            _ensure_rel(old_id, "VERALTET_DURCH", eid, ts)
+            msg += f" → archiviert '{supersedes}' (VERALTET_DURCH)"
+    return msg
 
 
 def memory_preference_update(
