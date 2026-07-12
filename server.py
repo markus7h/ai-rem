@@ -599,15 +599,15 @@ def _cli_cmd(cli, *args):
 
 
 def check_ollama_and_catchup():
-    """Ollama-Reachability; wenn erreichbar, Catch-up der md-Fallback-Queue im
+    """llama-server-Reachability; wenn erreichbar, Catch-up der md-Fallback-Queue im
     Hintergrund anstoßen (non-blocking). Nur bei Ausfall sichtbar melden."""
     try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/api/tags", timeout=2) as r:
+        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/health", timeout=2) as r:
             up = getattr(r, "status", 200) == 200
     except Exception:
         up = False
     if not up:
-        results.append("ollama ✗")
+        results.append("llm ✗")
         return
     cli = _ai_rem_cli()
     if cli:
@@ -5560,16 +5560,15 @@ async def api_tool(request: Request) -> JSONResponse:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-# Ollama-Basis-URL config-aware: Env > setup-config 'ollama_url' > Default.
-# (a60e9b5 hatte die Definition nur im eingebetteten SYSTEM_CHECK_PY-String —
-# im Server-Scope fehlte sie ⇒ NameError im Nightly-Cleanup, ruff F821.)
+# llama-server-Basis-URL (OpenAI-kompatibel) config-aware: Env > setup-config
+# 'ollama_url' > Default. Var-Name bleibt AI_REM_OLLAMA_URL für Env-Rückwärts-
+# kompatibilität; /v1 wird in den Calls angehängt.
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myubuntu:11434")
 )
-# Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
-# geladene Chat-Modell (siehe _cleanup_model), sonst CLEANUP_OLLAMA_MODEL_FALLBACK.
-CLEANUP_OLLAMA_MODEL = os.getenv("CLEANUP_OLLAMA_MODEL", "").strip()
-CLEANUP_OLLAMA_MODEL_FALLBACK = os.getenv("CLEANUP_OLLAMA_MODEL_FALLBACK", "mistral-small3.2:24b").strip()
+# llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
+CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
+                          os.getenv("CLEANUP_OLLAMA_MODEL", "mistral-small3.2:24b")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "30"))
 CLEANUP_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "cleanup")
@@ -5730,55 +5729,39 @@ def _write_cleanup_log(obj: dict) -> str:
 def _ollama_up() -> bool:
     import urllib.request
     try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/api/tags", timeout=3) as r:
+        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/health", timeout=3) as r:
             return getattr(r, "status", 200) == 200
     except Exception:
         return False
 
 
-def _cleanup_model() -> str:
-    """Modell für den Cleanup wählen, ohne ein festes Modell zu erzwingen: das
-    bereits in Ollama geladene Chat-Modell (GET /api/ps) nutzen, damit wir kein
-    anderes Modell aus dem VRAM verdrängen. Embedding-Modelle (family enthält
-    'bert') überspringen. Reihenfolge: Env-Override > geladenes Chat-Modell >
-    CLEANUP_OLLAMA_MODEL_FALLBACK."""
-    if CLEANUP_OLLAMA_MODEL:
-        return CLEANUP_OLLAMA_MODEL
-    import urllib.request
-    try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/api/ps", timeout=3) as r:
-            data = json.loads(r.read().decode())
-        for m in data.get("models", []):
-            fam = ((m.get("details") or {}).get("family") or "").lower()
-            if "bert" in fam:  # Embedding-Modelle (bge-m3, mxbai, nomic) ignorieren
-                continue
-            name = m.get("model") or m.get("name")
-            if name:
-                return name
-    except Exception:
-        pass
-    return CLEANUP_OLLAMA_MODEL_FALLBACK
-
-
 def _ollama_chat(system: str, user: str, *, as_json: bool, timeout: int = 60) -> Optional[str]:
     import urllib.request
     body = json.dumps({
-        "model": _cleanup_model(),
+        "model": CLEANUP_MODEL,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
         "stream": False,
-        "options": {"temperature": 0.1},
-        **({"format": "json"} if as_json else {}),
+        "temperature": 0.1,
+        **({"response_format": {"type": "json_object"}} if as_json else {}),
     }).encode()
     try:
         req = urllib.request.Request(
-            AI_REM_OLLAMA_URL + "/api/chat", data=body,
+            AI_REM_OLLAMA_URL + "/v1/chat/completions", data=body,
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             env = json.loads(resp.read().decode())
-        return env.get("message", {}).get("content", "").strip() or None
+        content = (env.get("choices", [{}])[0]
+                   .get("message", {}).get("content", "") or "").strip()
+        # llama-server umschließt json_object-Antworten teils mit ```json-Fences.
+        if as_json and content.startswith("```"):
+            content = content.strip("`")
+            if content[:4].lower() == "json":
+                content = content[4:]
+            content = content.strip()
+        return content or None
     except Exception as e:
-        log.warning("Ollama call failed: %s", e)
+        log.warning("llama-server call failed: %s", e)
         return None
 
 

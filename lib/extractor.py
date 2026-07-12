@@ -35,12 +35,13 @@ LAST_RUN = LOG_DIR / "last-run.json"         # Sichtbarkeit: was zuletzt gespeic
 MAX_CHARS_PER_MSG = 4000
 MAX_TOTAL_CHARS = 80_000
 MIN_TRANSCRIPT_CHARS = 500
-OLLAMA_URL = os.environ.get("AI_REM_OLLAMA_URL", "http://myubuntu:11434")
-# Explizites Modell via Env erzwingen; leer ⇒ nutze das bereits in Ollama
-# geladene Chat-Modell (siehe pick_loaded_model), sonst OLLAMA_MODEL_FALLBACK.
-OLLAMA_MODEL_ENV = os.environ.get("AI_REM_OLLAMA_MODEL", "").strip()
-OLLAMA_MODEL_FALLBACK = os.environ.get("AI_REM_OLLAMA_MODEL_FALLBACK", "mistral-small3.2:24b").strip()
-OLLAMA_TIMEOUT_S = 300
+# llama-server (OpenAI-kompatibel). AI_REM_OLLAMA_URL bleibt als Alt-Name gültig,
+# damit bestehende .env weiter funktionieren; /v1 wird in den Calls angehängt.
+LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL",
+                           os.environ.get("AI_REM_OLLAMA_URL", "http://myubuntu:11434"))
+# llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
+LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "mistral-small3.2:24b").strip()
+LLM_TIMEOUT_S = 300
 
 SYSTEM_PROMPT_BASE = """OUTPUT: JSON nur. Kein Text.
 
@@ -167,39 +168,18 @@ def _build_system_prompt(known_names: List[str]) -> str:
     )
 
 
-def _ollama_up() -> bool:
+def _llama_up() -> bool:
     """Quick reachability probe so we can fall back to md before a slow timeout."""
     try:
-        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=3) as r:
+        with urllib.request.urlopen(f"{LLAMA_URL}/health", timeout=3) as r:
             return getattr(r, "status", 200) == 200
     except Exception:
         return False
 
 
-def pick_loaded_model(fallback: str = OLLAMA_MODEL_FALLBACK) -> str:
-    """Modell wählen, das bereits in Ollama geladen ist (GET /api/ps), statt ein
-    festes Modell anzufragen — so verdrängen wir kein anderes Modell aus dem VRAM.
-    Embedding-Modelle (family enthält 'bert') werden übersprungen. Reihenfolge:
-    Env-Override > geladenes Chat-Modell > fallback."""
-    if OLLAMA_MODEL_ENV:
-        return OLLAMA_MODEL_ENV
-    try:
-        with urllib.request.urlopen(f"{OLLAMA_URL}/api/ps", timeout=3) as r:
-            data = json.loads(r.read().decode())
-        for m in data.get("models", []):
-            fam = ((m.get("details") or {}).get("family") or "").lower()
-            if "bert" in fam:  # Embedding-Modelle (bge-m3, mxbai, nomic) ignorieren
-                continue
-            name = m.get("model") or m.get("name")
-            if name:
-                return name
-    except Exception:
-        pass
-    return fallback
-
-
-def call_ollama(transcript: str, model: str, system_prompt: str) -> dict:
-    """POST /api/chat to Ollama with format=json for deterministic JSON output."""
+def call_llm(transcript: str, model: str, system_prompt: str) -> dict:
+    """POST /v1/chat/completions (llama-server, OpenAI-kompatibel) mit
+    response_format=json_object für deterministische JSON-Ausgabe."""
     body = json.dumps(
         {
             "model": model,
@@ -207,31 +187,34 @@ def call_ollama(transcript: str, model: str, system_prompt: str) -> dict:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": transcript},
             ],
-            "format": "json",
+            "response_format": {"type": "json_object"},
             "stream": False,
-            "options": {"temperature": 0.2, "num_ctx": 32768},
+            "temperature": 0.2,
         }
     ).encode()
     req = urllib.request.Request(
-        f"{OLLAMA_URL}/api/chat",
+        f"{LLAMA_URL}/v1/chat/completions",
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as resp:
             envelope = json.loads(resp.read().decode())
     except urllib.error.URLError as e:
-        raise RuntimeError(f"Ollama unreachable ({OLLAMA_URL}): {e}") from e
+        raise RuntimeError(f"llama-server unreachable ({LLAMA_URL}): {e}") from e
 
-    content = envelope.get("message", {}).get("content", "").strip()
+    content = (envelope.get("choices", [{}])[0]
+               .get("message", {}).get("content", "") or "").strip()
     if not content:
-        raise RuntimeError(f"Ollama returned empty content: {envelope}")
+        raise RuntimeError(f"llama-server returned empty content: {envelope}")
+    # llama-server umschließt json_object-Antworten teils mit ```json-Fences —
+    # anders als Ollamas grammatik-erzwungenes format=json. Vor dem Parsen abstreifen.
     try:
-        return json.loads(content)
+        return json.loads(_strip_json_envelope(content))
     except json.JSONDecodeError as e:
         raise RuntimeError(
-            f"Ollama lieferte kein gültiges JSON trotz format=json: {e}\n---\n{content[:500]}"
+            f"llama-server lieferte kein gültiges JSON trotz json_object: {e}\n---\n{content[:500]}"
         ) from e
 
 
@@ -346,12 +329,12 @@ def _clear_fallback() -> None:
 
 
 def catchup(client: MCPClient, log_dir: Optional[Path] = None) -> dict:
-    """Verpasste (md-fallback) Sessions sauber nach ai-rem nachziehen, sobald Ollama
-    wieder erreichbar ist — danach das md leeren. No-op wenn nichts ansteht / Ollama down."""
+    """Verpasste (md-fallback) Sessions sauber nach ai-rem nachziehen, sobald der
+    llama-server wieder erreichbar ist — danach das md leeren. No-op wenn nichts ansteht."""
     if not PENDING_JSONL.exists():
         return {"skipped": "empty"}
-    if not _ollama_up():
-        return {"skipped": "ollama_down"}
+    if not _llama_up():
+        return {"skipped": "llm_down"}
     log_dir = log_dir or LOG_DIR
 
     entries = []
@@ -407,8 +390,7 @@ def ingest_transcript(
     if not transcript_path.exists():
         raise FileNotFoundError(transcript_path)
 
-    # Kein festes Modell erzwingen: das bereits geladene Chat-Modell nutzen.
-    model = model or pick_loaded_model()
+    model = model or LLM_MODEL
 
     log_dir = log_dir or LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -434,11 +416,11 @@ def ingest_transcript(
             file=sys.stderr,
         )
         try:
-            extracted = call_ollama(flat, model=model, system_prompt=prompt)
+            extracted = call_llm(flat, model=model, system_prompt=prompt)
         except RuntimeError as e:
-            # Ollama nicht erreichbar → klassisches md-Auto-Memory + Catch-up-Queue.
+            # llama-server nicht erreichbar → klassisches md-Auto-Memory + Catch-up-Queue.
             # Andere Fehler (z.B. ungültiges JSON) bleiben echte Fehler.
-            if "unreachable" in str(e).lower() or not _ollama_up():
+            if "unreachable" in str(e).lower() or not _llama_up():
                 return _fallback_to_md(transcript_path, flat, log_dir, dry_run)
             raise
 

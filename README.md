@@ -67,7 +67,7 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 
 Three Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
 
-- **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via Ollama, with an md-fallback + catch-up when Ollama is down.
+- **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via llama-server, with an md-fallback + catch-up when llama-server is down.
 - **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue.
 - **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
 

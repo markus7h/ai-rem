@@ -12,7 +12,7 @@ ai-rem ships three Claude Code hooks that keep the graph fed and tidy without ma
 
 The built-in Claude Code auto-memory (markdown file) is replaced by a transcript extractor that writes **structured entities and relations** into ai-rem.
 
-**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → Ollama (qwen3:14b on `AI_REM_OLLAMA_URL`, default `http://myubuntu:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
+**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → llama-server (`mistral-small3.2:24b` on `AI_REM_OLLAMA_URL`, OpenAI-compatible `/v1/chat/completions`, default `http://myubuntu:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, pure stdlib — no venv needed, runs on any `python3 ≥3.8` on Windows/Linux/macOS):
 
@@ -21,29 +21,29 @@ ai-rem status
 ai-rem search "auto-memory"
 ai-rem show "<name>"   # full, untruncated description + extra + relations (via /export)
 ai-rem list --type Decision
-ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen3:14b]
+ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2:24b]
 ```
 
 **Anti-recursion:** transcripts under 500 chars are skipped, `/tmp/ai-rem-ingest.lock` prevents nested runs.
 
-**Failure-mode (md-fallback + catch-up):** if Ollama is unreachable, the session is not lost — a heuristic extraction is appended to `~/.claude/auto-memory/fallback.md` (imported into `CLAUDE.md` via `@`-import, so it stays in context) and the transcript is queued in `pending.jsonl`. As soon as Ollama is reachable again, `ai-rem catchup` (run by the SessionStart and PreCompact/SessionEnd hooks) re-ingests the queued sessions properly into ai-rem and **empties the md**. The hook never breaks `/compact` or session end; hard errors go to `~/.claude/auto-memory/errors.log`.
+**Failure-mode (md-fallback + catch-up):** if llama-server is unreachable, the session is not lost — a heuristic extraction is appended to `~/.claude/auto-memory/fallback.md` (imported into `CLAUDE.md` via `@`-import, so it stays in context) and the transcript is queued in `pending.jsonl`. As soon as llama-server is reachable again, `ai-rem catchup` (run by the SessionStart and PreCompact/SessionEnd hooks) re-ingests the queued sessions properly into ai-rem and **empties the md**. The hook never breaks `/compact` or session end; hard errors go to `~/.claude/auto-memory/errors.log`.
 
-**Visibility:** each successful run writes `~/.claude/auto-memory/last-run.json`; the SessionStart check surfaces a line like `🧠 N Entities, M Rel` (with `(md-Fallback)` when Ollama was down).
+**Visibility:** each successful run writes `~/.claude/auto-memory/last-run.json`; the SessionStart check surfaces a line like `🧠 N Entities, M Rel` (with `(md-Fallback)` when llama-server was down).
 
 **Configuration env:**
 - `AI_REM_ENDPOINT` — MCP URL (default `http://localhost:3456/mcp`)
-- `AI_REM_OLLAMA_URL` — Ollama base URL (env wins; otherwise `ollama_url` from setup-config / settings-template; default `http://myubuntu:11434`)
+- `AI_REM_OLLAMA_URL` — llama-server base URL (OpenAI-compatible, `/v1` appended internally; env wins; otherwise `ollama_url` from setup-config / settings-template; default `http://myubuntu:11434`); model is fixed via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`) since llama-server hosts exactly one model
 - `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`)
 
 ---
 
 ## Nightly cleanup (non-destructive: archive, don't delete)
 
-A daemon thread in the container runs a daily maintenance pass (default 03:00, configurable in the `/cleanup` web UI). It detects duplicate and outdated entries (heuristics + Ollama when reachable) and **archives** them instead of deleting: the entry is tagged `archived`, optionally compressed (with the original preserved in `extra.original_descr`), and linked via `DUPLIKAT_VON` / `VERALTET_DURCH`. Archived entries are hidden from `memory_get_context`/`search`/`list` by default (opt in with `include_archived=true`) but remain reachable for history via `memory_get_relations`. **Preferences, pinned and already-archived entries are never touched.** Every run backs up first; the log is viewable in the `/cleanup` web UI.
+A daemon thread in the container runs a daily maintenance pass (default 03:00, configurable in the `/cleanup` web UI). It detects duplicate and outdated entries (heuristics + llama-server when reachable) and **archives** them instead of deleting: the entry is tagged `archived`, optionally compressed (with the original preserved in `extra.original_descr`), and linked via `DUPLIKAT_VON` / `VERALTET_DURCH`. Archived entries are hidden from `memory_get_context`/`search`/`list` by default (opt in with `include_archived=true`) but remain reachable for history via `memory_get_relations`. **Preferences, pinned and already-archived entries are never touched.** Every run backs up first; the log is viewable in the `/cleanup` web UI.
 
-Ambiguous cases (and everything when Ollama was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution). You can resolve it two ways: **(a)** in the `/cleanup` web UI, where each pending item shows both descriptions with **Mergen/Archivieren** (apply) and **Verwerfen** (keep both) buttons (`POST /api/cleanup/resolve`); or **(b)** the `/memory-cleanup` slash command, which has Claude resolve the entries with judgment. Both use the same non-destructive `memory_merge` / `memory_archive` operations — nothing is deleted.
+Ambiguous cases (and everything when llama-server was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution). You can resolve it two ways: **(a)** in the `/cleanup` web UI, where each pending item shows both descriptions with **Mergen/Archivieren** (apply) and **Verwerfen** (keep both) buttons (`POST /api/cleanup/resolve`); or **(b)** the `/memory-cleanup` slash command, which has Claude resolve the entries with judgment. Both use the same non-destructive `memory_merge` / `memory_archive` operations — nothing is deleted.
 
-> **Ollama reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable Ollama. In the bundled `docker-compose.yml` it defaults to `http://myubuntu:11434` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
+> **llama-server reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable llama-server; the judged model is fixed via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In the bundled `docker-compose.yml` it defaults to `http://myubuntu:11434` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
 
 ---
 
