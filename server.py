@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.8.4"
+VERSION = "0.8.5"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -2720,6 +2720,7 @@ tr.ctxcut td{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spa
 </style>
 </head>
 <body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
 <h1>Preferences</h1>
 <p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <a href="/install">Install</a> &nbsp;·&nbsp; <span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext &nbsp;·&nbsp; Top <b>__CTX_LIMIT__</b> werden in den Kontext geladen</p>
 <table>
@@ -2873,7 +2874,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </style>
 </head>
 <body>
-<h1>ai-rem</h1>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
 <p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/browse">Browse →</a> &nbsp;·&nbsp; <a href="/graph">Graph →</a> &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
 <div class="grid">
 
@@ -3070,6 +3071,32 @@ def _load_setup_cfg() -> dict:
     return {}
 
 
+_ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
+def _asset_bytes(name: str) -> bytes:
+    try:
+        with open(os.path.join(_ASSET_DIR, name), "rb") as f:
+            return f.read()
+    except OSError:
+        return b""
+
+
+_FAVICON_PNG = _asset_bytes("favicon.png")
+_LOGO_PNG = _asset_bytes("logo.png")
+
+
+@mcp.custom_route("/favicon.ico", methods=["GET"])
+async def favicon_route(request: Request) -> Response:
+    # Public — vom Browser automatisch für jede UI-Seite geladen.
+    return Response(content=_FAVICON_PNG, media_type="image/png")
+
+
+@mcp.custom_route("/assets/logo.png", methods=["GET"])
+async def logo_route(request: Request) -> Response:
+    return Response(content=_LOGO_PNG, media_type="image/png")
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health_route(request: Request) -> PlainTextResponse:
     # Public (kein Token) — vom Docker-Healthcheck und Reachability-Probes genutzt.
@@ -3231,6 +3258,7 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
 </style>
 </head>
 <body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
 <h1>Cleanup</h1>
 <p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/install">Install</a> &nbsp;·&nbsp; nicht-destruktiv: archivieren statt löschen</p>
 
@@ -3462,6 +3490,7 @@ input[type=text]{flex:1;min-width:180px}
 </style>
 </head>
 <body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
 <h1>Browse</h1>
 <p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/graph">Graph</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <a href="/export/okf">OKF-Bundle ↓</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
 <div class="bar">
@@ -3554,6 +3583,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
 </style>
 </head>
 <body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
 <h1>Graph</h1>
 <p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
 <div class="bar">
@@ -3692,6 +3722,7 @@ li{margin-bottom:4px}
 </style>
 </head>
 <body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
 <h1>ai-rem installieren</h1>
 <p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; Client-Setup für eine neue Maschine — ein Befehl, idempotent (mehrfach ausführen ist sicher)</p>
 <div class="grid">
@@ -3769,8 +3800,8 @@ button:hover{background:#2e7d32}
 .err{color:#dd3333;font-size:13px;margin-bottom:14px;min-height:18px}
 </style></head>
 <body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
 <form class="box" method="POST" action="/login">
-<h1>ai-rem</h1>
 <p class="sub">Knowledge Graph Memory</p>
 <div class="err">__ERROR__</div>
 <label for="token">API-Token</label>
