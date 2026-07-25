@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.8.2](https://github.com/markus7h/ai-rem/releases/tag/v0.8.2)**.
+> Diese Dokumentation bezieht sich auf **[v0.8.7](https://github.com/markus7h/ai-rem/releases/tag/v0.8.7)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes stehen in den [GitHub Releases](https://github.com/markus7h/ai-rem/releases); frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
@@ -66,7 +66,7 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 
 Drei Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph befüllt und sauber:
 
-- **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via llama-server, mit md-Fallback + Catch-up, wenn llama-server down ist.
+- **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via llama-server, mit md-Fallback + Catch-up, wenn llama-server down ist. Er läuft detached (die Extraktion dauert Minuten) und meldet beim nächsten Sessionstart, wenn er gestört ist. Liegt das Repo ausserhalb von `~/myCode/github/ai-rem`, muss `AI_REM_CLI` in den `env`-Block von `~/.claude/settings.json` — sonst findet der Hook die CLI nicht und speichert nichts.
 - **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue.
 - **Plan-Speicherung** — ein `ExitPlanMode`-Hook speichert jeden finalisierten Plan als offenen `Task`, sodass Pläne eine zentrale, maschinenübergreifende Liste werden.
 
