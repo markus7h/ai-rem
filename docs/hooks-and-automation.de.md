@@ -26,14 +26,20 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Anti-Rekursion:** Transcripts unter 500 Zeichen werden übersprungen, `/tmp/ai-rem-ingest.lock` verhindert verschachtelte Läufe.
 
+**Detached-Ausführung:** Der Hook startet sich selbst per `start_new_session=True` neu und kehrt in Millisekunden zurück — die Extraktion auf einem lokalen 24b-Modell dauert Minuten, länger als jedes vernünftige Hook-Timeout. Ohne das würde entweder das Session-Ende blockieren oder der Ingest mittendrin abgeschossen. Jeder Lauf wird in `.processed` unter `<session_id>:<transcript_size>` vermerkt, damit `PreCompact` und das spätere `SessionEnd` derselben Session beide verarbeitet werden (mit der session_id allein als Schlüssel ging alles nach der ersten Compaction still verloren).
+
+**Context-Budget:** `MAX_TOTAL_CHARS` (45k) muss in den Context des llama-servers passen (`n_ctx=32768` beim 24b-Mistral, 45k Zeichen ≈ 16k Token) — zusammen mit System-Prompt und Antwort. Zu grosse Transcripts verlieren ihre **Mitte**, nie das Ende: Entscheidungen und Erkenntnisse stehen am Session-Ende; die erste USER-Message (die Aufgabenstellung) bleibt immer erhalten. Vor dem Hochsetzen `/props` am llama-server prüfen.
+
 **Failure-Mode (md-Fallback + Catch-up):** Ist llama-server nicht erreichbar, geht die Session nicht verloren — eine heuristische Extraktion wird an `~/.claude/auto-memory/fallback.md` angehängt (via `@`-Import in `CLAUDE.md`, bleibt also im Kontext) und das Transcript in `pending.jsonl` vorgemerkt. Sobald llama-server wieder erreichbar ist, zieht `ai-rem catchup` (von den SessionStart- und PreCompact/SessionEnd-Hooks ausgeführt) die vorgemerkten Sessions sauber nach ai-rem nach und **leert das md**. Der Hook bricht nie `/compact` oder das Session-Ende; harte Fehler gehen nach `~/.claude/auto-memory/errors.log`.
 
 **Sichtbarkeit:** Jeder erfolgreiche Lauf schreibt `~/.claude/auto-memory/last-run.json`; der SessionStart-Check zeigt eine Zeile wie `🧠 N Entities, M Rel` (mit `(md-Fallback)`, wenn llama-server down war).
 
+**Ausfallerkennung:** Weil der Hook bewusst still scheitert (rc=0, damit er weder `/compact` noch das Session-Ende bricht), blieb ein kaputtes Auto-Memory bisher unsichtbar — es lief hier einmal 7 Wochen lang tot. Der SessionStart-Check vergleicht jetzt die mtime von `last-run.json` gegen `errors.log` und meldet auf zwei Kanälen: `🧠 ✗ gestört` in der Statuszeile plus die volle Diagnose (letzter Fehler, wahrscheinliche Ursache, Log-Pfad) als `additionalContext`, damit auch der Assistent es sieht und ansprechen kann. Drei Auslöser: Fehler neuer als der letzte Erfolg, gar kein `last-run.json`, oder seit über 7 Tagen nichts gespeichert.
+
 **Konfigurations-Env:**
 - `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)
 - `AI_REM_OLLAMA_URL` — llama-server-Basis-URL (OpenAI-kompatibel, `/v1` wird intern angehängt; Env hat Vorrang; sonst `ollama_url` aus setup-config / settings-template; default `http://myubuntu:11434`); Modell ist fix via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`), da llama-server genau ein Modell hostet
-- `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`)
+- `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`). **Setzen, sobald das Repo ausserhalb von `~/myCode/github/ai-rem` liegt** — ohne das bricht der Hook bei jedem Session-Ende still mit `ai-rem CLI not found` ab und es wird nie etwas gespeichert. Gehört in den `env`-Block von `~/.claude/settings.json`, damit Hooks ihn erben.
 
 ---
 
