@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.8.2](https://github.com/markus7h/ai-rem/releases/tag/v0.8.2)**.
+> This documentation describes **[v0.8.7](https://github.com/markus7h/ai-rem/releases/tag/v0.8.7)**.
 > Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
@@ -67,7 +67,7 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 
 Three Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
 
-- **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via llama-server, with an md-fallback + catch-up when llama-server is down.
+- **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via llama-server, with an md-fallback + catch-up when llama-server is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. Set `AI_REM_CLI` in the `env` block of `~/.claude/settings.json` if the repo lives outside `~/myCode/github/ai-rem` — otherwise the hook cannot find the CLI and records nothing.
 - **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue.
 - **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
 

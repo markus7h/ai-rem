@@ -33,7 +33,12 @@ FALLBACK_MD = LOG_DIR / "fallback.md"        # klassisches md-Auto-Memory wenn O
 PENDING_JSONL = LOG_DIR / "pending.jsonl"    # verpasste Sessions → vom catchup nachgezogen
 LAST_RUN = LOG_DIR / "last-run.json"         # Sichtbarkeit: was zuletzt gespeichert wurde
 MAX_CHARS_PER_MSG = 4000
-MAX_TOTAL_CHARS = 80_000
+# Muss in den Context des llama-servers passen (n_ctx=32768 beim 24b-Mistral).
+# 80k Zeichen sind ~29k Token — zusammen mit System-Prompt und Antwort sprengte
+# das den Context: jeder Ingest lief in den 300s-Timeout. 45k ~ 16k Token passt
+# mit Reserve. ponytail: fester Wert statt /props-Abfrage, anpassen wenn das
+# Modell wechselt.
+MAX_TOTAL_CHARS = 45_000
 MIN_TRANSCRIPT_CHARS = 500
 # llama-server (OpenAI-kompatibel). AI_REM_OLLAMA_URL bleibt als Alt-Name gültig,
 # damit bestehende .env weiter funktionieren; /v1 wird in den Calls angehängt.
@@ -41,7 +46,9 @@ LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL",
                            os.environ.get("AI_REM_OLLAMA_URL", "http://myubuntu:11434"))
 # llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
 LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "mistral-small3.2:24b").strip()
-LLM_TIMEOUT_S = 300
+# Ein 45k-Transcript braucht auf dem 24b-Q4 real ~5 min. Der Hook laeuft detached,
+# die Wartezeit stoert also niemanden — lieber grosszuegig als abgeschnitten.
+LLM_TIMEOUT_S = 900
 
 SYSTEM_PROMPT_BASE = """OUTPUT: JSON nur. Kein Text.
 
@@ -87,9 +94,14 @@ def _content_to_text(content: Any) -> str:
 
 
 def flatten_transcript(path: Path) -> str:
-    """Reduce a JSONL session to a USER/ASSISTANT text dialogue."""
-    lines = []
-    total = 0
+    """Reduce a JSONL session to a USER/ASSISTANT text dialogue.
+
+    Passt das Ergebnis nicht in MAX_TOTAL_CHARS, wird die MITTE verworfen, nicht
+    das Ende: Entscheidungen, Loesungen und Erkenntnisse stehen am Session-Ende.
+    Die erste USER-Message bleibt immer erhalten — sie ist die Aufgabenstellung
+    und erklaert den Rest.
+    """
+    chunks = []
     with path.open(encoding="utf-8") as f:
         for raw in f:
             try:
@@ -116,13 +128,21 @@ def flatten_transcript(path: Path) -> str:
                 continue
             if len(text) > MAX_CHARS_PER_MSG:
                 text = text[:MAX_CHARS_PER_MSG] + "…[truncated]"
-            chunk = f"{role}: {text}"
-            total += len(chunk)
-            if total > MAX_TOTAL_CHARS:
-                lines.append("…[transcript truncated]")
-                break
-            lines.append(chunk)
-    return "\n\n".join(lines)
+            chunks.append(f"{role}: {text}")
+
+    if sum(len(c) for c in chunks) <= MAX_TOTAL_CHARS:
+        return "\n\n".join(chunks)
+
+    head = chunks[:1]  # Aufgabenstellung
+    budget = MAX_TOTAL_CHARS - len(head[0]) if head else MAX_TOTAL_CHARS
+    tail = []
+    for chunk in reversed(chunks[1:]):
+        budget -= len(chunk)
+        if budget < 0:
+            break
+        tail.append(chunk)
+    tail.reverse()
+    return "\n\n".join(head + ["…[Mitte gekürzt]"] + tail)
 
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)

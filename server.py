@@ -41,7 +41,7 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.8.6"
+VERSION = "0.8.7"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -619,8 +619,50 @@ def check_ollama_and_catchup():
             pass
 
 
+def _auto_memory_fault(base):
+    """Erkennt, ob das Auto-Memory gestoert ist. Leerer String = alles gut.
+
+    Der Hook scheitert still: er schreibt nach errors.log und gibt rc=0 zurueck,
+    damit er weder /compact noch das Session-Ende bricht. Genau deshalb lief er
+    hier 7 Wochen lang tot (513 Fehlschlaege, 0 Erfolge), ohne dass es jemandem
+    auffiel. Vergleichsmass ist darum: gab es seit dem letzten Erfolg Fehler?
+    """
+    try:
+        last_ok = os.path.getmtime(os.path.join(base, "last-run.json"))
+    except OSError:
+        last_ok = 0
+
+    err_path = os.path.join(base, "errors.log")
+    try:
+        last_err = os.path.getmtime(err_path)
+        with open(err_path, encoding="utf-8", errors="replace") as f:
+            tail = f.readlines()[-1].strip()
+    except (OSError, IndexError):
+        last_err, tail = 0, ""
+
+    if last_err > last_ok:
+        hint = ""
+        if "CLI not found" in tail:
+            hint = " → $AI_REM_CLI im env-Block von ~/.claude/settings.json setzen."
+        return (f"⚠️ Auto-Memory gestört: seit dem letzten Erfolg nur Fehler. "
+                f"Letzter Eintrag: {tail[:200]}{hint} "
+                f"Voll: ~/.claude/auto-memory/errors.log")
+    if not last_ok:
+        return ("⚠️ Auto-Memory hat noch nie erfolgreich gespeichert "
+                "(kein last-run.json) — nichts aus bisherigen Sessions ist im Graph gelandet.")
+    age_days = (time.time() - last_ok) / 86400
+    if age_days > 7:
+        return (f"⚠️ Auto-Memory hat seit {int(age_days)} Tagen nichts gespeichert — "
+                f"Hook noch registriert? (PreCompact/SessionEnd in ~/.claude/settings.json)")
+    return ""
+
+
 def check_auto_memory():
-    """Sichtbarkeit: was der Extraktor zuletzt gespeichert hat + offene md-Fallback-Queue."""
+    """Sichtbarkeit: was der Extraktor zuletzt gespeichert hat + offene md-Fallback-Queue.
+
+    Rueckgabe: Warntext bei Stoerung (geht als additionalContext in den Kontext,
+    damit nicht nur die Statuszeile es zeigt), sonst "".
+    """
     base = os.path.join(CLAUDE_DIR, "auto-memory")
     parts = []
     try:
@@ -646,8 +688,12 @@ def check_auto_memory():
             parts.append(f"{c} md-pending")
     except Exception:
         pass
+    fault = _auto_memory_fault(base)
+    if fault:
+        parts.append("🧠 ✗ gestört")
     if parts:
         results.append(" ".join(parts))
+    return fault
 
 
 def check_cleanup_pending():
@@ -681,8 +727,8 @@ check_mcp_servers()
 check_and_sync_settings()
 check_tools()
 check_ollama_and_catchup()
-check_auto_memory()
-_extra_ctx = check_cleanup_pending()
+_am_fault = check_auto_memory()
+_extra_ctx = "\n".join(x for x in (_am_fault, check_cleanup_pending()) if x)
 
 _out = {"suppressOutput": True}
 _msg = " | ".join(results) if results else ""
@@ -717,7 +763,10 @@ CLAUDE_DIR = _CC or os.path.expanduser("~/.claude")
 AUTO_MEM_DIR = Path(CLAUDE_DIR) / "auto-memory"
 PROCESSED = AUTO_MEM_DIR / ".processed"
 ERRORS = AUTO_MEM_DIR / "errors.log"
-TIMEOUT_S = 120
+# Das 24b-Modell braucht für ein volles Transcript real ~5 min. Der Hook laeuft
+# darum detached (siehe _detach) — dieses Budget ist nur die Reissleine.
+TIMEOUT_S = 1200
+CATCHUP_TIMEOUT_S = 60  # darf das Ingest-Budget nicht auffressen
 
 CANDIDATE_CLI_PATHS = [
     os.environ.get("AI_REM_CLI", ""),
@@ -795,24 +844,62 @@ def _log_error(msg):
         pass
 
 
-def _already_processed(sid):
-    if not sid or not PROCESSED.exists():
+def _run_key(sid, transcript):
+    """Key pro Ingest-Lauf, nicht pro Session.
+
+    Nur die sid zu merken hiess: nach PreCompact galt die Session als erledigt und
+    das anschliessende SessionEnd lief nie — bei langen Sessions wurde alles nach
+    der ersten Compaction verworfen. Die Transcript-Groesse unterscheidet die
+    Laeufe; echtes Doppelfeuern desselben Zustands bleibt geblockt.
+    """
+    try:
+        size = Path(transcript).stat().st_size
+    except OSError:
+        size = 0
+    return f"{sid}:{size}"
+
+
+def _already_processed(key):
+    if not key or not PROCESSED.exists():
         return False
     try:
-        return sid in PROCESSED.read_text(encoding="utf-8").splitlines()
+        return key in PROCESSED.read_text(encoding="utf-8").splitlines()
     except Exception:
         return False
 
 
-def _mark_processed(sid):
-    if not sid:
+def _mark_processed(key):
+    if not key:
         return
     try:
         AUTO_MEM_DIR.mkdir(parents=True, exist_ok=True)
         with PROCESSED.open("a", encoding="utf-8") as f:
-            f.write(sid + "\n")
+            f.write(key + "\n")
     except Exception:
         pass
+
+
+def _detach(raw):
+    """Sich selbst als eigenstaendigen Prozess neu starten und sofort zurueckkehren.
+
+    Die Extraktion dauert auf dem lokalen 24b-Modell mehrere Minuten — laenger als
+    jedes vernuenftige Hook-Timeout. Ohne Detach blockiert das Session-Ende oder der
+    Ingest wird mittendrin abgeschossen. start_new_session=True (setsid) haelt den
+    Kindprozess am Leben, wenn Claude Code seine Prozessgruppe abraeumt.
+    """
+    try:
+        p = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__)],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env={**os.environ, "AUTO_MEMORY_DETACHED": "1"},
+            start_new_session=True,
+        )
+        p.stdin.write(raw.encode("utf-8"))
+        p.stdin.close()
+        return True
+    except Exception as e:
+        _log_error(f"detach failed, laufe inline weiter: {e}")
+        return False
 
 
 def main():
@@ -827,6 +914,11 @@ def main():
         _log_error(f"stdin parse: {e}")
         return
 
+    # Windows kennt kein start_new_session → dort inline, das Timeout greift dann.
+    if not os.environ.get("AUTO_MEMORY_DETACHED") and sys.platform != "win32":
+        if _detach(raw):
+            return
+
     transcript = ctx.get("transcript_path") or ""
     session_id = ctx.get("session_id") or ""
     hook_event = ctx.get("hook_event_name") or ctx.get("event") or "?"
@@ -834,7 +926,8 @@ def main():
     if not transcript or not Path(transcript).exists():
         _log_error(f"{hook_event}: missing/invalid transcript_path={transcript!r}")
         return
-    if _already_processed(session_id):
+    run_key = _run_key(session_id, transcript)
+    if _already_processed(run_key):
         return
 
     cli = _find_cli()
@@ -844,7 +937,8 @@ def main():
 
     # Erst die md-Fallback-Queue nachziehen (no-op wenn Ollama down / Queue leer).
     try:
-        subprocess.run(_cli_cmd(cli, "catchup"), capture_output=True, text=True, timeout=TIMEOUT_S)
+        subprocess.run(_cli_cmd(cli, "catchup"), capture_output=True, text=True,
+                       timeout=CATCHUP_TIMEOUT_S)
     except Exception:
         pass
 
@@ -866,7 +960,7 @@ def main():
         _log_error(f"{hook_event} session={session_id} exception: {e}")
         return
 
-    _mark_processed(session_id)
+    _mark_processed(run_key)
     _notify_last_run(session_id)
 
 
@@ -4984,7 +5078,6 @@ async def discover_route(request: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
-@mcp.tool()
 def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
     """Offene Tasks + (falls verlinkt) zugehöriges Project.
 
@@ -5017,6 +5110,7 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
     return out
 
 
+@mcp.tool()
 def memory_get_context(topic: str = "", context: str = "", include_archived: bool = False) -> str:
     """Relevanten Kontext aus dem Knowledge Graph laden.
 

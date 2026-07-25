@@ -361,7 +361,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ingest", help="extract+upsert from transcript")
     s.add_argument("--transcript", required=True)
     s.add_argument("--dry-run", action="store_true")
-    s.add_argument("--model", default="qwen3:14b")
+    # Ohne --model gewinnt AI_REM_LLM_MODEL aus lib/extractor. Ein Default hier
+    # loggte sonst ein Modell, das der llama-server gar nicht hostet.
+    s.add_argument("--model", default=None)
     s.set_defaults(func=cmd_ingest)
 
     s = sub.add_parser("catchup", help="re-ingest md-fallback queue once Ollama is back")

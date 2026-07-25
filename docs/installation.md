@@ -18,7 +18,7 @@ The script automatically handles:
 1. `claude mcp add` — register ai-rem as a user-scoped HTTP MCP server
 2. `~/.claude/settings-template.json` — (re)generate base template for permissions, deny rules and hooks from the live setup config
 3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count, open tasks/plans)
-4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → llama-server extractor → structured entities)
+4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → llama-server extractor → structured entities). If the repo does **not** live under `~/myCode/github/ai-rem`, set `AI_REM_CLI` in the `env` block of `~/.claude/settings.json` — otherwise the hook cannot find the CLI and aborts silently on every session end (visible only in `~/.claude/auto-memory/errors.log`).
 5. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md
 6. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook; remove old hooks; set `autoMemoryEnabled: false`
 7. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
