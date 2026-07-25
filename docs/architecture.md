@@ -64,6 +64,24 @@ flowchart TB
   AIREM -. "Token-Quelle: Item ai-rem-api-token" .-> VAPI
 ```
 
+## Repo-Struktur (ai-rem)
+
+Was der Server ausliefert, liegt als echte Datei daneben — `server.py` liest es beim Import.
+Fehlt eines der Verzeichnisse im Image (`COPY` im Dockerfile), startet der Container gar nicht
+erst, statt später einzelne Routen zu verlieren.
+
+| Pfad | Inhalt | Ausgeliefert als |
+|---|---|---|
+| `server.py` | MCP-Tools, HTTP-Routen, DB, Embeddings, Cleanup | — |
+| `hooks/*.py` | die vier Claude-Code-Hooks | `/hooks/<name>.py` |
+| `scripts/setup.py` | plattformneutrales Client-Setup | `/setup.py` |
+| `templates/*.html` | Web-UI (ui, prefs, graph, browse, cleanup, install, login) | `/ui`, `/install`, … |
+| `lib/` | CLI-Hilfen: MCP-Client, Transcript-Extraktor, Backup-Krypto | — |
+| `bin/ai-rem` | CLI (reine stdlib) | — |
+
+Diese Inhalte waren bis v0.8.7 String-Literale in `server.py` — knapp 2700 Zeilen, die weder
+ruff noch ein Test je gesehen hat. Als Dateien werden sie normal geprüft.
+
 ## Komponenten
 
 | Komponente | Host | Port | Protokoll / Zugang | Zweck |

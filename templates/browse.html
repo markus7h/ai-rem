@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Browse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--warn:#808080}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px;position:sticky;top:0;background:var(--bg);padding:6px 0}
+input[type=text],select{background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px}
+input[type=text]{flex:1;min-width:180px}
+.muted{color:var(--muted);font-size:12px}
+.e{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:9px;padding:12px 14px;margin-bottom:8px;cursor:pointer}
+.e.arch{border-left-color:var(--warn);opacity:.75}
+.eh{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.nm{font-weight:600}
+.tag{font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:1px 7px;border-radius:4px;border:1px solid var(--accent);color:var(--accent)}
+.tag.ctx{border-color:var(--border);color:var(--muted)}
+.dsc{color:var(--muted);font-size:13px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.det{margin-top:10px;font-size:13px;display:none}
+.e.open .det{display:block}.e.open .dsc{white-space:normal}
+.det h4{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:10px 0 4px}
+.det pre{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;overflow:auto;white-space:pre-wrap}
+.rel{font-size:13px;padding:2px 0}.rel .r{color:var(--muted);font-family:monospace;font-size:12px}
+</style>
+</head>
+<body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<h1>Browse</h1>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/graph">Graph</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <a href="/export/okf">OKF-Bundle ↓</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
+<div class="bar">
+  <input type="text" id="q" placeholder="Suche in Name &amp; Beschreibung…" oninput="render()">
+  <select id="t" onchange="render()"><option value="">alle Typen</option></select>
+  <label class="muted"><input type="checkbox" id="arch" onchange="render()"> archivierte zeigen</label>
+</div>
+<div id="list"></div>
+<script>
+const $=id=>document.getElementById(id);
+let ENT=[], NAME={}, OUT={}, INC={};
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+async function init(){
+  const g=await (await fetch('/export')).json();
+  ENT=g.entities; ENT.forEach(e=>NAME[e.id]=e.name);
+  g.relations.forEach(r=>{
+    (OUT[r.from_id]=OUT[r.from_id]||[]).push([r.relation, NAME[r.to_id]||r.to_id]);
+    (INC[r.to_id]=INC[r.to_id]||[]).push([r.relation, NAME[r.from_id]||r.from_id]);
+  });
+  const types=[...new Set(ENT.map(e=>e.type))].sort();
+  $('t').innerHTML='<option value="">alle Typen</option>'+types.map(t=>`<option>${esc(t)}</option>`).join('');
+  render();
+}
+function render(){
+  const q=$('q').value.toLowerCase(), tf=$('t').value, showArch=$('arch').checked;
+  const list=ENT.filter(e=>{
+    if(!showArch && e.archived==='true')return false;
+    if(tf && e.type!==tf)return false;
+    if(q && !((e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q)))return false;
+    return true;
+  }).sort((a,b)=>(b.updated_at||'').localeCompare(a.updated_at||''));
+  $('cnt').textContent=`${list.length} / ${ENT.length} Einträge`;
+  $('list').innerHTML=list.map(e=>{
+    const arch=e.archived==='true';
+    const rels=(OUT[e.id]||[]).map(([r,n])=>`<div class="rel"><span class="r">→ ${esc(r)}</span> ${esc(n)}</div>`).join('')
+             +(INC[e.id]||[]).map(([r,n])=>`<div class="rel"><span class="r">← ${esc(r)}</span> ${esc(n)}</div>`).join('');
+    const ex=Object.keys(e.extra||{}).length?`<h4>Extra</h4><pre>${esc(JSON.stringify(e.extra,null,2))}</pre>`:'';
+    return `<div class="e ${arch?'arch':''}" onclick="this.classList.toggle('open')">
+      <div class="eh"><span class="tag">${esc(e.type)}</span>${e.context?`<span class="tag ctx">${esc(e.context)}</span>`:''}
+        <span class="nm">${esc(e.name)}</span>${arch?'<span class="tag ctx">archiviert</span>':''}${e.extra&&e.extra.imported?'<span class="tag ctx">importiert</span>':''}
+        <span class="muted" style="margin-left:auto">${(e.updated_at||'').slice(0,10)}</span></div>
+      <div class="dsc">${esc(e.description)||'<i>—</i>'}</div>
+      <div class="det">${ex}${rels?`<h4>Relationen</h4>${rels}`:'<span class="muted">keine Relationen</span>'}</div>
+    </div>`;
+  }).join('')||'<p class="muted">nichts gefunden</p>';
+}
+init();
+</script>
+</body>
+</html>
