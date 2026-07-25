@@ -18,7 +18,7 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='${
 COPY server.py .
 COPY setup-config*.json ./
 COPY lib/__init__.py lib/backup_crypto.py ./lib/
-COPY assets/favicon.png assets/logo.png ./assets/
+COPY assets/favicon.png assets/favicon-dark.png assets/logo.png ./assets/
 
 VOLUME /data
 

@@ -2689,6 +2689,8 @@ _PREFS_HTML = """<!DOCTYPE html>
 <title>ai-rem · Preferences</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
 <style>
 :root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333;--pin:#808080}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2838,6 +2840,8 @@ _UI_HTML = """<!DOCTYPE html>
 <title>ai-rem</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
 <style>
 :root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3084,6 +3088,7 @@ def _asset_bytes(name: str) -> bytes:
 
 
 _FAVICON_PNG = _asset_bytes("favicon.png")
+_FAVICON_DARK_PNG = _asset_bytes("favicon-dark.png")
 _LOGO_PNG = _asset_bytes("logo.png")
 
 
@@ -3091,6 +3096,12 @@ _LOGO_PNG = _asset_bytes("logo.png")
 async def favicon_route(request: Request) -> Response:
     # Public — vom Browser automatisch für jede UI-Seite geladen.
     return Response(content=_FAVICON_PNG, media_type="image/png")
+
+
+@mcp.custom_route("/assets/favicon-dark.png", methods=["GET"])
+async def favicon_dark_route(request: Request) -> Response:
+    # Helles Glyph für dunkle Tab-Hintergründe (prefers-color-scheme: dark).
+    return Response(content=_FAVICON_DARK_PNG, media_type="image/png")
 
 
 @mcp.custom_route("/assets/logo.png", methods=["GET"])
@@ -3235,6 +3246,8 @@ _CLEANUP_HTML = """<!DOCTYPE html>
 <title>ai-rem · Cleanup</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
 <style>
 :root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333;--warn:#808080}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3465,6 +3478,8 @@ _BROWSE_HTML = """<!DOCTYPE html>
 <title>ai-rem · Browse</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
 <style>
 :root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--warn:#808080}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3557,6 +3572,8 @@ _GRAPH_HTML = """<!DOCTYPE html>
 <title>ai-rem · Graph</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <style>
 :root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666}
@@ -3698,6 +3715,8 @@ _INSTALL_HTML = """<!DOCTYPE html>
 <title>ai-rem · Install</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
 <style>
 :root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3789,6 +3808,8 @@ _LOGIN_HTML = """<!DOCTYPE html>
 <title>ai-rem · Login</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
 <style>
 body{background:#fafafa;color:#333;font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
 .box{background:#fff;border:1px solid #ececec;border-left:3px solid #388e3c;border-radius:12px;padding:32px;width:340px}
