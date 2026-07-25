@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<style>
+body{background:#fafafa;color:#333;font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.box{background:#fff;border:1px solid #ececec;border-left:3px solid #388e3c;border-radius:12px;padding:32px;width:340px}
+h1{font-size:20px;margin:0 0 4px;color:#000}
+p.sub{color:#666;font-size:13px;margin:0 0 24px}
+label{display:block;font-size:12px;color:#666;margin-bottom:6px}
+input{width:100%;background:#fafafa;border:1px solid #d0d0d0;color:#333;border-radius:6px;padding:10px;font-size:14px;margin:0 0 16px}
+button{width:100%;background:#388e3c;color:#fff;border:none;border-radius:6px;padding:10px;font-size:14px;font-weight:500;cursor:pointer}
+button:hover{background:#2e7d32}
+.err{color:#dd3333;font-size:13px;margin-bottom:14px;min-height:18px}
+</style></head>
+<body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<form class="box" method="POST" action="/login">
+<p class="sub">Knowledge Graph Memory</p>
+<div class="err">__ERROR__</div>
+<label for="token">API-Token</label>
+<input type="password" id="token" name="token" autofocus autocomplete="current-password">
+<button type="submit">Anmelden</button>
+<p style="margin:16px 0 0;font-size:12px;text-align:center"><a href="/install" style="color:#388e3c">Neue Maschine einrichten →</a></p>
+</form>
+</body></html>

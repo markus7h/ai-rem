@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:820px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:32px}
+.grid{display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:22px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+select,input[type=file]{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px}
+button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
+button:hover{background:var(--ah)}
+button.sec{background:transparent;border:1px solid var(--border);color:var(--text)}
+button.sec:hover{border-color:var(--muted)}
+button.del{background:transparent;border:1px solid var(--err);color:var(--err)}
+button.del:hover{background:var(--err);color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+.toggle{display:flex;align-items:center;gap:10px}
+.toggle input{width:36px;height:20px;appearance:none;background:var(--border);border-radius:10px;cursor:pointer;position:relative;transition:background .2s}
+.toggle input:checked{background:var(--accent)}
+.toggle input::after{content:'';position:absolute;width:16px;height:16px;background:#fff;border-radius:50%;top:2px;left:2px;transition:left .2s}
+.toggle input:checked::after{left:18px}
+.files{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.fi{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:7px}
+.fn{flex:1;font-family:monospace;font-size:12px;color:var(--muted)}
+.fsz{font-size:12px;color:var(--muted);min-width:64px;text-align:right}
+.empty{color:var(--muted);font-size:13px;padding:8px 0}
+.hint{font-size:12px;color:var(--muted);margin-top:8px}
+.sep{width:1px;height:18px;background:var(--border)}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 18px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;max-width:340px}
+.toast.show{opacity:1}
+.toast.ok{border-color:var(--ok);color:var(--ok)}
+.toast.err{border-color:var(--err);color:var(--err)}
+</style>
+</head>
+<body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/browse">Browse →</a> &nbsp;·&nbsp; <a href="/graph">Graph →</a> &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
+<div class="grid">
+
+  <div class="card">
+    <h2>Manual Backup</h2>
+    <div class="row">
+      <button id="bb" onclick="backupNow()">Backup now</button>
+      <span style="font-size:12px;color:var(--muted)" id="lb">Last backup: —</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Automatic Backup</h2>
+    <div class="row">
+      <div class="toggle"><input type="checkbox" id="se"><label for="se">Enable schedule</label></div>
+      <div class="sep"></div>
+      <label for="si" style="color:var(--muted);font-size:13px">Interval</label>
+      <select id="si">
+        <option value="hourly">Hourly</option>
+        <option value="daily" selected>Daily</option>
+        <option value="weekly">Weekly</option>
+      </select>
+      <button onclick="saveSchedule()">Save</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Backup Files</h2>
+    <div id="fl" class="files"><p class="empty">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Restore</h2>
+    <div class="row">
+      <input type="file" id="rf" accept=".json">
+      <select id="rm">
+        <option value="merge">Merge</option>
+        <option value="replace">Replace (wipe first)</option>
+      </select>
+      <button onclick="doRestore()">Restore</button>
+    </div>
+    <p class="hint">Merge adds missing entries. Replace deletes the entire graph before importing.</p>
+  </div>
+
+  <div class="card">
+    <h2>OKF Import</h2>
+    <div class="row">
+      <input type="file" id="of" accept=".zip">
+      <select id="om">
+        <option value="merge">Merge</option>
+        <option value="replace">Replace (wipe first)</option>
+      </select>
+      <button onclick="doOkfImport()">Import OKF</button>
+    </div>
+    <p class="hint">Open-Knowledge-Format-Bundle (ZIP). Importierte Einträge sind erst nach erneutem Schreiben semantisch durchsuchbar.</p>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+<script>
+async function j(url,o){const r=await fetch(url,o);return r.json();}
+
+async function loadStatus(){
+  const r=await j('/api/status').catch(()=>({}));
+  document.getElementById('ec').textContent=r.entities??'—';
+  document.getElementById('rc').textContent=r.relations??'—';
+  if(r.last_backup){
+    document.getElementById('lb').textContent='Last backup: '+new Date(r.last_backup).toLocaleString();
+  }
+}
+
+async function loadSchedule(){
+  const r=await j('/api/backup/config').catch(()=>({}));
+  document.getElementById('se').checked=r.enabled??false;
+  document.getElementById('si').value=r.interval??'daily';
+}
+
+async function loadFiles(){
+  const files=await j('/api/backup/files').catch(()=>[]);
+  const el=document.getElementById('fl');
+  if(!files.length){el.innerHTML='<p class="empty">No backups yet.</p>';return;}
+  el.innerHTML=files.map(f=>`
+    <div class="fi">
+      <span class="fn">${f.encrypted?'🔒 ':''}${f.name}</span>
+      <span class="fsz">${(f.size/1024).toFixed(1)} KB</span>
+      <a href="/api/backup/download?file=${encodeURIComponent(f.name)}">
+        <button class="sec">Download</button></a>
+      <button class="del" onclick="delFile('${f.name}')">Delete</button>
+    </div>`).join('');
+}
+
+async function backupNow(){
+  const b=document.getElementById('bb');
+  b.disabled=true;b.textContent='Running…';
+  const r=await j('/api/backup/now',{method:'POST'}).catch(e=>({error:e.message}));
+  b.disabled=false;b.textContent='Backup now';
+  if(r.error){toast(r.error,'err');return;}
+  toast('Created: '+r.file,'ok');
+  loadStatus();loadFiles();
+}
+
+async function saveSchedule(){
+  const r=await j('/api/backup/config',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enabled:document.getElementById('se').checked,interval:document.getElementById('si').value})
+  }).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):toast('Schedule saved','ok');
+}
+
+async function delFile(name){
+  if(!confirm('Delete '+name+'?'))return;
+  const r=await j('/api/backup/delete',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:name})
+  }).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):(toast('Deleted','ok'),loadFiles());
+}
+
+async function doRestore(){
+  const fi=document.getElementById('rf');
+  if(!fi.files.length){toast('Select a file first','err');return;}
+  const fd=new FormData();
+  fd.append('file',fi.files[0]);
+  fd.append('mode',document.getElementById('rm').value);
+  const r=await fetch('/api/restore',{method:'POST',body:fd}).then(r=>r.json()).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):toast(`Restored: ${r.entities_created} entities, ${r.relations_created} relations`,'ok');
+  loadStatus();
+}
+
+async function doOkfImport(){
+  const fi=document.getElementById('of');
+  if(!fi.files.length){toast('Select a .zip first','err');return;}
+  const fd=new FormData();
+  fd.append('file',fi.files[0]);
+  fd.append('mode',document.getElementById('om').value);
+  const r=await fetch('/api/import/okf',{method:'POST',body:fd}).then(r=>r.json()).catch(e=>({error:e.message}));
+  r.error?toast(r.error,'err'):toast(`OKF: ${r.concepts_parsed} Concepts → ${r.entities_created} entities, ${r.relations_created} relations`,'ok');
+  loadStatus();
+}
+
+function toast(msg,type){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className='toast show '+type;
+  setTimeout(()=>el.className='toast',3500);
+}
+
+loadStatus();loadSchedule();loadFiles();
+</script>
+</body>
+</html>

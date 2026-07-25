@@ -6,6 +6,12 @@ ai-rem ships three Claude Code hooks that keep the graph fed and tidy without ma
 **Auto-Memory** (session → graph), **Nightly cleanup** (dedup/archive), and **Plan saving**
 (plans → open tasks). All three are deployed by the client setup script.
 
+> **Where the hook sources live:** `hooks/*.py` in this repo — plain, lintable Python files.
+> `server.py` reads them at import time and serves them unchanged under `/hooks/<name>.py`;
+> the client setup fetches them from there. Edit the files, never a copy in `server.py`.
+> The same applies to `scripts/setup.py` (served as `/setup.py`) and the web UI under
+> `templates/*.html`.
+
 ---
 
 ## Auto-Memory (PreCompact + SessionEnd → ai-rem)

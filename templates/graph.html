@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;padding:20px}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+.bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.muted{color:var(--muted);font-size:12px}
+#netwrap{position:relative}
+#net{height:78vh;background:var(--card);border:1px solid var(--border);border-radius:10px}
+#info{position:absolute;left:12px;right:12px;bottom:12px;max-height:38%;overflow:auto;
+  background:var(--card);border:1px solid var(--border);border-radius:8px;
+  padding:10px 13px;box-shadow:0 3px 16px rgba(0,0,0,.10);font-size:13px;line-height:1.5;
+  display:none;pointer-events:none}
+#info .hd{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+#info .chip{color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+#info .nm{font-weight:700;font-size:14px}
+#info .ctx{color:var(--muted);font-size:12px}
+#info .d{color:var(--text);white-space:pre-wrap;word-break:break-word}
+#leg{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+#leg span{font-size:12px;display:inline-flex;align-items:center;gap:5px}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+</style>
+</head>
+<body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<h1>Graph</h1>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
+<div class="bar">
+  <label class="muted">Kontext
+    <select id="ctx" onchange="build()">
+      <option value="">alle</option>
+      <option value="work">work</option>
+      <option value="private">private</option>
+      <option value="__global">global (ohne Tag)</option>
+    </select></label>
+  <label class="muted"><input type="checkbox" id="arch" onchange="build()"> archivierte zeigen</label>
+  <label class="muted"><input type="checkbox" id="phys" checked onchange="net&&net.setOptions({physics:{enabled:this.checked}})"> Physik</label>
+  <label class="muted"><input type="checkbox" id="focus" onchange="setFocus()"> nur Verbundene</label>
+  <label class="muted">Distanz <input type="number" id="depth" value="1" min="1" style="width:3em" onchange="build()"></label>
+  <span class="muted">Typ-Filter: Legende anklicken · <a href="#" onclick="toggleAll();return false">alle an/aus</a></span>
+</div>
+<div id="netwrap"><div id="net"></div><div id="info"></div></div>
+<div id="leg"></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const PAL=['#388e3c','#1565c0','#c62828','#6a1b9a','#ef6c00','#00838f','#ad1457','#558b00','#4527a0','#795548','#546e7a'];
+let G=null, net=null, COL={}, EMAP={}, SEL=null, FOCUS=null;
+const HIDE=new Set();  // ausgeblendete Typen (Tag-Filter via Legende)
+function colorFor(t){if(!(t in COL))COL[t]=PAL[Object.keys(COL).length%PAL.length];return COL[t];}
+function toggleType(t){HIDE.has(t)?HIDE.delete(t):HIDE.add(t);build();}
+function toggleAll(){HIDE.size?HIDE.clear():Object.keys(COL).forEach(t=>HIDE.add(t));build();}  // was ausgeblendet ist → alle an, sonst alle aus
+function setFocus(){FOCUS=$('focus').checked?SEL:null;build();}  // Anker = aktuelle Auswahl
+async function init(){
+  G=await (await fetch('/export')).json();
+  G.entities.forEach(e=>colorFor(e.type));  // stabile Farben für ALLE Typen (Legende vollständig)
+  build();
+}
+function showInfo(e){
+  if(!e){return;}
+  const ctx=e.context?' · '+esc(e.context):(e.archived==='true'?' · archiviert':'');
+  const d=e.description?`<div class="d">${esc(e.description)}</div>`:'';
+  $('info').innerHTML=`<div class="hd"><span class="chip" style="background:${colorFor(e.type)}">${esc(e.type)}</span>`
+    +`<span class="nm">${esc(e.name)}</span><span class="ctx">${ctx}</span></div>${d}`;
+  $('info').style.display='block';
+}
+function build(){
+  const showArch=$('arch').checked, cf=$('ctx').value;
+  let ents=G.entities.filter(e=>{
+    if(!showArch&&e.archived==='true')return false;
+    if(cf==='__global'?e.context!=='':cf&&e.context!==cf)return false;
+    return !HIDE.has(e.type);
+  });
+  if($('focus').checked&&FOCUS){  // fixer Anker + Nachbarn bis Distanz n (BFS)
+    const depth=Math.max(1,+$('depth').value||1);
+    const nb=new Set([FOCUS]);
+    for(let d=0;d<depth;d++){
+      const cur=new Set(nb);  // Snapshot: genau eine Distanz pro Runde
+      G.relations.forEach(r=>{if(cur.has(r.from_id))nb.add(r.to_id);if(cur.has(r.to_id))nb.add(r.from_id);});
+    }
+    ents=ents.filter(e=>nb.has(e.id));
+  }
+  const ok=new Set(ents.map(e=>e.id));
+  EMAP={}; ents.forEach(e=>EMAP[e.id]=e);
+  const nodes=ents.map(e=>({id:e.id,label:e.name,color:colorFor(e.type),
+    shape:'dot',size:14,font:{size:13,color:'#333'},
+    opacity:e.archived==='true'?0.45:1}));
+  const edges=G.relations.filter(r=>ok.has(r.from_id)&&ok.has(r.to_id)).map(r=>({
+    from:r.from_id,to:r.to_id,label:r.relation,arrows:'to',
+    font:{size:10,color:'#888',strokeWidth:3,strokeColor:'#fafafa'},color:{color:'#ccc'}}));
+  $('cnt').textContent=`${nodes.length} Knoten · ${edges.length} Kanten`;
+  net=new vis.Network($('net'),{nodes,edges},{
+    physics:{enabled:$('phys').checked,stabilization:{iterations:150},barnesHut:{springLength:130}},
+    interaction:{hover:true}});
+  net.on('click',p=>{  // Einfachklick: nur Info, Anker bleibt fix
+    if(p.nodes.length){SEL=p.nodes[0];showInfo(EMAP[SEL]);}
+    else{SEL=null;$('info').style.display='none';}
+  });
+  net.on('doubleClick',p=>{  // Doppelklick im Fokus-Modus: Anker umsetzen
+    if(p.nodes.length&&$('focus').checked){FOCUS=SEL=p.nodes[0];showInfo(EMAP[FOCUS]);build();}
+  });
+  $('leg').innerHTML=Object.entries(COL).map(([t,c])=>`<span onclick="toggleType('${t}')" style="cursor:pointer;opacity:${HIDE.has(t)?0.35:1}" title="${HIDE.has(t)?'einblenden':'ausblenden'}"><i class="dot" style="background:${c}"></i>${t}</span>`).join('');
+}
+init();
+</script>
+</body>
+</html>

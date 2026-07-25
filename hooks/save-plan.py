@@ -34,7 +34,10 @@ import urllib.request
 
 ENDPOINT = os.environ.get("AI_REM_ENDPOINT", "http://localhost:3456/mcp")
 TIMEOUT = 8
-PLANS_DIR = os.path.expanduser("~/.claude/plans")
+_CC = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+CLAUDE_DIR = _CC or os.path.expanduser("~/.claude")
+CLAUDE_JSON = os.path.join(_CC, ".claude.json") if _CC else os.path.expanduser("~/.claude.json")
+PLANS_DIR = os.path.join(CLAUDE_DIR, "plans")
 
 
 def auth_header():
@@ -42,7 +45,7 @@ def auth_header():
     if tok:
         return tok if tok.lower().startswith("bearer ") else f"Bearer {tok}"
     try:
-        cfg = json.load(open(os.path.expanduser("~/.claude.json")))
+        cfg = json.load(open(CLAUDE_JSON))
         return cfg["mcpServers"]["ai-rem"]["headers"]["Authorization"]
     except Exception:
         return None
