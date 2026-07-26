@@ -38,9 +38,9 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Failure-Mode (md-Fallback + Catch-up):** Ist llama-server nicht erreichbar, geht die Session nicht verloren — eine heuristische Extraktion wird an `~/.claude/auto-memory/fallback.md` angehängt (via `@`-Import in `CLAUDE.md`, bleibt also im Kontext) und das Transcript in `pending.jsonl` vorgemerkt. Sobald llama-server wieder erreichbar ist, zieht `ai-rem catchup` (von den SessionStart- und PreCompact/SessionEnd-Hooks ausgeführt) die vorgemerkten Sessions sauber nach ai-rem nach und **leert das md**. Der Hook bricht nie `/compact` oder das Session-Ende; harte Fehler gehen nach `~/.claude/auto-memory/errors.log`.
 
-**Sichtbarkeit:** Jeder erfolgreiche Lauf schreibt `~/.claude/auto-memory/last-run.json`; der SessionStart-Check zeigt eine Zeile wie `🧠 N Entities, M Rel` (mit `(md-Fallback)`, wenn llama-server down war).
+**Sichtbarkeit:** Jeder erfolgreiche Lauf schreibt `~/.claude/auto-memory/last-run.json`; der SessionStart-Check zeigt daraus nur den Status `Auto-Memory ✓` bzw. `Auto-Memory ✗ gestört`. Details (Entity-Zahl, `md-Fallback`, gespeicherte Namen) stehen in `last-run.json` selbst — die Statuszeile bleibt scanbar. Ist der Hook gar nicht in `~/.claude/settings.json` registriert, ist Auto-Memory bewusst aus und taucht in der Zeile nicht auf.
 
-**Ausfallerkennung:** Weil der Hook bewusst still scheitert (rc=0, damit er weder `/compact` noch das Session-Ende bricht), blieb ein kaputtes Auto-Memory bisher unsichtbar — es lief hier einmal 7 Wochen lang tot. Der SessionStart-Check vergleicht jetzt die mtime von `last-run.json` gegen `errors.log` und meldet auf zwei Kanälen: `🧠 ✗ gestört` in der Statuszeile plus die volle Diagnose (letzter Fehler, wahrscheinliche Ursache, Log-Pfad) als `additionalContext`, damit auch der Assistent es sieht und ansprechen kann. Drei Auslöser: Fehler neuer als der letzte Erfolg, gar kein `last-run.json`, oder seit über 7 Tagen nichts gespeichert.
+**Ausfallerkennung:** Weil der Hook bewusst still scheitert (rc=0, damit er weder `/compact` noch das Session-Ende bricht), blieb ein kaputtes Auto-Memory bisher unsichtbar — es lief hier einmal 7 Wochen lang tot. Der SessionStart-Check vergleicht jetzt die mtime von `last-run.json` gegen `errors.log` und meldet auf zwei Kanälen: `Auto-Memory ✗ gestört` in der Statuszeile plus die volle Diagnose (letzter Fehler, wahrscheinliche Ursache, Log-Pfad) als `additionalContext`, damit auch der Assistent es sieht und ansprechen kann. Drei Auslöser: Fehler neuer als der letzte Erfolg, gar kein `last-run.json`, oder seit über 7 Tagen nichts gespeichert.
 
 **Konfigurations-Env:**
 - `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)
@@ -61,7 +61,7 @@ Mehrdeutige Fälle (und alles, wenn llama-server nachts down war) landen in eine
 
 ## Plan-Speicherung (ExitPlanMode → ai-rem)
 
-Ein `PostToolUse`-Hook auf `ExitPlanMode` (`hooks/save-plan.py`) speichert jeden finalisierten Plan als **offenen `Task`** in ai-rem — so werden Pläne eine zentrale, maschinenübergreifende Liste statt nur Slug-Dateien unter `~/.claude/plans/`. Der SessionStart-Hook `system-check.py` zeigt diese offenen `Task`s (inkl. Pläne) automatisch an — eine neue Session startet direkt mit der Liste; alternativ *„gibt es offene Pläne?"* fragen und auswählen.
+Ein `PostToolUse`-Hook auf `ExitPlanMode` (`hooks/save-plan.py`) speichert jeden finalisierten Plan als **offenen `Task`** in ai-rem — so werden Pläne eine zentrale, maschinenübergreifende Liste statt nur Slug-Dateien unter `~/.claude/plans/`. Der SessionStart-Hook `system-check.py` zeigt davon nur die **Anzahl** (`ai-rem ✓ 7 offene Tasks`) — die Liste selbst holt `memory_get_context`, etwa auf die Frage *„gibt es offene Pläne?"*.
 
 **Felder** kommen aus einem kleinen Frontmatter-Block, den Claude oben in jede Plan-Datei schreibt (kein Raten aus dem Fließtext):
 

@@ -37,7 +37,7 @@ route. Setting `AI_REM_ADMIN_TOOLS=1` on the server re-registers all twelve as M
 | `memory_merge` · `merge` | Fold a duplicate into the canonical entry: relations repointed, unique info appended, duplicate archived and linked via `DUPLIKAT_VON` |
 | `memory_delete` · `delete --yes` | Remove an entity and its relationships |
 | `memory_purge_archived` · `purge-archived --yes` | Permanently delete archived entries (destructive); `--keep-days N` spares recent ones |
-| `memory_status` · `status` | Quick status: number of entities and relations (used by the SessionStart hook) |
+| `memory_status` · `status` | Quick status: number of entities and relations |
 | `memory_check_update` · `check-update` | Show the installed version and check Docker Hub for a newer one |
 
 `memory_get_context`, `memory_search` and `memory_list` hide archived entries by

@@ -4,6 +4,7 @@ Default (ohne topic): pro Projekt nur Zähler, keine Task-Bodies. Drill-down via
 klappt die offenen Tasks der Gruppe mit Body aus. In-process gegen Temp-DB, Embedding aus.
 """
 import os
+import re
 import sys
 import tempfile
 
@@ -46,6 +47,15 @@ def test_default_shows_counts_not_bodies():
     assert "## Offene Tasks (4)" in out
 
 
+def test_header_matches_hook_regex():
+    """Der SessionStart-Hook zieht die Task-Anzahl aus diesem Header. Ein Format-Drift
+    hat den Task-Block schon einmal still getoetet (Issue #52) — hier faellt er auf."""
+    out = server.memory_get_context()
+    # identisch zu OPEN_TASKS_RE in hooks/system-check.py
+    m = re.search(r"^## Offene Tasks[^(\n]*\((\d+)\)", out, re.M)
+    assert m and m.group(1) == "4"
+
+
 def test_drilldown_by_topic_expands_group():
     out = server.memory_get_context(topic="ProjektAlpha")
     assert "## Offene Tasks: ProjektAlpha" in out
@@ -58,5 +68,6 @@ def test_drilldown_by_topic_expands_group():
 
 if __name__ == "__main__":
     test_default_shows_counts_not_bodies()
+    test_header_matches_hook_regex()
     test_drilldown_by_topic_expands_group()
     print("OK")
