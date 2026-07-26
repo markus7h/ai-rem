@@ -24,8 +24,12 @@ CANDIDATE_CLI_PATHS = [
     os.path.expanduser("~/myCode/github/ai-rem/bin/ai-rem"),
     os.path.expanduser("~/.local/share/ai-rem/bin/ai-rem"),
 ]
-# Zusätzliche Suchmuster für nicht-Standard-Layouts (z.B. SMB-Mount /Volumes/<x>/myCode).
-CLI_GLOBS = ["/Volumes/*/myCode/github/ai-rem/bin/ai-rem"]
+# Zusätzliche Suchmuster für nicht-Standard-Layouts (SMB-Mount /Volumes/<x>/myCode,
+# untergeschobenes Zwischenverzeichnis wie ~/mystorage/myCode).
+CLI_GLOBS = [
+    "/Volumes/*/myCode/github/ai-rem/bin/ai-rem",
+    os.path.expanduser("~/*/myCode/github/ai-rem/bin/ai-rem"),
+]
 
 
 def _find_cli():
@@ -176,8 +180,12 @@ def main():
     session_id = ctx.get("session_id") or ""
     hook_event = ctx.get("hook_event_name") or ctx.get("event") or "?"
 
-    if not transcript or not Path(transcript).exists():
-        _log_error(f"{hook_event}: missing/invalid transcript_path={transcript!r}")
+    if not transcript:
+        _log_error(f"{hook_event}: kein transcript_path im Hook-Input")
+        return
+    if not Path(transcript).exists():
+        # ponytail: leere/abgebrochene Session schreibt kein Transcript — kein Fehler,
+        # sonst meldet der SessionStart-Check dauernd "Auto-Memory gestört".
         return
     run_key = _run_key(session_id, transcript)
     if _already_processed(run_key):
