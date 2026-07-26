@@ -41,11 +41,13 @@ from starlette.responses import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-VERSION = "0.8.8"
+VERSION = "0.8.9"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
 # höchstens in den Session-Kontext lädt. In der /prefs-Web-UI als Schnittlinie sichtbar.
+# Das Pendant für /discover (Routinen je Prompt) ist DISCOVER_ROUTINES_LIMIT (Default
+# 10, definiert beim /discover-Block) — kuratiert über pinned + sort_order 1..N.
 CONTEXT_PREF_LIMIT = int(os.getenv("CONTEXT_PREF_LIMIT", "15"))
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
@@ -893,6 +895,12 @@ mcp = FastMCP(
         "Body bei Regeln: Regel + Why: + How to apply: — die Kern-Regel MUSS in die "
         "ERSTEN ~120 Zeichen (vor 'Why:'), da get_context auf descr[:120] kürzt und alles "
         "dahinter passiv unsichtbar bleibt.\n"
+        "  VOR dem Anlegen einer neuen Verhaltensregel prüfen, ob ein Claude-Code-Hook "
+        "(settings.json, deterministisch, kostet keinen Routine-Slot) die bessere "
+        "Realisierung ist — automatisierte 'immer wenn X dann Y'-Verhalten gehören in "
+        "Hooks; falls sinnvoll, dem User die Hook-Variante VORSCHLAGEN statt still eine "
+        "Preference anzulegen. Routine-Slots sind knapp: nur DISCOVER_ROUTINES_LIMIT "
+        "gepinnte Regeln (sort_order) erreichen jede Session.\n"
         "- Project: laufende Arbeit, Ziele. Relative Daten → absolute.\n"
         "- Topic: Pointer auf externe Systeme/Referenzen.\n"
         "- Task/Decision/Problem/Solution/Tool: offene Aufgaben, Architektur, Bugs, Lösungen, Tools.\n\n"
@@ -2258,7 +2266,7 @@ _DISCOVER_CACHE_TTL = 90.0
 _DISCOVER_CACHE_MAX = 256
 # Gepinnte Routinen werden bei jedem /discover unabhängig vom Keyword-Match
 # mitgeliefert (generelle Regeln fallen sonst durch das Relevanz-Sieb).
-DISCOVER_ROUTINES_LIMIT = int(os.getenv("DISCOVER_ROUTINES_LIMIT", "8"))
+DISCOVER_ROUTINES_LIMIT = int(os.getenv("DISCOVER_ROUTINES_LIMIT", "10"))
 _discover_cache: dict = {}
 _discover_cache_lock = threading.Lock()
 
