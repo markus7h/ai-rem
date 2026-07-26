@@ -20,6 +20,9 @@ services:
       - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://myubuntu:11434}
       - BACKUP_DIR=/backups
       - MAX_BACKUPS=${MAX_BACKUPS:-10}
+      # Anzahl gepinnter Routinen, die /discover je Prompt injiziert (Slots,
+      # kuratiert über pinned + sort_order in den Preferences)
+      - DISCOVER_ROUTINES_LIMIT=${DISCOVER_ROUTINES_LIMIT:-10}
       - KUZU_POOL_SIZE=${KUZU_POOL_SIZE:-4}
       # Kuzu Buffer-Pool in MiB. Ohne dieses Limit zielt kuzu auf 80% des HOST-RAMs
       # (ignoriert mem_limit). Normalbetrieb braucht bei dieser DB nur ~32 MB → 256 üppig.

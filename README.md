@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.8.8](https://github.com/markus7h/ai-rem/releases/tag/v0.8.8)**.
+> This documentation describes **[v0.8.9](https://github.com/markus7h/ai-rem/releases/tag/v0.8.9)**.
 > Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
@@ -97,6 +97,7 @@ BACKUP_DIR=/backups                      # Path for backup files
 MAX_BACKUPS=10                           # Maximum number of backups to keep
 AI_REM_BACKUP_KEY=...                     # Optional — encrypt backups (AES-256-GCM); empty = plaintext
 KUZU_POOL_SIZE=4                         # Connection pool size
+DISCOVER_ROUTINES_LIMIT=10               # Pinned routines injected per prompt via /discover (curated by sort_order)
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu buffer pool in MiB (0 = default: 80% of host RAM)
 KUZU_WAL_CHECKPOINT_MB=2                  # self-checkpoint the WAL above this size (0/empty = off)
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
