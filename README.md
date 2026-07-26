@@ -57,6 +57,7 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 | `/graph` | Node-link visualization (vis-network): nodes colored by type, edges labeled by relation; filter by context (work / private / global) and toggle entity types via the legend; physics and archived toggles; "connected only" pins the clicked node plus its neighbors up to an adjustable distance (1, 2 … n; single-click shows info, double-click re-anchors) |
 | `/prefs` | Preferences manager: pin, context, sort order, delete; archived preferences are dimmed, badged and listed below a separator (they never load into session context). |
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log; plus archive purge (permanently delete archived entries, optionally keeping the last *X* days) |
+| `/logs` | Server log without shell access: level filter, substring search, optional 5s auto-refresh, download as text. Fed by an in-memory ring buffer (last `AI_REM_LOG_RING`, default 500 lines) — so it only covers the time since the last container restart. Bearer tokens are redacted. |
 | `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons, incl. step-by-step SSH key guide — public, for onboarding new machines |
 
 **Interop (OKF).** ai-rem speaks the [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/) v0.1: `/export/okf` downloads the whole graph as a Markdown+YAML bundle (ZIP), `/api/import/okf` reads one back in. Own exports carry `source: ai-rem` so a round-trip stays untagged, while foreign entries are marked `imported` and indexed for semantic search on import.
@@ -101,6 +102,7 @@ DISCOVER_ROUTINES_LIMIT=10               # Pinned routines injected per prompt v
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu buffer pool in MiB (0 = default: 80% of host RAM)
 KUZU_WAL_CHECKPOINT_MB=2                  # self-checkpoint the WAL above this size (0/empty = off)
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
+AI_REM_LOG_RING=500                       # Lines of server log kept in memory for /logs
 ```
 
 > **Note (memory):** Without `KUZU_BUFFER_POOL_SIZE_MB`, kuzu sizes its buffer pool to

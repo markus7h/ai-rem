@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Logs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333;--warn:#808080}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:1100px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+.card{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:16px;margin-bottom:14px}
+.row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+label{font-size:13px}
+select,input[type=text]{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:5px 8px;font-size:13px}
+input[type=text]{min-width:220px}
+button{background:var(--accent);border:none;color:#fff;border-radius:6px;padding:7px 14px;font-size:13px;cursor:pointer;transition:background .15s}
+button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid var(--border);color:var(--muted)}button.ghost:hover{border-color:var(--accent);color:var(--text)}
+.muted{color:var(--muted);font-size:12px}
+#out{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;max-height:65vh;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--card);padding:10px}
+.ln{display:flex;gap:10px;padding:2px 0;border-bottom:1px solid #f4f4f4;white-space:pre-wrap;word-break:break-word}
+.ln:last-child{border-bottom:none}
+.ts{color:var(--muted);flex:0 0 auto}
+.lv{flex:0 0 62px;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.05em;padding-top:2px}
+.lv.DEBUG{color:var(--warn)}.lv.INFO{color:var(--accent)}.lv.WARNING{color:#b8860b}.lv.ERROR,.lv.CRITICAL{color:var(--err)}
+.msg{flex:1 1 auto}
+.empty{color:var(--muted);font-size:13px;padding:14px 2px}
+</style>
+</head>
+<body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<h1>Server-Log</h1>
+<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; nur seit dem letzten Container-Start</p>
+
+<div class="card">
+  <div class="row">
+    <label>Level
+      <select id="lv">
+        <option value="DEBUG">alle</option>
+        <option value="INFO" selected>INFO+</option>
+        <option value="WARNING">WARNING+</option>
+        <option value="ERROR">nur Fehler</option>
+      </select>
+    </label>
+    <label>Suche <input type="text" id="q" placeholder="Substring…"></label>
+    <label><input type="checkbox" id="auto"> alle 5s aktualisieren</label>
+    <button onclick="load()">Aktualisieren</button>
+    <button class="ghost" onclick="dl()">Herunterladen</button>
+    <span class="muted" id="meta">—</span>
+  </div>
+</div>
+
+<div id="out"><div class="empty">lädt…</div></div>
+
+<script>
+var timer = null;
+
+function esc(s){ var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function load(){
+  var lv = document.getElementById('lv').value;
+  var q  = document.getElementById('q').value;
+  fetch('/api/logs?level=' + encodeURIComponent(lv) + '&q=' + encodeURIComponent(q))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var out = document.getElementById('out');
+      document.getElementById('meta').textContent =
+        d.rows.length + ' von ' + d.total + ' Zeilen (Puffer: ' + d.capacity + ')';
+      if (!d.rows.length){ out.innerHTML = '<div class="empty">Keine Einträge für diesen Filter.</div>'; return; }
+      // Neueste unten, wie in einer Konsole
+      out.innerHTML = d.rows.map(function(r){
+        return '<div class="ln"><span class="ts">' + esc(r.ts) + '</span>' +
+               '<span class="lv ' + esc(r.level) + '">' + esc(r.level) + '</span>' +
+               '<span class="msg">' + esc(r.msg) + '</span></div>';
+      }).join('');
+      out.scrollTop = out.scrollHeight;
+    })
+    .catch(function(){
+      document.getElementById('out').innerHTML = '<div class="empty">Log nicht abrufbar.</div>';
+    });
+}
+
+function dl(){
+  var lv = document.getElementById('lv').value;
+  var q  = document.getElementById('q').value;
+  fetch('/api/logs?level=' + encodeURIComponent(lv) + '&q=' + encodeURIComponent(q))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var txt = d.rows.map(function(r){ return r.ts + ' ' + r.level + ' ' + r.msg; }).join('\n');
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([txt], {type:'text/plain'}));
+      a.download = 'ai-rem-log.txt';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+}
+
+document.getElementById('auto').addEventListener('change', function(e){
+  if (timer) { clearInterval(timer); timer = null; }
+  if (e.target.checked) timer = setInterval(load, 5000);
+});
+document.getElementById('lv').addEventListener('change', load);
+document.getElementById('q').addEventListener('input', function(){
+  clearTimeout(window._qt); window._qt = setTimeout(load, 300);
+});
+load();
+</script>
+</body>
+</html>
