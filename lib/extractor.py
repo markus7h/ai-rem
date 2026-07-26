@@ -444,6 +444,13 @@ def ingest_transcript(
                 return _fallback_to_md(transcript_path, flat, log_dir, dry_run)
             raise
 
+        if "entities" not in extracted:
+            # Fremdes Schema = fehlgeschlagener Ingest, nicht "nichts gefunden". Passiert,
+            # wenn das Transcript selbst einen Extraktions-Prompt enthält und das Modell
+            # diesem statt dem Systemprompt folgt.
+            print(f"[warn] Modell lieferte fremdes Schema (keys={list(extracted)}) — "
+                  f"Transcript-Inhalt hat den Systemprompt überschrieben", file=sys.stderr)
+
         applied = []
         if dry_run:
             print("--- DRY-RUN: extrahiert ---")
