@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.8.8](https://github.com/markus7h/ai-rem/releases/tag/v0.8.8)**.
+> Diese Dokumentation bezieht sich auf **[v0.8.10](https://github.com/markus7h/ai-rem/releases/tag/v0.8.10)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes stehen in den [GitHub Releases](https://github.com/markus7h/ai-rem/releases); frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
