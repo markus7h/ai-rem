@@ -7,6 +7,7 @@ import asyncio
 import atexit
 import fcntl
 import glob
+import collections
 import hashlib
 import hmac
 import json
@@ -40,6 +41,34 @@ from starlette.responses import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# In-Memory-Ringpuffer fuer /logs: das Server-Log war bisher nur per
+# `docker logs` auf dem Host einsehbar. Haengt am Root-Logger, faengt also auch
+# uvicorn/fastmcp mit. Bewusst kein Dateisystem und kein Docker-Socket — dafuer
+# reicht der Puffer nur bis zum letzten Neustart.
+_LOG_RING_SIZE = int(os.getenv("AI_REM_LOG_RING", "500"))
+_LOG_RING: collections.deque = collections.deque(maxlen=_LOG_RING_SIZE)
+# Tokens tauchen in Log-Zeilen auf (Header, Query-Parameter). Die UI-Seite ist
+# zwar auth-pflichtig, aber ein Log ist der falsche Ort fuer Klartext-Secrets.
+_SECRET_RE = re.compile(r"(Bearer\s+|token[=:\"\s]+)([A-Za-z0-9_\-.]{8,})", re.I)
+_LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+
+
+class _RingHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            _LOG_RING.append({
+                "ts": datetime.fromtimestamp(record.created).isoformat(timespec="seconds"),
+                "level": record.levelname,
+                "lvlno": record.levelno,  # numerisch mitschreiben: Namen sind nicht zuverlaessig rueckabbildbar
+                "logger": record.name,
+                "msg": _SECRET_RE.sub(r"\1<redacted>", self.format(record)),
+            })
+        except Exception:  # Logging darf nie den Request killen
+            pass
+
+
+logging.getLogger().addHandler(_RingHandler())
 
 VERSION = "0.8.9"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
@@ -1097,6 +1126,30 @@ async def prefs_route(request: Request) -> Response:
 
 
 _CLEANUP_HTML = _pkg_text("templates/cleanup.html")
+_LOGS_HTML = _pkg_text("templates/logs.html")
+
+
+@mcp.custom_route("/logs", methods=["GET"])
+async def logs_page(request: Request) -> Response:
+    return Response(content=_LOGS_HTML, media_type="text/html")
+
+
+@mcp.custom_route("/api/logs", methods=["GET"])
+async def api_logs(request: Request) -> JSONResponse:
+    """Server-Log aus dem Ringpuffer. level filtert ab Schwelle, q als Substring."""
+    q = request.query_params
+    want = _LOG_LEVELS.get((q.get("level") or "DEBUG").upper(), logging.DEBUG)
+    needle = (q.get("q") or "").lower()
+    rows = [
+        r for r in _LOG_RING
+        if r["lvlno"] >= want and (not needle or needle in r["msg"].lower())
+    ]
+    try:
+        limit = max(1, min(int(q.get("limit", "300")), _LOG_RING_SIZE))
+    except ValueError:
+        limit = 300
+    return JSONResponse({"rows": rows[-limit:], "total": len(_LOG_RING),
+                         "capacity": _LOG_RING_SIZE})
 
 
 @mcp.custom_route("/cleanup", methods=["GET"])

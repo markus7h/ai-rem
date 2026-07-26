@@ -56,6 +56,7 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 | `/graph` | Node-Link-Visualisierung (vis-network): Knoten nach Typ eingefärbt, Kanten mit Relationsnamen; Filter nach Kontext (work / privat / global) und Typ-Toggle über die Legende; Physik- und Archiv-Toggle; „nur Verbundene" fixiert den angeklickten Knoten samt Nachbarn bis zur einstellbaren Distanz (1, 2 … n; Einfachklick zeigt Info, Doppelklick setzt den Anker um) |
 | `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen; archivierte Preferences sind gedimmt, gebadged und stehen unter einer Trennzeile (laden nie in den Session-Kontext). |
 | `/cleanup` | Nightly-Cleanup: Konfiguration, manueller Lauf, Pending-Reviews, Lauf-Log; plus Archiv-Purge (archivierte Einträge endgültig löschen, optional die letzten *X* Tage behalten) |
+| `/logs` | Server-Log ohne Shell-Zugang: Level-Filter, Substring-Suche, optionales Auto-Refresh alle 5s, Download als Text. Gespeist aus einem In-Memory-Ringpuffer (letzte `AI_REM_LOG_RING` Zeilen, Default 500) — reicht also nur bis zum letzten Container-Neustart. Bearer-Tokens werden maskiert. |
 | `/install` | Client-Setup-Befehle pro Plattform (bash / PowerShell) mit Kopier-Buttons, inkl. Schritt-für-Schritt-SSH-Key-Anleitung — public, fürs Onboarding neuer Maschinen |
 
 **Interop (OKF).** ai-rem spricht das [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/) v0.1: `/export/okf` lädt den ganzen Graph als Markdown+YAML-Bundle (ZIP), `/api/import/okf` liest eines wieder ein. Eigene Exporte tragen `source: ai-rem` (Round-Trip bleibt ungetaggt), Fremd-Einträge werden als `imported` markiert und beim Import für die semantische Suche indexiert.
@@ -98,6 +99,7 @@ AI_REM_BACKUP_KEY=...                     # Optional — Backups verschlüsseln 
 KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu Buffer-Pool in MiB (0 = Default: 80% Host-RAM)
 KUZU_WAL_CHECKPOINT_MB=2                 # WAL selbst mergen ab dieser Größe (0/leer = aus)
+AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im RAM gehalten werden
 ```
 
 > **Hinweis (Speicher):** Ohne `KUZU_BUFFER_POOL_SIZE_MB` dimensioniert kuzu seinen
