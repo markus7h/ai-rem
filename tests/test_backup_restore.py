@@ -42,6 +42,12 @@ def _scenario() -> None:
     before = counts()
     assert before == (3, 2), f"Aufbau unerwartet: {before}"
 
+    # updated_at von created_at loesen, damit der Roundtrip beides pruefen kann:
+    # _apply_import schrieb updated_at lange auf created_at und setzte damit die
+    # Recency-Sortierung (memory_get_context) aller je geaenderten Entities zurueck.
+    server.db_exec("MATCH (e:Entity {id:'gamma'}) SET e.updated_at = $ts",
+                   {"ts": "2026-01-02T03:04:05"})
+
     fn = server._do_backup()
     path = os.path.join(server.BACKUP_DIR, fn)
     assert os.path.exists(path)
@@ -62,6 +68,10 @@ def _scenario() -> None:
     assert row[0] == ["Aufgabe B", "true"], f"pinned/descr verloren: {row}"
     ctx = server._rows(server.db_exec("MATCH (e:Entity {id:'alpha'}) RETURN e.context"))
     assert ctx[0][0] == "work", f"context verloren: {ctx}"
+    stamps = server._rows(server.db_exec(
+        "MATCH (e:Entity {id:'gamma'}) RETURN e.created_at, e.updated_at"))[0]
+    assert stamps[1] == "2026-01-02T03:04:05", f"updated_at verloren: {stamps}"
+    assert stamps[0] != stamps[1], f"created_at hat updated_at ueberschrieben: {stamps}"
 
     print("OK")
 
