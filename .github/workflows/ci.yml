@@ -102,10 +102,20 @@ jobs:
           docker logs ai-rem-ci || true
           exit 1
 
-      - name: Smoke — CLI-Route liefert ohne Token aus
-        # Das Setup zieht die CLI hierher; bricht die Route (oder fehlt bin/ im
-        # COPY), laeuft jede Neuinstallation ohne CLI und Auto-Memory stirbt still.
-        run: curl -fsS http://localhost:3456/bin/ai-rem | grep -q "def main"
+      - name: Smoke — CLI ist vollstaendig installierbar
+        # Das Setup zieht die CLI + ihre lib-Module hierher; bricht eine Route (oder
+        # fehlt eine Datei im COPY), installiert jede Neuinstallation eine CLI, die
+        # nicht startet — und Auto-Memory stirbt still.
+        run: |
+          set -euo pipefail
+          mkdir -p cli-smoke/bin cli-smoke/lib
+          curl -fsS http://localhost:3456/bin/ai-rem -o cli-smoke/bin/ai-rem
+          for f in __init__.py mcp_client.py extractor.py extractor_heuristic.py; do
+            curl -fsS "http://localhost:3456/lib/$f" -o "cli-smoke/lib/$f"
+          done
+          chmod +x cli-smoke/bin/ai-rem
+          AI_REM_ENDPOINT=http://localhost:3456/mcp AI_REM_TOKEN=ci-smoke \
+            ./cli-smoke/bin/ai-rem status
 
       - name: Cleanup
         if: always()

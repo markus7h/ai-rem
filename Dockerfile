@@ -17,7 +17,9 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='${
 
 COPY server.py .
 COPY setup-config*.json ./
-COPY lib/__init__.py lib/backup_crypto.py ./lib/
+# mcp_client/extractor braucht der Server nicht — sie gehoeren zur CLI und werden
+# ueber /lib/<name> ausgeliefert, damit das Setup eine lauffaehige CLI installiert.
+COPY lib/ ./lib/
 COPY assets/favicon.png assets/favicon-dark.png assets/logo.png ./assets/
 # Hooks, Setup-Script und HTML-Templates lagen frueher als String-Literale in
 # server.py. server.py liest sie beim Import — fehlen sie, startet der Container
