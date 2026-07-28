@@ -535,6 +535,29 @@ def install_hooks():
     return paths
 
 
+LOCAL_CLI = os.path.join(HOME, '.local', 'share', 'ai-rem', 'bin', 'ai-rem')
+
+
+def points_at_clone(path):
+    """True, wenn der Pfad in einen ai-rem-Clone zeigt (statt in die lokale Kopie)."""
+    return path.replace('\\', '/').endswith('/github/ai-rem/bin/ai-rem')
+
+
+def install_cli():
+    """CLI lokal ablegen. Leerer String = Download fehlgeschlagen.
+
+    Vorher zeigte AI_REM_CLI auf den Clone. Lag der auf einem Netzlaufwerk, war
+    die CLI beim Session-Ende weg, sobald der Mount hing — der Auto-Memory-Hook
+    meldete dann still "CLI not found". Die lokale Kopie kennt kein Mount.
+    """
+    if not fetch_to(KG_URL + '/bin/ai-rem', LOCAL_CLI):
+        return ''
+    if not IS_WIN:
+        os.chmod(LOCAL_CLI, 0o755)
+    print('✓ CLI: %s' % LOCAL_CLI)
+    return LOCAL_CLI
+
+
 # ── settings.json: Permissions, Hooks registrieren, alte Hooks entfernen ─────
 
 def update_settings(setup_cfg, mcp_endpoint, hook_paths):
@@ -650,7 +673,7 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
     cli = ''
     for c in (os.environ.get('AI_REM_CLI', ''),
               os.path.join(HOME, 'myCode', 'github', 'ai-rem', 'bin', 'ai-rem'),
-              os.path.join(HOME, '.local', 'share', 'ai-rem', 'bin', 'ai-rem')):
+              LOCAL_CLI):
         if usable_cli(c):
             cli = c
             break
@@ -661,6 +684,12 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
                 break
     if cli:
         env.setdefault('AI_REM_CLI', cli)
+    # Die frisch deployte lokale Kopie gewinnt gegen jeden Clone-Pfad: die ist die
+    # einzige, die keinen Mount braucht. Ein manuell gesetztes AI_REM_CLI, das auf
+    # etwas anderes als einen Clone zeigt, bleibt unangetastet. Trenner normalisiert,
+    # weil in settings.json unter Windows beide Varianten stehen koennen.
+    if usable_cli(LOCAL_CLI) and points_at_clone(env.get('AI_REM_CLI', '')):
+        env['AI_REM_CLI'] = LOCAL_CLI
 
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -820,6 +849,7 @@ def main():
 
     write_settings_template(setup_cfg, mcp_endpoint)
     hook_paths = install_hooks()
+    install_cli()
     update_settings(setup_cfg, mcp_endpoint, hook_paths)
 
     # Auto-Memory md-Fallback: leere Datei (wird via @import in CLAUDE.md geladen)

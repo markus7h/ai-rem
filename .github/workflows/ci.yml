@@ -102,6 +102,11 @@ jobs:
           docker logs ai-rem-ci || true
           exit 1
 
+      - name: Smoke — CLI-Route liefert ohne Token aus
+        # Das Setup zieht die CLI hierher; bricht die Route (oder fehlt bin/ im
+        # COPY), laeuft jede Neuinstallation ohne CLI und Auto-Memory stirbt still.
+        run: curl -fsS http://localhost:3456/bin/ai-rem | grep -q "def main"
+
       - name: Cleanup
         if: always()
         run: docker rm -f ai-rem-ci || true
