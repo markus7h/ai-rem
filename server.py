@@ -70,7 +70,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "0.8.10"
+VERSION = "0.8.11"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -1593,7 +1593,7 @@ def _apply_import(body: dict, mode: str) -> dict:
             """CREATE (:Entity {id: $id, name: $name, type: $type,
                                 descr: $descr, extra: $extra, context: $ctx,
                                 pinned: $pinned, sort_order: $so, archived: $archived,
-                                created_at: $ts, updated_at: $ts})""",
+                                created_at: $created, updated_at: $updated})""",
             {
                 "id": eid, "name": entity["name"],
                 "type": entity.get("type", "Unknown"),
@@ -1602,7 +1602,11 @@ def _apply_import(body: dict, mode: str) -> dict:
                 "pinned": _flag("pinned"),
                 "so": str(entity.get("sort_order") or ""),
                 "archived": _flag("archived"),
-                "ts": entity.get("created_at", ts),
+                # Beide Zeitstempel aus dem Export. Vorher ging updated_at auf
+                # created_at — ein Restore setzte damit die Recency-Info aller
+                # je geänderten Entities zurück (sortiert memory_get_context).
+                "created": entity.get("created_at") or ts,
+                "updated": entity.get("updated_at") or entity.get("created_at") or ts,
             },
         )
         existing_eids.add(eid)
@@ -2071,6 +2075,9 @@ EMBED_THRESHOLD = float(os.getenv("EMBED_THRESHOLD", "0.45"))
 EMBED_QUERY_PREFIX = os.getenv("EMBED_QUERY_PREFIX", "")
 EMBED_PASSAGE_PREFIX = os.getenv("EMBED_PASSAGE_PREFIX", "")
 EMBED_THREADS = int(os.getenv("EMBED_THREADS", "2"))  # onnxruntime-Threads zähmen (shared host)
+# Backfill-Chunkgröße. Ein Vollbatch über alle Entities riss den Container nach
+# einem Restore (Modell + 500+ Texte über mem_limit, Writes über den Buffer-Pool).
+EMBED_BACKFILL_CHUNK = int(os.getenv("EMBED_BACKFILL_CHUNK", "32"))
 
 _embed_model = None
 _embed_model_lock = threading.Lock()
@@ -2264,7 +2271,20 @@ def _semantic_hits(query: str, context: str = "", limit: int = 10) -> list[dict]
 
 
 def _embed_backfill() -> None:
-    """Idempotent: embedded alle Entities ohne Vektor. Startup + Nightly-Reconcile."""
+    """Idempotent: embedded alle Entities ohne Vektor. Startup + Nightly-Reconcile.
+
+    Chunkweise (EMBED_BACKFILL_CHUNK): der frühere Einzelcall über alle Entities
+    ging im Normalbetrieb gut (nie viele Vektoren offen), riss aber nach einem
+    Restore den Container — 524 Texte auf einmal plus Modell über dem mem_limit,
+    und mit größerem Limit dann der Kuzu-Buffer-Pool. Geschriebene Chunks bleiben
+    bei einem Abbruch erhalten, der nächste Lauf macht am offenen Rest weiter.
+
+    Erzwungener Checkpoint je Chunk, weil Kuzu die Dirty-Pages der Writes bis
+    dahin im Pool hält: ohne das lief der gechunkte Backfill bei 256 MB Pool
+    nach ~290 Writes in "buffer pool is full". force=True ist nötig — die WAL
+    bleibt dabei unter KUZU_WAL_CHECKPOINT_MB, die Pool-Last hängt hier nicht
+    an der WAL-Größe, der größenbasierte Check wäre also ein No-op.
+    """
     if not EMBED_ENABLED:
         return
     try:
@@ -2274,15 +2294,23 @@ def _embed_backfill() -> None:
         if not rows:
             _ensure_embed_matrix()
             return
-        log.info("Embedding-Backfill: %d Entities", len(rows))
-        vecs = _embed_texts([_embed_payload(nm, descr or "") for _, nm, descr in rows],
-                            EMBED_PASSAGE_PREFIX)
-        for (eid, _nm, _d), v in zip(rows, vecs):
-            db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
-                    {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
+        log.info("Embedding-Backfill: %d Entities (Chunks von %d)",
+                 len(rows), EMBED_BACKFILL_CHUNK)
+        done = 0
+        for i in range(0, len(rows), EMBED_BACKFILL_CHUNK):
+            chunk = rows[i:i + EMBED_BACKFILL_CHUNK]
+            vecs = _embed_texts([_embed_payload(nm, descr or "") for _, nm, descr in chunk],
+                                EMBED_PASSAGE_PREFIX)
+            for (eid, _nm, _d), v in zip(chunk, vecs):
+                db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
+                        {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
+            done += len(chunk)
+            _checkpoint_wal(force=True)
+            if len(rows) > EMBED_BACKFILL_CHUNK:
+                log.info("Embedding-Backfill: %d/%d", done, len(rows))
         _invalidate_embed_cache()
         _ensure_embed_matrix()
-        log.info("Embedding-Backfill fertig (%d)", len(rows))
+        log.info("Embedding-Backfill fertig (%d)", done)
     except Exception as e:
         log.error("Embedding-Backfill fehlgeschlagen: %s", e)
 
