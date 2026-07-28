@@ -123,7 +123,7 @@ _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  #
 # Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck/Login — keine
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
 _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/install",
-                         "/setup-config", "/hooks/", "/cmd", "/login",
+                         "/setup-config", "/hooks/", "/bin/", "/cmd", "/login",
                          "/favicon.ico", "/assets/")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
@@ -160,6 +160,10 @@ SYSTEM_CHECK_PY = _pkg_text("hooks/system-check.py")
 AUTO_MEMORY_HOOK_PY = _pkg_text("hooks/auto-memory.py")
 
 CLAUDE_MD_GUARD_PY = _pkg_text("hooks/claude-md-guard.py")
+
+# Die CLI selbst — das Setup legt sie lokal ab (~/.local/share/ai-rem/bin/ai-rem),
+# damit die Hooks nicht am Clone-Pfad hängen.
+AI_REM_CLI_SRC = _pkg_text("bin/ai-rem")
 
 # save-plan.py: PostToolUse-Hook auf ExitPlanMode — speichert den finalisierten Plan
 # als offenen Task in ai-rem (Frontmatter name/description/status). Fail-silent.
@@ -1044,6 +1048,14 @@ async def claude_md_guard_hook_route(request: Request) -> PlainTextResponse:
 @mcp.custom_route("/hooks/save-plan.py", methods=["GET"])
 async def save_plan_hook_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(SAVE_PLAN_PY, media_type="text/x-python")
+
+
+@mcp.custom_route("/bin/ai-rem", methods=["GET"])
+async def cli_route(request: Request) -> PlainTextResponse:
+    # Damit das Setup die CLI lokal ablegen kann statt nur einen Clone-Pfad zu
+    # verlinken: lag sie nur im Clone und der auf einem Netzlaufwerk, war sie beim
+    # Session-Ende weg, sobald der Mount hing ("CLI not found" im errors.log).
+    return PlainTextResponse(AI_REM_CLI_SRC, media_type="text/x-python")
 
 
 @mcp.custom_route("/setup-config", methods=["GET"])

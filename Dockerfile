@@ -22,6 +22,7 @@ COPY assets/favicon.png assets/favicon-dark.png assets/logo.png ./assets/
 # Hooks, Setup-Script und HTML-Templates lagen frueher als String-Literale in
 # server.py. server.py liest sie beim Import — fehlen sie, startet der Container
 # gar nicht erst (statt spaeter einzelne Routen zu verlieren).
+COPY bin/ ./bin/
 COPY hooks/ ./hooks/
 COPY scripts/ ./scripts/
 COPY templates/ ./templates/
