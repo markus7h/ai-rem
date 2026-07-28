@@ -549,9 +549,17 @@ def install_cli():
     Vorher zeigte AI_REM_CLI auf den Clone. Lag der auf einem Netzlaufwerk, war
     die CLI beim Session-Ende weg, sobald der Mount hing — der Auto-Memory-Hook
     meldete dann still "CLI not found". Die lokale Kopie kennt kein Mount.
+
+    bin/ai-rem allein reicht nicht: es legt sein Parent-Verzeichnis auf sys.path
+    und importiert lib/ (mcp_client immer, extractor bei ingest/catchup). Ohne
+    diese Module scheitert schon `ai-rem status` am ModuleNotFoundError.
     """
     if not fetch_to(KG_URL + '/bin/ai-rem', LOCAL_CLI):
         return ''
+    lib_dir = os.path.join(os.path.dirname(os.path.dirname(LOCAL_CLI)), 'lib')
+    for name in ('__init__.py', 'mcp_client.py', 'extractor.py', 'extractor_heuristic.py'):
+        if not fetch_to(KG_URL + '/lib/' + name, os.path.join(lib_dir, name)):
+            return ''
     if not IS_WIN:
         os.chmod(LOCAL_CLI, 0o755)
     print('✓ CLI: %s' % LOCAL_CLI)

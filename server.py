@@ -70,7 +70,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "0.8.12"
+VERSION = "0.8.13"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -123,7 +123,7 @@ _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  #
 # Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck/Login — keine
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
 _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/install",
-                         "/setup-config", "/hooks/", "/bin/", "/cmd", "/login",
+                         "/setup-config", "/hooks/", "/bin/", "/lib/", "/cmd", "/login",
                          "/favicon.ico", "/assets/")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
@@ -162,8 +162,12 @@ AUTO_MEMORY_HOOK_PY = _pkg_text("hooks/auto-memory.py")
 CLAUDE_MD_GUARD_PY = _pkg_text("hooks/claude-md-guard.py")
 
 # Die CLI selbst — das Setup legt sie lokal ab (~/.local/share/ai-rem/bin/ai-rem),
-# damit die Hooks nicht am Clone-Pfad hängen.
+# damit die Hooks nicht am Clone-Pfad hängen. bin/ai-rem allein ist nicht lauffähig:
+# es importiert lib/ (mcp_client immer, extractor bei ingest/catchup), daher werden
+# diese Module mit ausgeliefert. Alles reine stdlib, kein venv noetig.
 AI_REM_CLI_SRC = _pkg_text("bin/ai-rem")
+CLI_LIB_FILES = {name: _pkg_text("lib/" + name) for name in
+                 ("__init__.py", "mcp_client.py", "extractor.py", "extractor_heuristic.py")}
 
 # save-plan.py: PostToolUse-Hook auf ExitPlanMode — speichert den finalisierten Plan
 # als offenen Task in ai-rem (Frontmatter name/description/status). Fail-silent.
@@ -1056,6 +1060,15 @@ async def cli_route(request: Request) -> PlainTextResponse:
     # verlinken: lag sie nur im Clone und der auf einem Netzlaufwerk, war sie beim
     # Session-Ende weg, sobald der Mount hing ("CLI not found" im errors.log).
     return PlainTextResponse(AI_REM_CLI_SRC, media_type="text/x-python")
+
+
+@mcp.custom_route("/lib/{name}", methods=["GET"])
+async def cli_lib_route(request: Request) -> PlainTextResponse:
+    # Nur die Module, die die CLI importiert — nicht das lib/-Verzeichnis oeffnen.
+    src = CLI_LIB_FILES.get(request.path_params["name"])
+    if src is None:
+        return PlainTextResponse("not found", status_code=404)
+    return PlainTextResponse(src, media_type="text/x-python")
 
 
 @mcp.custom_route("/setup-config", methods=["GET"])
