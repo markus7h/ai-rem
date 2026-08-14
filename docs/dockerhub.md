@@ -87,6 +87,7 @@ Set in the Compose `.env`:
 | `AI_REM_API_TOKEN` | — (**required**) | API token; server is fail-closed without it |
 | `KG_PUBLIC_URL` | — | Public URL of the server |
 | `PORT` | `3456` | TCP port |
+| `HOST` | `::` | Bind address. The socket is dual-stack (`IPV6_V6ONLY=0`), so the container is reachable over IPv6 *and* the published IPv4 port. `0.0.0.0` for IPv4 only |
 | `KUZU_DB_PATH` | `/data/kg.db` | Database path |
 | `BACKUP_DIR` | `/backups` | Backup files |
 | `MAX_BACKUPS` | `10` | Backups to keep |

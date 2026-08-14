@@ -93,6 +93,7 @@ Environment variables are loaded from a `.env` file in the Compose directory:
 AI_REM_API_TOKEN=...                     # REQUIRED — API token (fail-closed, see Authentication)
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Public URL of the server
 PORT=3456                                # TCP port (default: 3456)
+HOST=::                                  # Bind address (default: ::) — dual-stack socket, so IPv6 and the published IPv4 port both work; 0.0.0.0 for IPv4 only
 KUZU_DB_PATH=/data/kg.db                 # Path to the database
 BACKUP_DIR=/backups                      # Path for backup files
 MAX_BACKUPS=10                           # Maximum number of backups to keep

@@ -92,6 +92,7 @@ Umgebungsvariablen werden aus einer `.env`-Datei im Compose-Verzeichnis geladen:
 AI_REM_API_TOKEN=...                     # PFLICHT — API-Token (fail-closed, siehe Authentifizierung)
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Öffentliche URL des Servers
 PORT=3456                                # TCP-Port (Standard: 3456)
+HOST=::                                  # Bind-Adresse (Standard: ::) — dual-stack Socket, IPv6 und der published IPv4-Port funktionieren beide; 0.0.0.0 für reines IPv4
 KUZU_DB_PATH=/data/kg.db                 # Pfad zur Datenbank
 BACKUP_DIR=/backups                      # Pfad für Backup-Dateien
 MAX_BACKUPS=10                           # Maximale Anzahl aufbewahrter Backups
