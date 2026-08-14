@@ -26,6 +26,8 @@ def _setup():
     server.memory_add("BetaTask1", "Task", description="Beta-Aufgabe")
     server.memory_add("WaiseTask", "Task", description="ohne Projekt")
     server.memory_add("FertigTask", "Task", description="schon fertig", extra={"status": "erledigt"})
+    server.memory_add("AbgehaktTask", "Task", description="per Konvention abgeschlossen",
+                      extra={"status": "abgeschlossen"})
     server.memory_relate("AlphaTask1", "TEIL_VON", "ProjektAlpha")
     server.memory_relate("AlphaTask2", "TEIL_VON", "ProjektAlpha")
     server.memory_relate("BetaTask1", "TEIL_VON", "ProjektBeta")
@@ -40,10 +42,17 @@ def test_default_shows_counts_not_bodies():
     assert "_ohne Projekt_** — 1 offen" in out
     # Bodies tauchen im Default NICHT auf
     assert "erste Alpha-Aufgabe" not in out
-    # erledigter Task wird nicht gezählt
+    # erledigter Task wird nicht gezählt — beide Schreibweisen aus _DONE_STATUSES
     assert "FertigTask" not in out
+    assert "AbgehaktTask" not in out
     # Gesamtzähler: 4 offene (2 Alpha + 1 Beta + 1 Waise)
     assert "## Offene Tasks (4)" in out
+
+
+def test_default_lists_recent_task_names():
+    zuletzt = server.memory_get_context().split("Zuletzt: ")[1].splitlines()[0]
+    assert "WaiseTask" in zuletzt
+    assert "FertigTask" not in zuletzt
 
 
 def test_drilldown_by_topic_expands_group():
@@ -58,5 +67,6 @@ def test_drilldown_by_topic_expands_group():
 
 if __name__ == "__main__":
     test_default_shows_counts_not_bodies()
+    test_default_lists_recent_task_names()
     test_drilldown_by_topic_expands_group()
     print("OK")
