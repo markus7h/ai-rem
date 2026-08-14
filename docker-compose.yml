@@ -3,6 +3,11 @@ services:
     image: magic3arkus/ai-rem:latest
     build: .
     container_name: ai-rem
+    networks:
+      default:
+        # Feste Adresse, damit der Reverse-Proxy den Container direkt
+        # adressieren kann (Host-ID = Port, nur zur Lesbarkeit).
+        ipv6_address: fd00:24:9:68:19::3456
     restart: unless-stopped
     ports:
       - "${PORT:-3456}:${PORT:-3456}"
@@ -10,7 +15,9 @@ services:
       - ${KG_DATA_PATH:-./data}:/data
       - ${KG_BACKUP_PATH:-./backups}:/backups
     environment:
-      - HOST=0.0.0.0
+      # Dual-stack: der Container ist ueber IPv6 UND den published
+      # IPv4-Port erreichbar (server.py setzt IPV6_V6ONLY=0).
+      - "HOST=::"
       - PORT=${PORT:-3456}
       - KUZU_DB_PATH=/data/kg.db
       - KG_PUBLIC_URL=${KG_PUBLIC_URL:-http://localhost:${PORT:-3456}}
@@ -47,3 +54,19 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+networks:
+  # IPv6 aus dem gerouteten Praefix fd00:24:9:68::/64 (Rueckroute im Router auf
+  # den Docker-Host). gateway_mode_ipv6=routed -> kein NAT66, Container treten
+  # mit ihrer echten Adresse auf. Fuer andere Deployments Praefix anpassen oder
+  # enable_ipv6 entfernen. IPv4-Subnetz explizit, sonst vergibt Docker es beim
+  # Neuanlegen anders.
+  default:
+    name: ai-rem_default
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+        - subnet: fd00:24:9:68:19::/80
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv6: routed
