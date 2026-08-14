@@ -922,7 +922,7 @@ _UI_HTML = _pkg_text("templates/ui.html")
 mcp = FastMCP(
     "ai-rem",
     instructions=(
-        "Langzeit-Gedächtnis als Knowledge Graph. Einzige Quelle für persistenten Kontext — Auto-Memory ist deaktiviert.\n\n"
+        "Langzeit-Gedächtnis als Knowledge Graph. Einzige Quelle für persistenten Kontext — Claude Codes natives Markdown-Auto-Memory ist deaktiviert.\n\n"
         "## Kontext holen\n"
         "memory_get_context für offene Tasks/Projekte/letzte Einträge, memory_search für gezielte Themen. "
         "Vor Rückfragen immer erst in ai-rem prüfen ob die Info schon da ist.\n\n"

@@ -237,7 +237,7 @@ def check_ai_rem():
         sid = resp.headers.get("mcp-session-id")
         resp.read()
         if not sid:
-            results.append("ai-rem: nicht erreichbar")
+            results.append("ai-rem ✗ nicht erreichbar")
             return
 
         try:
@@ -254,29 +254,9 @@ def check_ai_rem():
             o = json.loads(m.group(1) if m else raw)
             return o.get("result", {}).get("content", [{}])[0].get("text", "")
 
-        def rest_tool(name, args=None):
-            # Admin-Ops (z.B. memory_status) liegen nicht mehr im MCP-tools/list-
-            # Surface (Issue #32) — ueber die REST-Route /api/tool aufrufen.
-            base = (AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp")
-                    else AI_REM_ENDPOINT.rstrip("/"))
-            headers = {"Content-Type": "application/json"}
-            if AI_REM_TOKEN:
-                headers["Authorization"] = f"Bearer {AI_REM_TOKEN}"
-            req = urllib.request.Request(
-                base + "/api/tool",
-                data=json.dumps({"name": name, "arguments": args or {}}).encode(),
-                headers=headers, method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=AI_REM_TIMEOUT) as r:
-                return json.loads(r.read().decode()).get("result", "")
-
-        # MCP-Session steht bereits (initialize ok) → Server erreichbar. Der Status-
-        # String kommt jetzt ueber /api/tool; scheitert er, bleibt "erreichbar".
-        try:
-            text = rest_tool("memory_status")
-        except Exception:
-            text = ""
-        results.append(text if text else "ai-rem: erreichbar")
+        # MCP-Session steht (initialize ok) → Transport, Auth und DB sind in Ordnung.
+        # Zaehlstaende sagen am Sessionstart nichts, darum nur der Status.
+        results.append("ai-rem ✓")
         # Offene Tasks/Plaene fuer die Anzeige nachladen (best effort, blockiert nie).
         try:
             global open_tasks_md
@@ -284,7 +264,7 @@ def check_ai_rem():
         except Exception:
             pass
     except Exception:
-        results.append("ai-rem: nicht erreichbar")
+        results.append("ai-rem ✗ nicht erreichbar")
 
 
 def check_smb():
@@ -553,42 +533,27 @@ def _auto_memory_fault(base):
     return ""
 
 
+def _auto_memory_registered():
+    """Ist der auto-memory-Hook ueberhaupt in settings.json eingetragen? Wer ihn bewusst
+    abgeschaltet hat, soll keine Stoerungsmeldung fuer ein nicht laufendes Feature sehen."""
+    try:
+        with open(SETTINGS, encoding="utf-8") as f:
+            return "auto-memory.py" in f.read()
+    except OSError:
+        return False
+
+
 def check_auto_memory():
-    """Sichtbarkeit: was der Extraktor zuletzt gespeichert hat + offene md-Fallback-Queue.
+    """Status des Auto-Memory-Extraktors: ok oder gestoert. Details (Entity-Namen,
+    Zaehlstaende) bleiben in last-run.json — am Sessionstart zaehlt nur, ob er laeuft.
 
     Rueckgabe: Warntext bei Stoerung (geht als additionalContext in den Kontext,
     damit nicht nur die Statuszeile es zeigt), sonst "".
     """
-    base = os.path.join(CLAUDE_DIR, "auto-memory")
-    parts = []
-    try:
-        with open(os.path.join(base, "last-run.json")) as f:
-            d = json.load(f)
-        n = d.get("entity_count", len(d.get("entities", [])))
-        tag = " (md-Fallback)" if d.get("mode") == "md" else ""
-        ents = d.get("entities") or []
-        shown = ", ".join(ents[:4]) + ("…" if len(ents) > 4 else "")
-        applied = d.get("applied", 0)
-        line = f"🧠 {n} Entities, {d.get('relations', 0)} Rel{tag}"
-        if applied:
-            line += f", {applied} applied"
-        if shown:
-            line += f" → {shown}"
-        parts.append(line)
-    except Exception:
-        pass
-    try:
-        with open(os.path.join(base, "pending.jsonl")) as f:
-            c = sum(1 for line in f if line.strip())
-        if c:
-            parts.append(f"{c} md-pending")
-    except Exception:
-        pass
-    fault = _auto_memory_fault(base)
-    if fault:
-        parts.append("🧠 ✗ gestört")
-    if parts:
-        results.append(" ".join(parts))
+    if not _auto_memory_registered():
+        return ""
+    fault = _auto_memory_fault(os.path.join(CLAUDE_DIR, "auto-memory"))
+    results.append("Auto-Memory ✗ gestört" if fault else "Auto-Memory ✓")
     return fault
 
 

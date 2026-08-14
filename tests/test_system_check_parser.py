@@ -44,6 +44,27 @@ def test_ohne_sektion_leer():
     assert sc.offene_tasks_section("## Projekte\n- [aktiv] **X**: y") == ""
 
 
+def test_auto_memory_status_nur_wenn_hook_registriert(tmp_path):
+    """Ohne Eintrag in settings.json ist Auto-Memory bewusst aus — dann weder
+    Statuszeile noch Stoerungsmeldung."""
+    orig, sc.results[:] = sc.SETTINGS, []
+    try:
+        aus = tmp_path / "aus.json"
+        aus.write_text('{"hooks": {}}')
+        sc.SETTINGS = str(aus)
+        assert sc.check_auto_memory() == ""
+        assert sc.results == []
+
+        an = tmp_path / "an.json"
+        an.write_text('{"hooks": {"SessionEnd": "~/.claude/hooks/auto-memory.py"}}')
+        sc.SETTINGS = str(an)
+        sc.check_auto_memory()
+        assert sc.results and sc.results[0].startswith("Auto-Memory ")
+        assert "🧠" not in sc.results[0]
+    finally:
+        sc.SETTINGS, sc.results[:] = orig, []
+
+
 if __name__ == "__main__":
     test_header_mit_zaehler_wird_erkannt()
     test_ohne_sektion_leer()

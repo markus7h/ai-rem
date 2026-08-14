@@ -64,7 +64,7 @@ The setup script writes only a **minimal pointer** to `~/.claude/CLAUDE.md`:
 
 ```markdown
 ## ai-rem
-ai-rem is the only knowledge source for persistent context. Auto-memory is disabled.
+ai-rem is the only knowledge source for persistent context. Claude Code's native markdown auto-memory is disabled.
 Usage rules come via MCP Server Instructions, behavioural rules from ai-rem Preferences.
 
 <!-- Auto-memory md-fallback: filled when llama-server is down, emptied by catchup -->
