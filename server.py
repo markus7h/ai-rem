@@ -15,6 +15,7 @@ import logging
 import os
 import queue
 import re
+import socket
 import sys
 import threading
 import time
@@ -3655,10 +3656,24 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    host = os.getenv("HOST", "0.0.0.0")
+    host = os.getenv("HOST", "::")
     port = int(os.getenv("PORT", "3456"))
     log.info("Starting ai-rem MCP server on %s:%d (auth: token+loopback)", host, port)
 
     app = mcp.http_app()
     app.add_middleware(AuthMiddleware)
-    uvicorn.run(app, host=host, port=port)
+
+    # Socket selbst binden statt uvicorn(host=...): uvicorn ginge ueber asyncio,
+    # das bei "::" IPV6_V6ONLY setzt — der Dienst waere IPv6-only und der
+    # published IPv4-Port des Containers truege nichts mehr. Mit V6ONLY=0 nimmt
+    # derselbe Socket IPv6 und IPv4-mapped Verbindungen an.
+    # Referenz halten: inline wuerde der GC das Objekt einsammeln und den fd
+    # schliessen ("Socket operation on non-socket").
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if family == socket.AF_INET6:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    sock.bind((host, port))
+    sock.listen(128)
+    uvicorn.run(app, fd=sock.fileno())
