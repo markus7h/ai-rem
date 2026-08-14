@@ -40,8 +40,13 @@ AI_REM_ENDPOINT = os.environ.get(
     "AI_REM_ENDPOINT", TMPL.get("ai_rem_endpoint", "")
 )
 AI_REM_TIMEOUT = 5
+# Gleicher Vorrang wie in lib/extractor.py: AI_REM_LLAMA_URL ist der aktuelle
+# Name, AI_REM_OLLAMA_URL bleibt als Alt-Name gueltig. Ohne die erste Variante
+# lief der Check gegen settings-template/Default weiter, obwohl die Umgebung
+# AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ✗" im SessionStart-Report.
 AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myubuntu:11434")
+    "AI_REM_LLAMA_URL",
+    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myubuntu:11434")),
 )
 
 

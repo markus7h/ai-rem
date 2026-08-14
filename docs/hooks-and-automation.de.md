@@ -44,7 +44,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Konfigurations-Env:**
 - `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)
-- `AI_REM_OLLAMA_URL` — llama-server-Basis-URL (OpenAI-kompatibel, `/v1` wird intern angehängt; Env hat Vorrang; sonst `ollama_url` aus setup-config / settings-template; default `http://myubuntu:11434`); Modell ist fix via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`), da llama-server genau ein Modell hostet
+- `AI_REM_LLAMA_URL` (Alt-Name: `AI_REM_OLLAMA_URL`) — llama-server-Basis-URL (OpenAI-kompatibel, `/v1` wird intern angehängt; Env hat Vorrang, dabei `AI_REM_LLAMA_URL` vor `AI_REM_OLLAMA_URL`; sonst `ollama_url` aus setup-config / settings-template; default `http://myubuntu:11434`); Modell ist fix via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`), da llama-server genau ein Modell hostet
 - `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`). Das Setup trägt hier `~/.local/share/ai-rem/bin/ai-rem` ein, die lokal installierte Kopie. Zeigt der Wert stattdessen in einen Clone auf einem Netzlaufwerk, bricht der Hook bei jedem Session-Ende still mit `ai-rem CLI not found` ab, sobald der Mount hängt — dann `/setup` erneut laufen lassen. Gehört in den `env`-Block von `~/.claude/settings.json`, damit Hooks ihn erben.
 
 ---
