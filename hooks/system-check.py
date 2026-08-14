@@ -171,32 +171,26 @@ TOOLS_SCRIPTS = TMPL.get("tools_scripts_dir", "")
 results = []
 open_tasks_md = ""  # gefuellt von check_ai_rem(): offene Tasks/Plaene fuer die Anzeige
 
-# Erledigte Eintraege ausblenden — am Session-Start zaehlt nur, was noch offen ist.
-DONE_TAGS = {"abgeschlossen", "erledigt", "done", "fertig"}
-
-
 def offene_tasks_section(ctx):
-    """Aus dem memory_get_context-Markdown die '## Offene Tasks'-Sektion ziehen und
-    abgeschlossene Zeilen filtern. Enthaelt auch die per ExitPlanMode gespeicherten
-    Plaene (als Task-Entities). Gibt formatierten Block oder '' zurueck."""
-    in_sec = False
+    """Aus dem memory_get_context-Markdown die '## Offene Tasks'-Sektion ziehen.
+    Header traegt Zaehler und ggf. Kontext-Label ('## Offene Tasks [private] (12)'),
+    darum Prefix-Match und Original-Header uebernehmen. Erledigtes filtert der
+    Server bereits (_DONE_STATUSES). Gibt Block oder '' zurueck."""
+    header = ""
     out = []
     for line in ctx.splitlines():
         if line.startswith("## "):
-            if line.strip() == "## Offene Tasks":
-                in_sec = True
+            if line.startswith("## Offene Tasks"):
+                header = line.strip()
                 continue
-            if in_sec:
+            if header:
                 break  # naechste Sektion -> Ende
             continue
-        if not in_sec:
-            continue
-        m = re.match(r"^- \[([^\]]*)\]", line)
-        if m and m.group(1).strip().lower() in DONE_TAGS:
+        if not header:
             continue
         if line.strip():
             out.append(line)
-    return "## Offene Tasks\n" + "\n".join(out) if out else ""
+    return header + "\n" + "\n".join(out) if out else ""
 
 
 INIT_MSG = json.dumps({

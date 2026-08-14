@@ -2509,7 +2509,7 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
 
     Liefert (task_name, descr, status, project_name|None). Ein Task ohne
     Project-Relation hat project_name=None; mit mehreren Projekten erscheint er
-    pro Project einmal. 'Offen' = Status nicht in erledigt/done/closed.
+    pro Project einmal. 'Offen' = Status nicht in _DONE_STATUSES.
     ponytail: ungerichteter Rel-Match (Task↔Project), ein Task hat real ein Projekt.
     """
     ctx_param: dict = {"ctx": context} if context else {}
@@ -2530,7 +2530,7 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
             status = (json.loads(extra_s or "{}").get("status") or "offen")
         except json.JSONDecodeError:
             status = "offen"
-        if status.lower() in ("erledigt", "done", "closed"):
+        if status.lower() in _DONE_STATUSES:  # weiter unten definiert, lazy aufgeloest
             continue
         out.append((name, descr or "", status, proj))
     return out
@@ -2633,6 +2633,9 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
             f"- **{g}** — {len(names)} offen"
             for g, names in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
         ]
+        if not topic:  # beim Drill-down stehen die Namen ohnehin ausgeklappt darueber
+            recent = list(dict.fromkeys(name for name, _d, _s, _p in open_tasks))[:5]
+            lines.append("Zuletzt: " + " · ".join(recent))
         sections.append(
             f"## Offene Tasks{ctx_label} ({total})\n" + "\n".join(lines)
             + "\n→ Details: `memory_get_context(topic=\"<Projekt>\")`"
