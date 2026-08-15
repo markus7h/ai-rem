@@ -2109,11 +2109,14 @@ EMBED_MAX_CHARS = int(os.getenv("EMBED_MAX_CHARS", "2000"))
 # via fastembed verifiziert; e5-small ist NICHT verfügbar. Upgrade-Pfad: jina-v2-base-de.
 EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 # MiniLM/jina-Cosines sind breit gestreut → ~0.45; e5/nomic bräuchten ~0.82.
-# bge-m3 liegt dazwischen: an 25 echten Entities gemessen (Query=Name gegen
-# "Name: Beschreibung") lagen Selbsttreffer bei 0.55–0.90 (Median 0.74), fremde
-# Paare bei 0.21–0.65 (Median 0.35). 0.55 haelt den vollen Recall bei ~1.5%
-# Rauschen; 0.60 verliert bereits Treffer.
-EMBED_THRESHOLD = float(os.getenv("EMBED_THRESHOLD") or (0.55 if EMBED_URL else 0.45))
+# bge-m3 liegt knapp darueber. Der erste Ansatz (0.55) war an Entity-NAMEN als Query
+# kalibriert — die stehen woertlich in der Passage und schoenen die Trennschaerfe.
+# Gegen Paraphrasen, wie Nutzer wirklich fragen ("Passwort-Manager" statt
+# "mykeyvault"), liegen die richtigen Treffer bei 0.43–0.66, viele knapp ueber 0.50;
+# fremde Paare bei 0.21–0.65 (p95 0.48). Darum 0.50: die Suche ist lexik-first, die
+# semantischen Treffer fuellen nur auf — ein Kandidat zu viel kostet weniger als ein
+# verpasster.
+EMBED_THRESHOLD = float(os.getenv("EMBED_THRESHOLD") or (0.50 if EMBED_URL else 0.45))
 # Nur e5/nomic brauchen "query: "/"passage: "-Präfixe; MiniLM/jina ohne → Default leer.
 EMBED_QUERY_PREFIX = os.getenv("EMBED_QUERY_PREFIX", "")
 EMBED_PASSAGE_PREFIX = os.getenv("EMBED_PASSAGE_PREFIX", "")
