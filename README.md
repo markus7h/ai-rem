@@ -120,10 +120,11 @@ Semantic search needs vectors. By default they are computed **inside the contain
 moves that work out of the container and allows the `-slim` image, which ships without
 fastembed and the model (413 MB → 162 MB).
 
-Either way the search is **lexical-first**: substring hits are always computed locally,
-semantic hits only top up the result list. So if the external endpoint is unreachable,
-entries are stored without a vector and search keeps working — the startup/nightly
-backfill fills the gaps once the service is back.
+Either way the search is **hybrid**: substring hits (computed locally) and semantic
+hits are merged by reciprocal-rank fusion — entries corroborated by several signals rank
+first, name matches beat description matches. If the external endpoint is unreachable,
+entries are stored without a vector and search keeps working lexically — the
+startup/nightly backfill fills the gaps once the service is back.
 
 Switching backends changes the vector dimension (384 ↔ 1024), which makes the stored
 vectors meaningless. The server detects that on the next backfill and recomputes **all**

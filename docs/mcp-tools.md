@@ -19,7 +19,7 @@ route. Setting `AI_REM_ADMIN_TOOLS=1` on the server re-registers all twelve as M
 | Tool | Description |
 |---|---|
 | `memory_get_context(topic, context, include_archived)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
-| `memory_search(query, context, include_archived, limit)` | Hybrid search over name + description: per-token lexical matching plus semantic vector recall (finds multi-word queries even when the words aren't contiguous) |
+| `memory_search(query, context, include_archived, limit)` | Hybrid search over name + description: full-query and per-token lexical matching fused with semantic vector recall via reciprocal-rank fusion — corroborated entries rank first, name matches beat description matches |
 | `memory_add(name, type, description, extra, context, pinned, supersedes)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context`. Updating a changed `description` snapshots the previous state into `extra.history[]` (last 10, newest first). `supersedes="<old name>"` archives that entry and links it via `VERALTET_DURCH` |
 | `memory_relate(from, relation, to, extra)` | Create a relationship between two entities |
 

@@ -117,10 +117,12 @@ Die semantische Suche braucht Vektoren. Standardmäßig entstehen sie **im Conta
 mit `bge-m3`), wandert die Rechenarbeit nach außen und das `-slim`-Image wird nutzbar,
 das ohne fastembed und Modell kommt (413 MB → 162 MB).
 
-In beiden Fällen sucht ai-rem **lexikalisch zuerst**: Substring-Treffer entstehen immer
-lokal, semantische Treffer füllen die Liste nur auf. Ist der externe Endpoint nicht
-erreichbar, werden Einträge ohne Vektor gespeichert und die Suche funktioniert weiter —
-der Backfill beim Start und im Nightly-Lauf holt die fehlenden Vektoren nach.
+In beiden Fällen sucht ai-rem **hybrid**: Substring-Treffer (lokal berechnet) und
+semantische Treffer werden per Reciprocal-Rank-Fusion verschmolzen — Einträge, die
+mehrere Signale bestätigen, stehen vorn, Name-Treffer schlagen Beschreibungs-Treffer.
+Ist der externe Endpoint nicht erreichbar, werden Einträge ohne Vektor gespeichert und
+die Suche funktioniert lexikalisch weiter — der Backfill beim Start und im Nightly-Lauf
+holt die fehlenden Vektoren nach.
 
 Ein Backendwechsel ändert die Vektor-Dimension (384 ↔ 1024) und macht gespeicherte
 Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechnet
