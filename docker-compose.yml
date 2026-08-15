@@ -54,6 +54,9 @@ services:
       # ist der Dienst nicht erreichbar, faellt die Suche auf rein lexikalisch zurueck.
       - EMBED_URL=${EMBED_URL:-}
       - EMBED_HTTP_MODEL=${EMBED_HTTP_MODEL:-bge-m3}
+      # Laengenbremse: llama.cpp lehnt zu lange Eingaben mit HTTP 500 ab, statt sie
+      # wie fastembed still zu kappen — das riss sonst ganze Backfill-Chunks mit.
+      - EMBED_MAX_CHARS=${EMBED_MAX_CHARS:-2000}
       # Cosine-Schwelle der semantischen Treffer. Leer = passender Default je
       # Backend (0.45 in-process, 0.55 fuer bge-m3).
       - EMBED_THRESHOLD=${EMBED_THRESHOLD:-}

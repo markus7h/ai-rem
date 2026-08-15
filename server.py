@@ -2098,6 +2098,13 @@ EMBED_ENABLED = os.getenv("EMBED_ENABLED", "1") != "0"
 EMBED_URL = os.getenv("EMBED_URL", "")
 EMBED_HTTP_MODEL = os.getenv("EMBED_HTTP_MODEL", "bge-m3")
 EMBED_HTTP_TIMEOUT = float(os.getenv("EMBED_HTTP_TIMEOUT", "30"))
+# Laengenbremse vor dem Embedden. fastembed kappt zu lange Texte still bei der
+# Modellgrenze (MiniLM: 512 Token); llama.cpp antwortet stattdessen mit HTTP 500
+# ("input (N tokens) is too large ... current batch size: 1024") und riss damit den
+# ganzen Backfill-Chunk mit. Gemessen gegen bge-m3@llama.cpp: 3000 Zeichen gehen
+# durch, ab ~4100 kippt es; 2000 liegt sicher darunter und immer noch ueber dem,
+# was MiniLM je gesehen hat. Fuer die Suche zaehlt ohnehin der Anfang eines Eintrags.
+EMBED_MAX_CHARS = int(os.getenv("EMBED_MAX_CHARS", "2000"))
 # MiniLM-L12 multilingual (0.22GB, DE+EN, leichtgewichtig für 1g-Container). Catalog
 # via fastembed verifiziert; e5-small ist NICHT verfügbar. Upgrade-Pfad: jina-v2-base-de.
 EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
@@ -2156,13 +2163,20 @@ def _embed_http(texts: list[str]) -> list:
     "lexikalische Suche traegt" — ein zweiter Fang hier wuerde daraus stillen Unsinn
     machen (leere Vektorliste statt erkennbarem Ausfall).
     """
+    import urllib.error
     import urllib.request
     req = urllib.request.Request(
         EMBED_URL,
         data=json.dumps({"input": texts, "model": EMBED_HTTP_MODEL}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=EMBED_HTTP_TIMEOUT) as r:
-        data = json.loads(r.read().decode())["data"]
+    try:
+        with urllib.request.urlopen(req, timeout=EMBED_HTTP_TIMEOUT) as r:
+            data = json.loads(r.read().decode())["data"]
+    except urllib.error.HTTPError as e:
+        # Der eigentliche Grund steht im Body ("input too large", Modell unbekannt,
+        # …), nicht im Statuscode — sonst steht im Log nur "HTTP Error 500".
+        raise RuntimeError(
+            f"{EMBED_URL} → HTTP {e.code}: {e.read().decode()[:300]}") from e
     # Die Reihenfolge der Antwort ist nicht garantiert — ueber index sortieren.
     return [d["embedding"] for d in sorted(data, key=lambda d: d.get("index", 0))]
 
@@ -2170,7 +2184,7 @@ def _embed_http(texts: list[str]) -> list:
 def _embed_texts(texts: list[str], prefix: str):
     """Liste Texte → L2-normalisierte float32-Matrix (N, D)."""
     import numpy as np
-    payload = [f"{prefix}{t}" for t in texts]
+    payload = [f"{prefix}{t}"[:EMBED_MAX_CHARS] for t in texts]
     vecs = _embed_http(payload) if EMBED_URL else list(_get_embed_model().embed(payload))
     arr = np.asarray(vecs, dtype="float32")
     norms = np.linalg.norm(arr, axis=1, keepdims=True)

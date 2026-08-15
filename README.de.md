@@ -104,6 +104,7 @@ AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im 
 EMBED_URL=                               # Leer = Embeddings im Container; gesetzt = OpenAI-kompatible /v1/embeddings-URL eines externen Dienstes
 EMBED_HTTP_MODEL=bge-m3                  # Modellname, der an EMBED_URL geschickt wird
 EMBED_THRESHOLD=                         # Cosine-Schwelle; leer = Default je Backend (0.45 in-process, 0.55 extern)
+EMBED_MAX_CHARS=2000                     # Text vor dem Embedden kappen (llama.cpp lehnt zu lange Eingaben ab, statt zu kürzen)
 AI_REM_TAG=latest                        # latest (Modell im Image) oder latest-slim (~250 MB kleiner, braucht EMBED_URL)
 MEM_LIMIT=1536m                          # Speicherlimit des Containers; ohne Modell genügen 512m
 ```
