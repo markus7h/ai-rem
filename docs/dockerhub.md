@@ -95,7 +95,7 @@ Set in the Compose `.env`:
 | `AI_REM_OLLAMA_URL` | `http://myubuntu:11434` | llama-server (OpenAI-compatible) for nightly cleanup / extraction |
 | `EMBED_URL` | — | Embedding backend. Empty = in-process (fastembed/MiniLM, bundled in `latest`). Set to an OpenAI-compatible `/v1/embeddings` URL to use an external service — required for `-slim` images. Switching backends re-computes all vectors on the next start; if the endpoint is down, entries are stored without a vector and the backfill catches up later |
 | `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |
-| `EMBED_THRESHOLD` | `0.45` / `0.55` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |
+| `EMBED_THRESHOLD` | `0.45` / `0.50` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |
 | `EMBED_MAX_CHARS` | `2000` | Input is truncated to this length before embedding. fastembed truncates silently at the model limit; llama.cpp rejects oversized input with HTTP 500 instead |
 | `EMBED_ENABLED` | `1` | `0` disables semantic search entirely (lexical only) |
 

@@ -58,7 +58,7 @@ services:
       # wie fastembed still zu kappen — das riss sonst ganze Backfill-Chunks mit.
       - EMBED_MAX_CHARS=${EMBED_MAX_CHARS:-2000}
       # Cosine-Schwelle der semantischen Treffer. Leer = passender Default je
-      # Backend (0.45 in-process, 0.55 fuer bge-m3).
+      # Backend (0.45 in-process, 0.50 fuer bge-m3).
       - EMBED_THRESHOLD=${EMBED_THRESHOLD:-}
     # Betrieb ~700 MiB (Embedding-Modell ~575 + kuzu ~32 + Python). WAL wird klein
     # gehalten (KUZU_WAL_CHECKPOINT_MB), daher kein 2.4-GiB-Recovery-Peak mehr.
