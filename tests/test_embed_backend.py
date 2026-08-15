@@ -2,13 +2,15 @@
 
 Der Wechsel zwischen in-process fastembed (384 Dim) und einem externen Dienst ueber
 EMBED_URL (bge-m3, 1024 Dim) ist ein STILLER Fehlerfall: die Suche bleibt "an",
-vergleicht aber Vektoren aus zwei Geometrien. Darum drei Faelle, die genau das
-absichern.
+vergleicht aber Vektoren aus zwei Geometrien. Dazu kommen die Faelle, in denen der
+externe Dienst sich anders verhaelt als fastembed: er faellt aus, er antwortet in
+beliebiger Reihenfolge, und er lehnt zu lange Eingaben ab statt sie still zu kappen.
 
 Laeuft wie test_embed_backfill_chunking.py im SUBPROZESS mit eigener Temp-DB: die
 Szenarien stubben Modul-Globals, das darf die anderen Testmodule nicht treffen, die
 sich ueber den pytest-Modulcache eine server-Instanz teilen.
 """
+import io
 import json
 import os
 import subprocess
@@ -120,16 +122,23 @@ def test_backend_ausfall_ist_fail_soft():
     _run("fail_soft")
 
 
+def _load_embed_funcs(**konstanten):
+    """Nur die Embedding-Funktionen aus server.py in einen eigenen Namespace holen —
+    ohne kuzu/fastmcp zu importieren, damit diese Tests ohne DB und ohne Netz laufen."""
+    src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
+    ns = {"json": json, "EMBED_URL": "http://embed.test/v1/embeddings",
+          "EMBED_HTTP_MODEL": "bge-m3", "EMBED_HTTP_TIMEOUT": 5,
+          "EMBED_MAX_CHARS": 2000, **konstanten}
+    for name in ("_embed_http", "_embed_texts"):
+        start = src.index(f"def {name}(")
+        exec(compile(src[start:src.index("\ndef ", start + 1)], "server.py", "exec"), ns)
+    return ns
+
+
 def test_embed_http_sortiert_nach_index():
     """Die Antwort eines /v1/embeddings-Endpoints ist nicht garantiert in
     Eingabereihenfolge — sonst bekaeme die falsche Entity den falschen Vektor."""
-    import importlib.util
-    os.environ.setdefault("AI_REM_API_TOKEN", "test-token")
-    src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
-    ns = {"json": json, "EMBED_URL": "http://embed.test/v1/embeddings",
-          "EMBED_HTTP_MODEL": "bge-m3", "EMBED_HTTP_TIMEOUT": 5}
-    start = src.index("def _embed_http(")
-    exec(compile(src[start:src.index("\ndef ", start + 1)], "server.py", "exec"), ns)
+    ns = _load_embed_funcs()
 
     antwort = json.dumps({"data": [
         {"index": 1, "embedding": [0.4, 0.5, 0.6]},
@@ -152,7 +161,40 @@ def test_embed_http_sortiert_nach_index():
         assert ns["_embed_http"](["erst", "zweit"]) == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
     finally:
         urllib.request.urlopen = orig
-    assert importlib.util.find_spec("urllib.request") is not None
+
+
+def test_embed_http_meldet_serverantwort_im_fehler():
+    """Bei HTTP 500 steht der Grund im Body ("input too large"), nicht im Status —
+    ohne ihn stand im Log nur "HTTP Error 500" und der Backfill-Abbruch war blind."""
+    ns = _load_embed_funcs()
+    import urllib.error
+    import urllib.request
+
+    def _boom(*a, **k):
+        raise urllib.error.HTTPError(
+            "http://embed.test", 500, "Internal Server Error", {},
+            io.BytesIO(b'{"error":{"message":"input (3202 tokens) is too large"}}'))
+
+    orig, urllib.request.urlopen = urllib.request.urlopen, _boom
+    try:
+        try:
+            ns["_embed_http"](["zu lang"])
+            raise AssertionError("Fehler wurde verschluckt")
+        except RuntimeError as e:
+            assert "500" in str(e) and "too large" in str(e), e
+    finally:
+        urllib.request.urlopen = orig
+
+
+def test_embed_texts_kappt_lange_texte():
+    """Ein einzelner ueberlanger Text riss den ganzen Backfill-Chunk mit (llama.cpp
+    antwortet mit 500 statt still zu kuerzen wie fastembed)."""
+    gesehen = []
+    ns = _load_embed_funcs()
+    ns["_embed_http"] = lambda texts: gesehen.extend(texts) or [[0.1, 0.2] for _ in texts]
+    ns["_embed_texts"](["x" * 9000, "kurz"], "")
+    assert len(gesehen[0]) == ns["EMBED_MAX_CHARS"], len(gesehen[0])
+    assert gesehen[1] == "kurz"
 
 
 if __name__ == "__main__":
