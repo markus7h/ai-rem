@@ -1,6 +1,8 @@
 services:
   ai-rem:
-    image: magic3arkus/ai-rem:latest
+    # :latest bringt das in-process Embedding-Modell mit (laeuft ohne externen
+    # Dienst). :latest-slim ist ~250 MB kleiner und setzt EMBED_URL voraus.
+    image: magic3arkus/ai-rem:${AI_REM_TAG:-latest}
     build: .
     container_name: ai-rem
     networks:
@@ -44,9 +46,21 @@ services:
       # (backup_<ts>.json.enc), leer → Klartext wie bisher. Quelle: mykeyvault
       # (Item ai-rem-backup-key), via deploy.sh in die .env geschrieben.
       - AI_REM_BACKUP_KEY=${AI_REM_BACKUP_KEY:-}
+      # Embeddings für die semantische Suche. Leer = in-process (fastembed/MiniLM,
+      # im Image enthalten, kein externer Dienst). Gesetzt = OpenAI-kompatibler
+      # Endpoint, z.B. http://myai:11435/v1/embeddings — dann laesst sich das
+      # kleinere Image :latest-slim nutzen (ohne fastembed und Modell).
+      # Ein Wechsel rechnet beim naechsten Start alle Vektoren neu (andere Dimension);
+      # ist der Dienst nicht erreichbar, faellt die Suche auf rein lexikalisch zurueck.
+      - EMBED_URL=${EMBED_URL:-}
+      - EMBED_HTTP_MODEL=${EMBED_HTTP_MODEL:-bge-m3}
+      # Cosine-Schwelle der semantischen Treffer. Leer = passender Default je
+      # Backend (0.45 in-process, 0.55 fuer bge-m3).
+      - EMBED_THRESHOLD=${EMBED_THRESHOLD:-}
     # Betrieb ~700 MiB (Embedding-Modell ~575 + kuzu ~32 + Python). WAL wird klein
     # gehalten (KUZU_WAL_CHECKPOINT_MB), daher kein 2.4-GiB-Recovery-Peak mehr.
-    mem_limit: 1536m
+    # Mit EMBED_URL + :latest-slim faellt das Modell weg → 512m reichen.
+    mem_limit: ${MEM_LIMIT:-1536m}
     healthcheck:
       # /health ist public (kein Token) — bewusst, damit der Healthcheck ohne Secret auskommt.
       test: ["CMD-SHELL", "python -c \"import urllib.request,os; p=os.getenv('PORT','3456'); urllib.request.urlopen(f'http://localhost:{p}/health',timeout=3)\""]

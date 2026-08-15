@@ -104,7 +104,29 @@ KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu buffer pool in MiB (0 = default:
 KUZU_WAL_CHECKPOINT_MB=2                  # self-checkpoint the WAL above this size (0/empty = off)
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
 AI_REM_LOG_RING=500                       # Lines of server log kept in memory for /logs
+EMBED_URL=                                # Empty = in-process embeddings; set to an OpenAI-compatible /v1/embeddings URL for an external service
+EMBED_HTTP_MODEL=bge-m3                   # Model name sent to EMBED_URL
+EMBED_THRESHOLD=                          # Cosine cut-off; empty = per-backend default (0.45 in-process, 0.55 external)
+AI_REM_TAG=latest                         # latest (bundled embedding model) or latest-slim (~250 MB smaller, requires EMBED_URL)
+MEM_LIMIT=1536m                           # Container memory limit; 512m is enough without the bundled model
 ```
+
+### Embeddings: in-process or external
+
+Semantic search needs vectors. By default they are computed **inside the container**
+(fastembed/MiniLM, model baked into the image) — nothing else has to run. Setting
+`EMBED_URL` to an OpenAI-compatible endpoint (e.g. a llama.cpp server serving `bge-m3`)
+moves that work out of the container and allows the `-slim` image, which ships without
+fastembed and the model (413 MB → 162 MB).
+
+Either way the search is **lexical-first**: substring hits are always computed locally,
+semantic hits only top up the result list. So if the external endpoint is unreachable,
+entries are stored without a vector and search keeps working — the startup/nightly
+backfill fills the gaps once the service is back.
+
+Switching backends changes the vector dimension (384 ↔ 1024), which makes the stored
+vectors meaningless. The server detects that on the next backfill and recomputes **all**
+vectors — no manual migration, and it works in both directions.
 
 > **Note (memory):** Without `KUZU_BUFFER_POOL_SIZE_MB`, kuzu sizes its buffer pool to
 > ~80 % of **host** RAM and ignores the container `mem_limit`. Normal operation on this

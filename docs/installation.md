@@ -42,7 +42,8 @@ ai-rem/
 │                               #   release-history.md (archived notes ≤ v0.1.5)
 ├── deploy.sh                   # Deploy to the home server (scp + remote build + recreate)
 ├── .github/workflows/          # Docker Hub publish on v* tags
-├── requirements.txt            # fastmcp, kuzu, fastembed
+├── requirements.txt            # fastmcp, kuzu, numpy, cryptography
+├── requirements-embed.txt      # fastembed — only installed in the full image, not in :slim
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example                # Configuration template
