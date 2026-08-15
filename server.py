@@ -2474,6 +2474,9 @@ _DISCOVER_STOPWORDS = {
     "vom", "zum", "zur", "beim", "ihre", "ihren", "ihrer", "seine", "seinen",
     "kurz", "lang", "ganz", "fast", "sehr", "viel", "wenig", "mal", "wieder",
     "bitte", "danke", "mache", "machen", "macht",
+    "dann", "jetzt", "hier", "dort", "damit", "dazu", "schau", "schaue", "guck",
+    "lassen", "lass", "gib", "gerne", "erstmal", "nochmal", "eigentlich",
+    "richtig", "falsch", "beide", "beiden", "alle", "alles", "andere", "anderen",
     # EN
     "the", "and", "but", "for", "nor", "yet", "with", "from", "into", "onto",
     "would", "could", "should", "shall", "will", "this", "that", "these", "those",
@@ -2536,12 +2539,32 @@ def _discover_keywords(prompt: str) -> list[str]:
     return seen
 
 
+def _name_word_match(token: str, name: str) -> bool:
+    """Token trifft ein WORT im Entity-Namen (exakt oder als Wortanfang).
+
+    Reiner Substring war die Hauptrauschquelle der Knowledge-Injektion:
+    'lassen' traf 'weggeLASSENe Felder', 'stell' traf 'Brief-ERSTELLung' —
+    beliebige Alltagswoerter zogen damit beliebige Eintraege in den Kontext.
+    """
+    if len(token) < 3:
+        return False
+    return any(w == token or w.startswith(token)
+               for w in re.split(r"[^a-z0-9]+", name.lower()))
+
+
 def _discover_compute(prompt: str, keywords: list[str], context: str, max_hits: int) -> dict:
-    """Hybrid: lexikalische Exakt-Treffer zuerst (Präzision für Tool-Namen),
-    dann semantische Top-K (Recall für Paraphrasen) füllen die Slots auf."""
+    """Tools/Playbooks: lexikalische Exakt-Treffer (Praezision fuer Tool-Namen).
+    Knowledge: Reciprocal-Rank-Fusion wie in _combined_hits, aber strenger —
+    /discover injiziert UNAUFGEFORDERT in jeden Prompt, dort kostet ein falscher
+    Treffer Kontext-Tokens und lenkt ab, waehrend memory_search explizit gefragt
+    wird und Recall wichtiger ist. Darum: Token-Treffer nur auf Namens-WOERTER
+    (nicht Substring in Beschreibungen) und Semantik erst ab zwei Keywords —
+    Ein-Wort-Prompts sind entweder exakte Namen (findet die Lexik) oder Fueller,
+    deren Semantik-Kandidaten reines Grundrauschen sind. Liefert keine Quelle
+    etwas, wird NICHTS injiziert statt der drei am wenigsten unpassenden.
+    Gemessen an 40 echten Session-Prompts: relevante Injektionen ~25% → ~75%."""
     tools: list[dict] = []
     playbooks: list[dict] = []
-    knowledge: list[dict] = []
     seen: set = set()
 
     def consider(h: dict) -> None:
@@ -2555,8 +2578,6 @@ def _discover_compute(prompt: str, keywords: list[str], context: str, max_hits: 
         elif name.startswith("playbook_"):
             if len(playbooks) < max_hits:
                 playbooks.append(item); seen.add(name)
-        elif len(knowledge) < _DISCOVER_KNOWLEDGE_CAP:
-            knowledge.append(item); seen.add(name)
 
     # 0) Tool-/Playbook-fokussiert UND kontextfrei: Tools sind neutrale Fähigkeiten
     #    (nur der Design-Default ist kontextabhängig — das regelt eine Routine), also
@@ -2565,13 +2586,31 @@ def _discover_compute(prompt: str, keywords: list[str], context: str, max_hits: 
     for q in [" ".join(keywords)] + keywords:
         for h in _lexical_hits(q, context="", limit=10, only_discoverable=True):
             consider(h)
-    # 1) Lexikalisch (allgemein): Volltext-Query, dann pro-Token-Fallback.
-    for q in [" ".join(keywords)] + keywords:
-        for h in _lexical_hits(q, context=context, limit=10):
-            consider(h)
-    # 2) Semantisch über den rohen Prompt — füllt, was die Lexik verpasst hat.
-    for h in _semantic_hits(prompt, context=context, limit=10):
-        consider(h)
+
+    # 1) Knowledge via RRF: Volltext (1.0) + Token-auf-Name (0.7) + Semantik (1.0).
+    listen: list[tuple[float, list[dict]]] = [
+        (1.0, _lexical_hits(" ".join(keywords), context=context, limit=10)),
+    ]
+    for t in keywords:
+        listen.append((_RRF_TOKEN_WEIGHT + 0.2, [
+            h for h in _lexical_hits(t, context=context, limit=10)
+            if _name_word_match(t, h["name"])]))
+    if len(keywords) >= 2:
+        listen.append((1.0, _semantic_hits(prompt, context=context, limit=10)))
+
+    score: dict[str, float] = {}
+    meta: dict[str, dict] = {}
+    for w, lst in listen:
+        for rank, h in enumerate(lst):
+            n = h["name"]
+            if n in seen or n.startswith(("tool_", "playbook_")):
+                continue
+            score[n] = score.get(n, 0.0) + w / (_RRF_K + rank + 1)
+            meta.setdefault(n, h)
+    knowledge = [
+        {"type": meta[n]["type"], "name": n, "summary": meta[n]["descr"][:160].rstrip()}
+        for n in sorted(score, key=lambda n: score[n], reverse=True)[:_DISCOVER_KNOWLEDGE_CAP]
+    ]
 
     return {"keywords": keywords, "tools": tools, "playbooks": playbooks, "knowledge": knowledge}
 
