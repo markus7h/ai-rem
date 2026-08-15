@@ -101,7 +101,29 @@ KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu Buffer-Pool in MiB (0 = Default: 80% Host-RAM)
 KUZU_WAL_CHECKPOINT_MB=2                 # WAL selbst mergen ab dieser Größe (0/leer = aus)
 AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im RAM gehalten werden
+EMBED_URL=                               # Leer = Embeddings im Container; gesetzt = OpenAI-kompatible /v1/embeddings-URL eines externen Dienstes
+EMBED_HTTP_MODEL=bge-m3                  # Modellname, der an EMBED_URL geschickt wird
+EMBED_THRESHOLD=                         # Cosine-Schwelle; leer = Default je Backend (0.45 in-process, 0.55 extern)
+AI_REM_TAG=latest                        # latest (Modell im Image) oder latest-slim (~250 MB kleiner, braucht EMBED_URL)
+MEM_LIMIT=1536m                          # Speicherlimit des Containers; ohne Modell genügen 512m
 ```
+
+### Embeddings: im Container oder extern
+
+Die semantische Suche braucht Vektoren. Standardmäßig entstehen sie **im Container**
+(fastembed/MiniLM, Modell ist ins Image gebacken) — es muss nichts weiter laufen. Wird
+`EMBED_URL` auf einen OpenAI-kompatiblen Endpoint gesetzt (z. B. ein llama.cpp-Server
+mit `bge-m3`), wandert die Rechenarbeit nach außen und das `-slim`-Image wird nutzbar,
+das ohne fastembed und Modell kommt (413 MB → 162 MB).
+
+In beiden Fällen sucht ai-rem **lexikalisch zuerst**: Substring-Treffer entstehen immer
+lokal, semantische Treffer füllen die Liste nur auf. Ist der externe Endpoint nicht
+erreichbar, werden Einträge ohne Vektor gespeichert und die Suche funktioniert weiter —
+der Backfill beim Start und im Nightly-Lauf holt die fehlenden Vektoren nach.
+
+Ein Backendwechsel ändert die Vektor-Dimension (384 ↔ 1024) und macht gespeicherte
+Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechnet
+**alle** Vektoren neu — ohne manuelle Migration, in beide Richtungen.
 
 > **Hinweis (Speicher):** Ohne `KUZU_BUFFER_POOL_SIZE_MB` dimensioniert kuzu seinen
 > Buffer-Pool auf ~80 % des **Host**-RAMs und ignoriert das Container-`mem_limit`.

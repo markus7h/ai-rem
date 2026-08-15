@@ -12,7 +12,8 @@ docker pull magic3arkus/ai-rem
 ```
 
 - **Source & full docs:** https://github.com/markus7h/ai-rem
-- **Supported tags:** `latest`, `vX.Y.Z` (one per release — see [GitHub Releases](https://github.com/markus7h/ai-rem/releases))
+- **Supported tags:** `latest`, `vX.Y.Z` — full image, embeddings run in-process, no external service needed.
+  `latest-slim`, `vX.Y.Z-slim` — same code without the bundled embedding model (~250 MB smaller, 413 → 162 MB); needs `EMBED_URL` pointing at an OpenAI-compatible `/v1/embeddings` endpoint, otherwise search stays purely lexical. One pair per release — see [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 - **Platforms:** `linux/amd64`, `linux/arm64`
 
 ---
@@ -92,6 +93,10 @@ Set in the Compose `.env`:
 | `BACKUP_DIR` | `/backups` | Backup files |
 | `MAX_BACKUPS` | `10` | Backups to keep |
 | `AI_REM_OLLAMA_URL` | `http://myubuntu:11434` | llama-server (OpenAI-compatible) for nightly cleanup / extraction |
+| `EMBED_URL` | — | Embedding backend. Empty = in-process (fastembed/MiniLM, bundled in `latest`). Set to an OpenAI-compatible `/v1/embeddings` URL to use an external service — required for `-slim` images. Switching backends re-computes all vectors on the next start; if the endpoint is down, entries are stored without a vector and the backfill catches up later |
+| `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |
+| `EMBED_THRESHOLD` | `0.45` / `0.55` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |
+| `EMBED_ENABLED` | `1` | `0` disables semantic search entirely (lexical only) |
 
 ---
 

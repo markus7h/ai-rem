@@ -57,10 +57,12 @@ def _scenario() -> None:
         "MATCH (e:Entity) WHERE e.embedding <> '' RETURN count(e)"))[0][0]
     assert int(filled) == ENTITIES, f"Vektoren fehlen: {filled}"
 
-    # Idempotent: zweiter Lauf findet nichts mehr und embeddet nicht erneut.
+    # Idempotent: zweiter Lauf findet nichts mehr nachzuholen. Der eine Aufruf ueber
+    # einen Text ist die Dimensions-Probe aus _embed_reset_on_dim_change (prueft, ob
+    # das Embedding-Backend gewechselt hat) — sie rechnet keine Entity neu.
     batches.clear()
     server._embed_backfill()
-    assert batches == [], f"zweiter Lauf embeddet erneut: {batches}"
+    assert batches == [1], f"zweiter Lauf embeddet erneut: {batches}"
 
     print("OK")
 

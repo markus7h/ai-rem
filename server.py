@@ -2086,17 +2086,27 @@ def memory_search_full(query: str, limit: int = 15, context: str = "", include_a
     return "\n".join(lines)
 
 
-# ─── Embeddings (semantische Suche, in-container via fastembed/ONNX) ───────────
+# ─── Embeddings (semantische Suche) ────────────────────────────────────────────
 # Vektoren liegen als JSON-Float-Liste in Entity.embedding, Suche per Brute-Force-
 # Cosine über eine in-memory numpy-Matrix (bei <~10k Entities <1ms, kein Index nötig).
-# Kein externer Dienst — alles im ai-rem-Container.
+# Zwei Backends: in-process via fastembed/ONNX (Default, kein externer Dienst) oder
+# ein OpenAI-kompatibler /v1/embeddings-Endpoint, wenn EMBED_URL gesetzt ist.
 
 EMBED_ENABLED = os.getenv("EMBED_ENABLED", "1") != "0"
+# Leer = in-process fastembed. Gesetzt (volle URL inkl. Pfad, z.B.
+# http://myai:11435/v1/embeddings) = externer Dienst, fastembed wird nie geladen.
+EMBED_URL = os.getenv("EMBED_URL", "")
+EMBED_HTTP_MODEL = os.getenv("EMBED_HTTP_MODEL", "bge-m3")
+EMBED_HTTP_TIMEOUT = float(os.getenv("EMBED_HTTP_TIMEOUT", "30"))
 # MiniLM-L12 multilingual (0.22GB, DE+EN, leichtgewichtig für 1g-Container). Catalog
 # via fastembed verifiziert; e5-small ist NICHT verfügbar. Upgrade-Pfad: jina-v2-base-de.
 EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 # MiniLM/jina-Cosines sind breit gestreut → ~0.45; e5/nomic bräuchten ~0.82.
-EMBED_THRESHOLD = float(os.getenv("EMBED_THRESHOLD", "0.45"))
+# bge-m3 liegt dazwischen: an 25 echten Entities gemessen (Query=Name gegen
+# "Name: Beschreibung") lagen Selbsttreffer bei 0.55–0.90 (Median 0.74), fremde
+# Paare bei 0.21–0.65 (Median 0.35). 0.55 haelt den vollen Recall bei ~1.5%
+# Rauschen; 0.60 verliert bereits Treffer.
+EMBED_THRESHOLD = float(os.getenv("EMBED_THRESHOLD") or (0.55 if EMBED_URL else 0.45))
 # Nur e5/nomic brauchen "query: "/"passage: "-Präfixe; MiniLM/jina ohne → Default leer.
 EMBED_QUERY_PREFIX = os.getenv("EMBED_QUERY_PREFIX", "")
 EMBED_PASSAGE_PREFIX = os.getenv("EMBED_PASSAGE_PREFIX", "")
@@ -2115,6 +2125,18 @@ _embed_dirty = True
 _embed_cache_lock = threading.Lock()
 
 
+def _warn_if_no_embed_backend() -> None:
+    """Das :slim-Image bringt fastembed nicht mit. Ohne EMBED_URL faellt die
+    semantische Suche dann still aus (die Aufrufer fangen den ImportError) — einmal
+    beim Start sagen, statt es nur im Recall zu merken."""
+    if not EMBED_ENABLED or EMBED_URL:
+        return
+    import importlib.util
+    if importlib.util.find_spec("fastembed") is None:
+        log.warning("Kein Embedding-Backend: fastembed nicht installiert und EMBED_URL "
+                    "nicht gesetzt — Suche laeuft rein lexikalisch.")
+
+
 def _get_embed_model():
     global _embed_model
     if _embed_model is None:
@@ -2126,11 +2148,30 @@ def _get_embed_model():
     return _embed_model
 
 
+def _embed_http(texts: list[str]) -> list:
+    """Vektoren von einem OpenAI-kompatiblen /v1/embeddings-Endpoint holen.
+
+    Bewusst OHNE eigenes try/except: die Aufrufer (_store_embedding, _semantic_hits,
+    _embed_backfill) fangen bereits und degradieren auf "Entity ohne Vektor" bzw.
+    "lexikalische Suche traegt" — ein zweiter Fang hier wuerde daraus stillen Unsinn
+    machen (leere Vektorliste statt erkennbarem Ausfall).
+    """
+    import urllib.request
+    req = urllib.request.Request(
+        EMBED_URL,
+        data=json.dumps({"input": texts, "model": EMBED_HTTP_MODEL}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=EMBED_HTTP_TIMEOUT) as r:
+        data = json.loads(r.read().decode())["data"]
+    # Die Reihenfolge der Antwort ist nicht garantiert — ueber index sortieren.
+    return [d["embedding"] for d in sorted(data, key=lambda d: d.get("index", 0))]
+
+
 def _embed_texts(texts: list[str], prefix: str):
     """Liste Texte → L2-normalisierte float32-Matrix (N, D)."""
     import numpy as np
-    model = _get_embed_model()
-    vecs = list(model.embed([f"{prefix}{t}" for t in texts]))
+    payload = [f"{prefix}{t}" for t in texts]
+    vecs = _embed_http(payload) if EMBED_URL else list(_get_embed_model().embed(payload))
     arr = np.asarray(vecs, dtype="float32")
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
@@ -2296,6 +2337,38 @@ def _semantic_hits(query: str, context: str = "", limit: int = 10) -> list[dict]
         return []
 
 
+def _embed_reset_on_dim_change() -> None:
+    """Nach einem Backend-Wechsel alle Vektoren einmal verwerfen, damit der Backfill
+    sie neu rechnet.
+
+    fastembed/MiniLM liefert 384 Dimensionen, bge-m3 ueber EMBED_URL 1024 — die
+    Cosine-Aehnlichkeit zwischen beiden ist bedeutungslos, und ein Mix aus beiden
+    laesst `matrix @ qv` gar nicht erst durchlaufen. Der Vergleich laeuft ueber die
+    tatsaechliche Dimension statt ueber einen gespeicherten Backend-Namen: das deckt
+    auch einen blossen Modellwechsel innerhalb desselben Backends ab.
+
+    Reihenfolge ist kritisch: erst die neue Dimension erfolgreich ermitteln, dann
+    loeschen. Andernfalls raeumt ein Ausfall des externen Dienstes die Vektoren aus
+    der DB, ohne neue rechnen zu koennen.
+    """
+    rows = _rows(db_exec(
+        "MATCH (e:Entity) WHERE e.embedding IS NOT NULL AND e.embedding <> '' "
+        "RETURN e.embedding LIMIT 1"))
+    if not rows:
+        return
+    try:
+        have = len(json.loads(rows[0][0]))
+    except (json.JSONDecodeError, TypeError):
+        return  # kaputter Eintrag — dafuer ist _graph_invariants zustaendig
+    want = len(_embed_texts(["dimensions-probe"], EMBED_PASSAGE_PREFIX)[0])
+    if have == want:
+        return
+    log.warning("Embedding-Dimension geaendert (%d → %d) — alle Vektoren werden neu "
+                "berechnet.", have, want)
+    db_exec("MATCH (e:Entity) SET e.embedding = ''")
+    _invalidate_embed_cache()
+
+
 def _embed_backfill() -> None:
     """Idempotent: embedded alle Entities ohne Vektor. Startup + Nightly-Reconcile.
 
@@ -2314,6 +2387,7 @@ def _embed_backfill() -> None:
     if not EMBED_ENABLED:
         return
     try:
+        _embed_reset_on_dim_change()
         rows = _rows(db_exec(
             "MATCH (e:Entity) WHERE (e.embedding IS NULL OR e.embedding = '') "
             "RETURN e.id, e.name, e.descr"))
@@ -3580,6 +3654,7 @@ def _cleanup_scheduler_loop() -> None:
 threading.Thread(target=_cleanup_scheduler_loop, daemon=True, name="cleanup-scheduler").start()
 
 # Embeddings nach dem Start im Hintergrund nachziehen (lädt Modell, embedded fehlende).
+_warn_if_no_embed_backend()
 threading.Thread(target=_embed_backfill, daemon=True, name="embed-backfill").start()
 
 

@@ -57,6 +57,20 @@ jobs:
             magic3arkus/ai-rem:${{ steps.meta.outputs.version }}
             magic3arkus/ai-rem:latest
 
+      - name: Build and push (slim, ohne in-process Embeddings)
+        # Gleicher Code, nur ohne fastembed und Modell-Cache (~312 MB weniger).
+        # Braucht zur Laufzeit EMBED_URL, sonst laeuft die Suche rein lexikalisch.
+        # Die Layer bis pip install teilt er sich mit dem Build darueber.
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: EMBED_BACKEND=external
+          tags: |
+            magic3arkus/ai-rem:${{ steps.meta.outputs.version }}-slim
+            magic3arkus/ai-rem:latest-slim
+
   prune-tags:
     # Räumt alte Docker-Hub-Tags auf. Bei Tag-Push nach erfolgreichem Build; per
     # manuellem workflow_dispatch on-demand (dann ohne Build, höchstes vorhandenes
@@ -85,7 +99,9 @@ jobs:
           user    = os.environ["DOCKERHUB_USERNAME"]
           pw      = os.environ["DOCKERHUB_TOKEN"]
           base    = "https://hub.docker.com/v2"
-          SEMVER  = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+          # -slim gehoert zur selben Version wie das Default-Tag: beide werden
+          # zusammen gebaut und muessen zusammen behalten oder geloescht werden.
+          SEMVER  = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-slim)?$")
 
           def ver(tag):
               m = SEMVER.match(tag or "")
@@ -124,20 +140,20 @@ jobs:
               print(f"Kein Versions-Ref übergeben → '{current}' als aktuell angenommen.")
 
           # --- Keep-Set berechnen ---
-          same_minor = sorted(
-              (v for v in versions if v[0][:2] == cur[:2] and v[0] < cur),
-              reverse=True)[:3]
-          older_series = sorted(
-              (v for v in versions if v[0][:2] < cur[:2]), reverse=True)
-          keep = {current}
-          keep |= {t for _, t in same_minor}
+          # Ueber Versionsnummern statt Tag-Namen, damit vX.Y.Z und vX.Y.Z-slim
+          # gemeinsam zaehlen und nicht als zwei der drei Patch-Slots durchgehen.
+          uniq = sorted({v for v, _ in versions}, reverse=True)
+          same_minor = [v for v in uniq if v[:2] == cur[:2] and v < cur][:3]
+          older_series = [v for v in uniq if v[:2] < cur[:2]]
+          keep = {cur, *same_minor}
           if older_series:
-              keep.add(older_series[0][1])   # höchstes Tag der nächst-älteren Minor-Serie
+              keep.add(older_series[0])      # höchste Version der nächst-älteren Minor-Serie
 
-          delete = sorted((v for v in versions if v[1] not in keep), reverse=True)
+          delete = sorted(((v, t) for v, t in versions if v not in keep), reverse=True)
 
           print(f"Aktuell:  {current}")
-          print(f"Behalten: latest, {', '.join(sorted(keep, reverse=True))}")
+          print("Behalten: latest, latest-slim, "
+                + ", ".join("v%d.%d.%d(-slim)" % v for v in sorted(keep, reverse=True)))
           if not delete:
               print("Nichts zu löschen.")
               sys.exit(0)
