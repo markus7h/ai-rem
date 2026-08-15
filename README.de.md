@@ -126,6 +126,12 @@ Ein Backendwechsel ändert die Vektor-Dimension (384 ↔ 1024) und macht gespeic
 Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechnet
 **alle** Vektoren neu — ohne manuelle Migration, in beide Richtungen.
 
+> **Beim Umstellen auf extern `KUZU_BUFFER_POOL_SIZE_MB` erhöhen** (z. B. 512, und
+> `MEM_LIMIT` auf 1280m). Die 1024-dimensionalen Vektoren erzeugen beim Backfill mehr
+> Schreiblast, als der 256-MB-Default verkraftet: der WAL-Checkpoint scheitert mit
+> `buffer pool is full`, die Vektoren landen nie dauerhaft in der DB und werden bei
+> jedem Start neu gerechnet. Im Log sichtbar als `WAL-Checkpoint fehlgeschlagen`.
+
 > **Hinweis (Speicher):** Ohne `KUZU_BUFFER_POOL_SIZE_MB` dimensioniert kuzu seinen
 > Buffer-Pool auf ~80 % des **Host**-RAMs und ignoriert das Container-`mem_limit`.
 > Der Normalbetrieb braucht bei dieser DB nur ~32 MB, daher genügen 256 MiB.

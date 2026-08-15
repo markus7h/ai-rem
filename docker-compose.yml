@@ -57,6 +57,11 @@ services:
       # Laengenbremse: llama.cpp lehnt zu lange Eingaben mit HTTP 500 ab, statt sie
       # wie fastembed still zu kappen — das riss sonst ganze Backfill-Chunks mit.
       - EMBED_MAX_CHARS=${EMBED_MAX_CHARS:-2000}
+      # ACHTUNG bei EMBED_URL: externe Modelle liefern deutlich groessere Vektoren
+      # (bge-m3 1024 statt 384 Dimensionen). Mit dem 256-MB-Default scheitert beim
+      # Backfill der WAL-Checkpoint ("buffer pool is full") — die Writes bleiben in
+      # der WAL und sind nach dem naechsten Start wieder weg. 512 MB Pool und ~1.25 GB
+      # mem_limit tragen 685 Entities.
       # Cosine-Schwelle der semantischen Treffer. Leer = passender Default je
       # Backend (0.45 in-process, 0.50 fuer bge-m3).
       - EMBED_THRESHOLD=${EMBED_THRESHOLD:-}
