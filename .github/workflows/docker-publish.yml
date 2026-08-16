@@ -169,6 +169,41 @@ jobs:
           print(f"✅ {len(delete)} alte Tags entfernt.")
           PY
 
+  github-release:
+    # Release aus dem CHANGELOG-Abschnitt der getaggten Version anlegen. Lief bisher
+    # von Hand und blieb ab v0.8.14 schlicht liegen — die Tags waren da, die Releases
+    # fehlten. Nur bei Tag-Push, nicht beim manuellen Dispatch (der taggt nichts).
+    needs: [build-and-push]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.build-and-push.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # --generate-notes braucht die Historie für den Vorgänger-Tag
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG existiert bereits — nichts zu tun."
+            exit 0
+          fi
+          NOTES=$(python3 scripts/changelog.py section "$TAG")
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > /tmp/notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+            echo "✅ Release $TAG aus CHANGELOG.md angelegt."
+          else
+            # Kein Abschnitt gepflegt: lieber generierte PR-Titel als gar kein Release.
+            gh release create "$TAG" --title "$TAG" --generate-notes
+            echo "::warning::Kein CHANGELOG.md-Abschnitt für ${TAG} — Notizen wurden generiert."
+          fi
+
   update-description:
     # Läuft nach erfolgreichem Build bei Tag-Push UND eigenständig beim manuellen Dispatch.
     needs: [build-and-push]
@@ -188,6 +223,25 @@ jobs:
           # relative Links rendern auf Docker Hub nicht. Größe so vom 25k-Limit entkoppelt.
           DESC_FILE="docs/dockerhub.md"
           SHORT_DESC="Persistent knowledge-graph memory for Claude Code — self-hosted MCP server"
+
+          # Die jüngsten Changelog-Einträge in den Marker-Block schreiben, damit auf
+          # Docker Hub steht, was sich pro Version ändert (dort gibt es keine Releases).
+          # Nur im Workflow-Arbeitsverzeichnis — die Datei im Repo bleibt unberührt.
+          python3 - <<'PY'
+          import pathlib, subprocess
+          pfad = pathlib.Path("docs/dockerhub.md")
+          text = pfad.read_text(encoding="utf-8")
+          start, ende = "<!-- CHANGELOG:START -->", "<!-- CHANGELOG:END -->"
+          if start in text and ende in text:
+              notes = subprocess.run(["python3", "scripts/changelog.py", "latest", "3"],
+                                     capture_output=True, text=True, check=True).stdout.strip()
+              kopf, rest = text.split(start, 1)
+              _, schwanz = rest.split(ende, 1)
+              pfad.write_text(f"{kopf}{start}\n\n{notes}\n\n{ende}{schwanz}", encoding="utf-8")
+              print(f"Changelog-Block gefüllt ({len(notes)} Zeichen).")
+          else:
+              print("::warning::Marker CHANGELOG:START/END fehlen in docs/dockerhub.md — Block bleibt leer.")
+          PY
 
           # Docker Hub deckelt full_description bei 25000 (Bytes) und description bei 100 (Zeichen).
           # Hart fehlschlagen, statt — wie früher — still ein abgelehntes PATCH zu schlucken.
