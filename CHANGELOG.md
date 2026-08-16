@@ -15,6 +15,8 @@ German).
 
 ## [Unreleased]
 
+## [0.8.22] – 2026-08-16
+
 ### Added
 - `CHANGELOG.md` as the source of truth for release notes, with entries for every
   release back to v0.8.14. On a tag push the publish workflow now creates the
@@ -116,7 +118,8 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.21...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.22...HEAD
+[0.8.22]: https://github.com/markus7h/ai-rem/compare/v0.8.21...v0.8.22
 [0.8.21]: https://github.com/markus7h/ai-rem/compare/v0.8.20...v0.8.21
 [0.8.20]: https://github.com/markus7h/ai-rem/compare/v0.8.19...v0.8.20
 [0.8.19]: https://github.com/markus7h/ai-rem/compare/v0.8.18...v0.8.19
