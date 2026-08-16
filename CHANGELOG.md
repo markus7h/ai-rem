@@ -21,13 +21,13 @@ German).
   GitHub release from the matching section and renders the three most recent
   entries into the Docker Hub description. Both had drifted: releases were written
   by hand (and forgotten from v0.8.14 on), and Docker Hub never showed what
-  changed between versions at all. (#94)
+  changed between versions at all. (#95)
 - Two CI gates keep every pull request in the changelog: one rejects a PR that
   does not touch `CHANGELOG.md` (Dependabot and the `no-changelog` label are
   exempt), the other checks on release PRs that every PR merged since the last tag
   is referenced in the new section — that one also catches the exempted ones.
   `scripts/changelog.py` provides `section`, `latest` and `verify` for both the
-  workflow and the tests. (#94)
+  workflow and the tests. (#95)
 
 ## [0.8.21] – 2026-08-15
 
