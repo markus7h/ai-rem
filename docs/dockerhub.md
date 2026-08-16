@@ -102,6 +102,17 @@ Set in the Compose `.env`:
 
 ---
 
+## What's new
+
+The three most recent releases; the block is regenerated from
+[CHANGELOG.md](https://github.com/markus7h/ai-rem/blob/main/CHANGELOG.md) on every
+tagged build. Full history: [GitHub Releases](https://github.com/markus7h/ai-rem/releases).
+
+<!-- CHANGELOG:START -->
+<!-- CHANGELOG:END -->
+
+---
+
 ## Documentation
 
 Full documentation lives on GitHub:

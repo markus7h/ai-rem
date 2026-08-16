@@ -1,7 +1,7 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.8.13](https://github.com/markus7h/ai-rem/releases/tag/v0.8.13)**.
-> Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
+> This documentation describes **[v0.8.21](https://github.com/markus7h/ai-rem/releases/tag/v0.8.21)**.
+> Release notes are kept in [CHANGELOG.md](CHANGELOG.md) and published to the [GitHub Releases](https://github.com/markus7h/ai-rem/releases) and the Docker Hub description on every tag; notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
 Static memory files like `CLAUDE.md` sit in context in full and are tied to individual projects and machines. ai-rem takes a more efficient approach: relevant information — open tasks, decisions made, solved problems, projects, tools used — lives in a knowledge graph on your home server, is loaded selectively instead of wholesale, and is available from any machine, independent of where you work.
@@ -219,6 +219,9 @@ Local hygiene hooks mirror the CI ruff gate and add whitespace/EOF fixes plus a
 
 Releases are tag-triggered (`.github/workflows/docker-publish.yml`); a `VERSION ↔ Tag`
 step fails the build if `VERSION` in `server.py` does not match the pushed tag (`v1.2.3` → `1.2.3`).
+The same run creates the GitHub release from the matching `CHANGELOG.md` section and
+refreshes the "What's new" block in the Docker Hub description — so add the entry
+before tagging.
 
 ---
 

@@ -120,3 +120,56 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f ai-rem-ci || true
+
+  changelog-entry:
+    # Jeder PR muss im CHANGELOG landen — sonst steht am Ende weder im GitHub Release
+    # noch in der Docker-Hub-Beschreibung, was sich geaendert hat. Der Check laeuft
+    # bewusst nur auf PRs (auf einem Branch-Push gibt es noch keinen PR-Kontext).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: CHANGELOG.md wurde ergaenzt
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          # Dependabot schreibt keine Changelogs; seine Bumps werden beim Release
+          # gesammelt nachgetragen — die Vollstaendigkeit sichert der verify-Schritt.
+          case "$AUTHOR" in
+            dependabot*|renovate*)
+              echo "Automatischer Dependency-PR von ${AUTHOR} — uebersprungen."; exit 0 ;;
+          esac
+          case ",$LABELS," in
+            *,no-changelog,*)
+              echo "Label 'no-changelog' gesetzt — uebersprungen."; exit 0 ;;
+          esac
+          if git diff --name-only "$BASE" "$HEAD_SHA" | grep -qx "CHANGELOG.md"; then
+            echo "✅ CHANGELOG.md ist Teil dieses PRs."
+            exit 0
+          fi
+          echo "::error::Dieser PR aendert CHANGELOG.md nicht. Trag die Aenderung unter '## [Unreleased]' ein (oder setze das Label 'no-changelog', wenn wirklich nichts Nutzersichtbares passiert)."
+          exit 1
+
+      - name: Release-PR — alle gemergten PRs stehen im Abschnitt
+        # Greift nur, wenn dieser PR die VERSION anfasst: dann wird gleich getaggt,
+        # und ab da ist es zu spaet. Faengt auch die Dependabot-Luecke von oben.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! git diff "$BASE" "$HEAD_SHA" -- server.py | grep -q '^+VERSION'; then
+            echo "Kein Release-PR (VERSION unveraendert) — Vollstaendigkeitscheck entfaellt."
+            exit 0
+          fi
+          VERSION=$(python3 -c "import re;print(re.search(r'^VERSION\s*=\s*[\"\x27]([^\"\x27]+)', open('server.py').read(), re.M).group(1))")
+          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' "$BASE")
+          echo "Release-PR: v${VERSION}, Vergleich gegen ${LAST_TAG}"
+          python3 scripts/changelog.py verify "v${VERSION}" "$LAST_TAG" "$HEAD_SHA"
