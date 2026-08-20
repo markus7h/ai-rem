@@ -963,8 +963,11 @@ mcp = FastMCP(
 
 def _load_setup_cfg() -> dict:
     # Persoenliche Config bevorzugen, sonst generisches Starter-Template.
+    # isfile statt exists: die Config kommt per Bind-Mount rein, und Docker legt
+    # ein *Verzeichnis* an, wenn die Quelldatei auf dem Host fehlt — open() waere
+    # dann ein IsADirectoryError und /setup-config eine 500 statt eines Fallbacks.
     for path in (_SETUP_CONFIG_PATH, _SETUP_CONFIG_EXAMPLE_PATH):
-        if os.path.exists(path):
+        if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 return json.load(f)
     return {}
@@ -3297,7 +3300,7 @@ async def api_tool(request: Request) -> JSONResponse:
 # 'ollama_url' > Default. Var-Name bleibt AI_REM_OLLAMA_URL für Env-Rückwärts-
 # kompatibilität; /v1 wird in den Calls angehängt.
 AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myubuntu:11434")
+    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myai:11436")
 )
 # llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
 CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",

@@ -18,7 +18,7 @@ ai-rem ships three Claude Code hooks that keep the graph fed and tidy without ma
 
 The built-in Claude Code auto-memory (markdown file) is replaced by a transcript extractor that writes **structured entities and relations** into ai-rem.
 
-**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → llama-server (`mistral-small3.2:24b` on `AI_REM_OLLAMA_URL`, OpenAI-compatible `/v1/chat/completions`, default `http://myubuntu:11434`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
+**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → llama-server (`mistral-small3.2:24b` on `AI_REM_OLLAMA_URL`, OpenAI-compatible `/v1/chat/completions`, default `http://myai:11436`) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, pure stdlib — no venv needed, runs on any `python3 ≥3.8` on Windows/Linux/macOS):
 
@@ -44,7 +44,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Configuration env:**
 - `AI_REM_ENDPOINT` — MCP URL (default `http://localhost:3456/mcp`)
-- `AI_REM_LLAMA_URL` (alt name: `AI_REM_OLLAMA_URL`) — llama-server base URL (OpenAI-compatible, `/v1` appended internally; env wins, `AI_REM_LLAMA_URL` taking precedence; otherwise `ollama_url` from setup-config / settings-template; default `http://myubuntu:11434`); model is fixed via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`) since llama-server hosts exactly one model
+- `AI_REM_LLAMA_URL` (alt name: `AI_REM_OLLAMA_URL`) — llama-server base URL; setup writes it from the setup-config `ollama_url` into `~/.claude/settings.json` → `env`, because the CLI (unlike the hook) does not read `settings-template.json` (OpenAI-compatible, `/v1` appended internally; env wins, `AI_REM_LLAMA_URL` taking precedence; otherwise `ollama_url` from setup-config / settings-template; default `http://myai:11436`); model is fixed via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`) since llama-server hosts exactly one model
 - `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`). The setup points this at `~/.local/share/ai-rem/bin/ai-rem`, the locally installed copy. If it points into a clone on a network share instead, the hook aborts silently with `ai-rem CLI not found` on every session end as soon as the mount stalls — rerun `/setup` in that case. Put it in the `env` block of `~/.claude/settings.json` so hooks inherit it.
 
 ---
@@ -55,7 +55,7 @@ A daemon thread in the container runs a daily maintenance pass (default 03:00, c
 
 Ambiguous cases (and everything when llama-server was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution). You can resolve it two ways: **(a)** in the `/cleanup` web UI, where each pending item shows both descriptions with **Mergen/Archivieren** (apply) and **Verwerfen** (keep both) buttons (`POST /api/cleanup/resolve`); or **(b)** the `/memory-cleanup` slash command, which has Claude resolve the entries with judgment. Both use the same non-destructive `memory_merge` / `memory_archive` operations — nothing is deleted.
 
-> **llama-server reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable llama-server; the judged model is fixed via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In the bundled `docker-compose.yml` it defaults to `http://myubuntu:11434` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
+> **llama-server reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable llama-server; the judged model is fixed via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In the bundled `docker-compose.yml` it defaults to `http://myai:11436` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
 
 ---
 

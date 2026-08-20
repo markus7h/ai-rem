@@ -43,7 +43,7 @@ MIN_TRANSCRIPT_CHARS = 500
 # llama-server (OpenAI-kompatibel). AI_REM_OLLAMA_URL bleibt als Alt-Name gültig,
 # damit bestehende .env weiter funktionieren; /v1 wird in den Calls angehängt.
 LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL",
-                           os.environ.get("AI_REM_OLLAMA_URL", "http://myubuntu:11434"))
+                           os.environ.get("AI_REM_OLLAMA_URL", "http://myai:11436"))
 # llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
 LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "mistral-small3.2:24b").strip()
 # Ein 45k-Transcript braucht auf dem 24b-Q4 real ~5 min. Der Hook laeuft detached,
@@ -230,8 +230,14 @@ def call_llm(transcript: str, model: str, system_prompt: str) -> dict:
         raise RuntimeError(f"llama-server returned empty content: {envelope}")
     # llama-server umschließt json_object-Antworten teils mit ```json-Fences —
     # anders als Ollamas grammatik-erzwungenes format=json. Vor dem Parsen abstreifen.
+    #
+    # raw_decode statt loads: json_object ist bei llama.cpp keine harte Grammatik,
+    # das Modell hängt hinter das Objekt gelegentlich noch Prosa oder ein zweites
+    # Fragment ("Extra data: line 1 column 817"). Das erste vollständige Objekt ist
+    # die Antwort; alles dahinter zu verwerfen rettet den Lauf, statt das ganze
+    # Transcript in die Fallback-Queue zu schieben.
     try:
-        return json.loads(_strip_json_envelope(content))
+        return json.JSONDecoder().raw_decode(_strip_json_envelope(content))[0]
     except json.JSONDecodeError as e:
         raise RuntimeError(
             f"llama-server lieferte kein gültiges JSON trotz json_object: {e}\n---\n{content[:500]}"
