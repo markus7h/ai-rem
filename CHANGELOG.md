@@ -21,7 +21,7 @@ German).
   remote build failed at `COPY` (`"/requirements-embed.txt": not found`) and
   compose silently kept the previously pulled Docker Hub image. A deployment
   therefore ran days-old code while the deploy looked like it had only printed a
-  build error.
+  build error. (#99)
 
 ## [0.8.23] – 2026-08-20
 
