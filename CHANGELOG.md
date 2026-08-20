@@ -15,6 +15,14 @@ German).
 
 ## [Unreleased]
 
+### Fixed
+- `deploy.sh` ships `requirements-embed.txt`. The Dockerfile has copied it since
+  the embedding split, but the file was missing from the `FILES` list, so the
+  remote build failed at `COPY` (`"/requirements-embed.txt": not found`) and
+  compose silently kept the previously pulled Docker Hub image. A deployment
+  therefore ran days-old code while the deploy looked like it had only printed a
+  build error. (#99)
+
 ## [0.8.23] – 2026-08-20
 
 ### Fixed
