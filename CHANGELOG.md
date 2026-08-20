@@ -15,6 +15,8 @@ German).
 
 ## [Unreleased]
 
+## [0.8.23] – 2026-08-20
+
 ### Fixed
 - The client setup no longer aborts halfway through installing the CLI. `fetch_to`
   treated an empty response body as a failed download, but `lib/__init__.py` is
@@ -24,28 +26,28 @@ German).
   "CLI not found (set $AI_REM_CLI)" at every session end. Only a transport error
   now counts as a failure; the guard against truncating an existing file is kept.
   Affects every platform, Windows included, since bash and PowerShell load the
-  same `setup.py`.
+  same `setup.py`. (#97)
 - `setup-config.json` reaches the container via bind mount
   (`./setup-config.json:/app/setup-config.json:ro`) instead of relying on the
   Dockerfile `COPY`, which only runs on a local build. A deployment running the
   public Docker Hub image served the example placeholders from `/setup-config`,
   so every fresh client install inherited `ollama_url: http://your-server:11434`
   and reported `llm ✗`. `_load_setup_cfg` uses `isfile` so a missing host file
-  (which Docker materialises as a directory) falls back instead of raising.
+  (which Docker materialises as a directory) falls back instead of raising. (#97)
 - `ai-rem ingest` no longer reports `{"skipped": "llm_down"}` while the session-start
   report shows `llm ✓`. The hook read the llama URL from `settings-template.json`,
   but the CLI only ever reads the environment, so the setup now also writes
-  `AI_REM_LLAMA_URL` (from the setup-config `ollama_url`) into `settings.json`.
+  `AI_REM_LLAMA_URL` (from the setup-config `ollama_url`) into `settings.json`. (#97)
 - A model reply with trailing text after the JSON object is parsed instead of
   discarded. `response_format=json_object` is not a hard grammar in llama.cpp, and
   the occasional trailing prose made `json.loads` raise `Extra data`, pushing an
   otherwise usable extraction into the fallback queue. Parsing now stops after the
-  first complete object; a reply that does not start with JSON is still an error.
+  first complete object; a reply that does not start with JSON is still an error. (#97)
 
 ### Changed
 - Default llama-server URL is `http://myai:11436` instead of `http://myubuntu:11434`,
   which has been permanently stopped since 2026-08-04. Applies to the extraction
-  hook, the session-start check, the nightly cleanup judge and the compose default.
+  hook, the session-start check, the nightly cleanup judge and the compose default. (#97)
 
 ## [0.8.22] – 2026-08-16
 
