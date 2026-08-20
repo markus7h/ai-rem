@@ -21,3 +21,24 @@ def test_clone_pfade_werden_ersetzt():
 def test_lokale_kopie_und_leer_bleiben():
     for p in ("", "/home/u/.local/share/ai-rem/bin/ai-rem", "/usr/local/bin/ai-rem"):
         assert not setup.points_at_clone(p), p
+
+
+def test_leere_datei_gilt_als_erfolg(tmp_path, monkeypatch):
+    """lib/__init__.py ist regulaer 0 Bytes. Galt das als Download-Fehler, brach
+    install_cli() ab, nachdem bin/ai-rem geschrieben, aber noch nicht ausfuehrbar
+    gemacht war — halb installierte CLI, Hook meldete still 'CLI not found'."""
+    monkeypatch.setattr(setup, "http_get", lambda url, **kw: b"")
+    dst = tmp_path / "lib" / "__init__.py"
+    assert setup.fetch_to("http://x/lib/__init__.py", str(dst)) is True
+    assert dst.read_bytes() == b""
+
+
+def test_transportfehler_laesst_bestehende_datei_stehen(tmp_path, monkeypatch):
+    def boom(url, **kw):
+        raise OSError("timeout")
+    monkeypatch.setattr(setup, "http_get", boom)
+    dst = tmp_path / "bin" / "ai-rem"
+    dst.parent.mkdir(parents=True)
+    dst.write_bytes(b"alte funktionierende CLI")
+    assert setup.fetch_to("http://x/bin/ai-rem", str(dst)) is False
+    assert dst.read_bytes() == b"alte funktionierende CLI"

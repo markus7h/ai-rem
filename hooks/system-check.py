@@ -46,7 +46,7 @@ AI_REM_TIMEOUT = 5
 # AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ✗" im SessionStart-Report.
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_LLAMA_URL",
-    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myubuntu:11434")),
+    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myai:11436")),
 )
 
 

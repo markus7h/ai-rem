@@ -25,7 +25,7 @@ The setup endpoint optionally loads a `setup-config.json` from the server (`/set
 }
 ```
 
-The Docker image copies this file at build time (`COPY setup-config*.json ./`). The personal `setup-config.json` is gitignored, so it never ships in the public image. Instead the repo includes a generic **`setup-config.example.json`**: when no personal config is present, `/setup-config` falls back to it, so a fresh deployment seeds a useful starter set of behavioural preferences plus generic permission/deny rules. Drop in your own `setup-config.json` to override the template entirely.
+The personal `setup-config.json` is gitignored, so it never ships in the public image. It is bind-mounted into the container from the deployment directory instead (`./setup-config.json:/app/setup-config.json:ro` in `docker-compose.yml`); the Dockerfile's `COPY setup-config*.json ./` only applies to local builds. **Without that mount a container started from the Docker Hub image serves the example placeholders** (including `ollama_url: http://your-server:11434`), and every fresh client install inherits a dead llama URL in its `settings-template.json`. Instead the repo includes a generic **`setup-config.example.json`**: when no personal config is present, `/setup-config` falls back to it, so a fresh deployment seeds a useful starter set of behavioural preferences plus generic permission/deny rules. Drop in your own `setup-config.json` to override the template entirely.
 
 **`mcp_register`** lets the setup wire up companion MCP servers using tokens it pulls from `ssh_host` over SSH:
 - **mykeyvault** is registered as an HTTP MCP from `http.url` (or `https_url` when ai-rem itself runs over a trusted https endpoint).
