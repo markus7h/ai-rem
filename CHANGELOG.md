@@ -15,6 +15,22 @@ German).
 
 ## [Unreleased]
 
+### Added
+- The nightly cleanup now also hunts for **stale content**, not just duplicates:
+  entries asserting perishable infrastructure facts (IPs, `host:port`, container
+  and port lists, versions) that have not been checked against reality for
+  `CLEANUP_VERIFY_AFTER_DAYS` (default 90) are proposed as a new `verify` pending
+  item. A regex prefilter and a llama-server judgment keep conceptual knowledge
+  out. Nothing is ever archived automatically — suspects only ever reach the
+  review queue, resolvable in the `/cleanup` UI ("Passt noch" / "Verwerfen") or
+  via `/memory-cleanup`, which is told to verify live rather than guess. The
+  verification age counts from `extra.verify_checked` (set by the check on every
+  outcome, acting as the cooldown) or the existing `geprueft_am`/`verifiziert_am`/
+  `korrigiert_am`/`erhoben_am`/`gemessen_am` markers, and only falls back to
+  `updated_at` — which every `memory_add` resets and which therefore says nothing
+  about when a fact was last confirmed. Candidates per run are capped by
+  `CLEANUP_VERIFY_MAX_PER_RUN` (default 5).
+
 ### Fixed
 - `deploy.sh` ships `requirements-embed.txt`. The Dockerfile has copied it since
   the embedding split, but the file was missing from the `FILES` list, so the

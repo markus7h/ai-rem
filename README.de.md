@@ -68,7 +68,7 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 Drei Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph befüllt und sauber:
 
 - **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via llama-server, mit md-Fallback + Catch-up, wenn llama-server down ist. Er läuft detached (die Extraktion dauert Minuten) und meldet beim nächsten Sessionstart, wenn er gestört ist. Das Setup legt die CLI nach `~/.local/share/ai-rem/bin/ai-rem` und richtet `AI_REM_CLI` darauf aus — der Hook hängt damit nicht daran, wohin das Repo geklont wurde.
-- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue.
+- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
 - **Plan-Speicherung** — ein `ExitPlanMode`-Hook speichert jeden finalisierten Plan als offenen `Task`, sodass Pläne eine zentrale, maschinenübergreifende Liste werden.
 
 → **[Hooks & Automatisierung im Detail](docs/hooks-and-automation.de.md)**

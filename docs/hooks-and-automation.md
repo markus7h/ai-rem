@@ -55,6 +55,17 @@ A daemon thread in the container runs a daily maintenance pass (default 03:00, c
 
 Ambiguous cases (and everything when llama-server was down at night) land in a review queue. A non-empty queue is surfaced at session start as an informational hint only (no auto-execution). You can resolve it two ways: **(a)** in the `/cleanup` web UI, where each pending item shows both descriptions with **Mergen/Archivieren** (apply) and **Verwerfen** (keep both) buttons (`POST /api/cleanup/resolve`); or **(b)** the `/memory-cleanup` slash command, which has Claude resolve the entries with judgment. Both use the same non-destructive `memory_merge` / `memory_archive` operations — nothing is deleted.
 
+### Staleness check (infrastructure facts)
+
+The same pass also looks for entries whose **content** has rotted — network setup, services, devices: IP addresses, `host:port`, container and port lists, versions. Three stages, cheap to expensive: a regex prefilter for perishable facts in `descr`, then the verification age, then a llama-server judgment on whether the entry actually asserts facts that can change in reality (conceptual and conventional knowledge is filtered out).
+
+**Never automatic:** suspects only ever land in the review queue as a `verify` pending item — with **Passt noch** (checked, still current) and **Verwerfen** buttons. Via `/memory-cleanup` the rule is: verify live (`ssh`, `docker ps`, port check) and correct on mismatch; anything that cannot be verified stays in the queue for the user.
+
+The verification age deliberately is **not** `updated_at`: every `memory_add` resets it, even for a one-clause addition — "last written" is not "last checked against reality". It counts from the most recent date in `extra`: `verify_checked` (set by the check itself), otherwise the organically grown markers `geprueft_am`, `verifiziert_am`, `korrigiert_am`, `erhoben_am`, `gemessen_am`; only if none exist does `updated_at` count. `verify_checked` is set on every outcome (LLM says "current", user clicks "Passt noch" or dismisses) and acts as a cooldown — without it the same entry would be back in the queue every night. Entries whose `descr` starts with `VERALTET` are skipped.
+
+- `CLEANUP_VERIFY_AFTER_DAYS` — verification age at which an entry is proposed (default `90`)
+- `CLEANUP_VERIFY_MAX_PER_RUN` — candidates per night, oldest first (default `5`; keeps queue and LLM load small)
+
 > **llama-server reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable llama-server; the judged model is fixed via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In the bundled `docker-compose.yml` it defaults to `http://myai:11436` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
 
 ---
