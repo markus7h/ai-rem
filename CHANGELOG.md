@@ -13,7 +13,7 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [0.8.24] – 2026-08-23
 
 ### Added
 - The nightly cleanup now also hunts for **stale content**, not just duplicates:
@@ -29,7 +29,7 @@ German).
   `korrigiert_am`/`erhoben_am`/`gemessen_am` markers, and only falls back to
   `updated_at` — which every `memory_add` resets and which therefore says nothing
   about when a fact was last confirmed. Candidates per run are capped by
-  `CLEANUP_VERIFY_MAX_PER_RUN` (default 5).
+  `CLEANUP_VERIFY_MAX_PER_RUN` (default 5). (#100)
 
 ### Fixed
 - `deploy.sh` ships `requirements-embed.txt`. The Dockerfile has copied it since
