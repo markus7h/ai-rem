@@ -34,10 +34,12 @@ _RX = re.compile("|".join(AUTH_PATTERNS), re.IGNORECASE)
 
 # Befehle, die fremden Text nur ANZEIGEN: dort ist ein Auth-Muster fast immer Zitat
 # (ein `git diff` dieser Datei, ein grep über die Doku), kein echter Fehler.
+# Nur der FÜHRENDE Befehl zählt (^): `gh api ... | tail -2` ist ein echter Aufruf,
+# dessen Ausgabe bloß gekürzt wird — ein \b-Match hätte die Erinnerung verschluckt.
 # ponytail: Befehlsname genügt als Ausschluss. Ein `git diff && curl` verliert damit
 #           die Erinnerung — dann sagt der nächste echte Fehlversuch es erneut.
 READERS = re.compile(
-    r"\b(git\s+(diff|log|show|blame)|grep|rg|ag|cat|less|head|tail|sed|awk)\b"
+    r"^\s*(git\s+(diff|log|show|blame)|grep|rg|ag|cat|less|head|tail|sed|awk)\b"
 )
 
 
@@ -118,6 +120,11 @@ if __name__ == "__main__" and "--selftest" in sys.argv:
     # ... ein echter Auth-Fehler aber weiterhin schon
     assert detect("HTTP 401", "gh pr create") == "HTTP 401"
     assert detect("HTTP 401", "git push origin main") == "HTTP 401"
+    # Nur der fuehrende Befehl zaehlt: ein echter Call, der bloss gekuerzt wird,
+    # darf die Erinnerung nicht verlieren.
+    assert detect("HTTP 401", "gh api user | tail -2") == "HTTP 401"
+    assert detect("Bad credentials", "git push 2>&1 | head -5")
+    assert detect("HTTP 401", "  git diff docs/") is None  # fuehrend trotz Einrueckung
     print("selftest ok")
     sys.exit(0)
 
