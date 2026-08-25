@@ -66,11 +66,12 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 
 ## Automation (hooks)
 
-Three Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
+Four Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
 
 - **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via llama-server, with an md-fallback + catch-up when llama-server is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. The setup installs the CLI to `~/.local/share/ai-rem/bin/ai-rem` and points `AI_REM_CLI` at it, so the hook does not depend on where the repo was cloned.
 - **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue. Plus a **staleness check** that flags entries with perishable infrastructure facts (IPs, ports, services, devices) for a reality check — never automatically.
 - **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
+- **Vault secret reminder** — a `PostToolUse` hook scans Bash output for auth/credential failures and injects a reminder to pull the matching secret from the vault via mykeyvault instead of asking the user for a token or password, failing silently so it never blocks a command.
 
 → **[Hooks & automation in detail](docs/hooks-and-automation.md)**
 

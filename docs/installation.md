@@ -21,7 +21,7 @@ The script automatically handles:
 4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → llama-server extractor → structured entities)
 5. `~/.local/share/ai-rem/bin/ai-rem` (plus `../lib/`, the modules the CLI imports) — install the CLI itself locally and point `AI_REM_CLI` in `~/.claude/settings.json` at it. A clone path already configured there is replaced: if the clone sits on a network share, the CLI is gone at session end as soon as the mount stalls, and the hook aborts silently (visible only in `~/.claude/auto-memory/errors.log`). A manually set `AI_REM_CLI` pointing at anything other than a clone is left alone. If the hook does not find the CLI there, it also looks under `~/myCode/github/ai-rem/bin/ai-rem`, `~/*/myCode/github/ai-rem/bin/ai-rem`, `/Volumes/*/myCode/…` and `PATH`.
 6. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md
-7. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook; remove old hooks; set `autoMemoryEnabled: false`
+7. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook, PostToolUse vault-secret-reminder hook; remove old hooks; set `autoMemoryEnabled: false`
 8. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
 9. Install slash commands (`/setup-ai-rem`, `/memory-cleanup`, `/migrate-claude-md`)
 10. Create preferences & tool entities directly in the knowledge graph via MCP API
@@ -38,6 +38,7 @@ ai-rem/
 ├── bin/ai-rem                  # CLI (status/search/ingest/catchup, pure stdlib, no venv)
 ├── lib/                        # extractor (+ md-fallback/catchup), heuristic, mcp_client
 ├── hooks/save-plan.py          # PostToolUse hook: ExitPlanMode → open Task in ai-rem
+├── hooks/vault-secret-reminder.py  # PostToolUse hook: Bash → vault-secret reminder on auth failure
 ├── docs/                       # architecture (md + Mermaid + PDF), MCP function docs,
 │                               #   release-history.md (archived notes ≤ v0.1.5)
 ├── deploy.sh                   # Deploy to the home server (scp + remote build + recreate)

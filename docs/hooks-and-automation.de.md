@@ -2,9 +2,10 @@
 
 [← Zurück zur README](../README.de.md)
 
-ai-rem bringt drei Claude-Code-Hooks mit, die den Graph ohne Handarbeit befüllen und sauber
-halten: **Auto-Memory** (Session → Graph), **Nightly-Cleanup** (Dedup/Archivieren) und
-**Plan-Speicherung** (Pläne → offene Tasks). Alle drei werden vom Client-Setup-Skript deployt.
+ai-rem bringt vier Claude-Code-Hooks mit, die den Graph ohne Handarbeit befüllen und sauber
+halten: **Auto-Memory** (Session → Graph), **Nightly-Cleanup** (Dedup/Archivieren),
+**Plan-Speicherung** (Pläne → offene Tasks) und **Vault-Secret-Erinnerung** (Auth-Fehler →
+Vault). Alle vier werden vom Client-Setup-Skript deployt.
 
 > **Wo die Hook-Quellen liegen:** `hooks/*.py` in diesem Repo — normale, lintbare Python-Dateien.
 > `server.py` liest sie beim Import und liefert sie unverändert unter `/hooks/<name>.py` aus;
@@ -87,3 +88,17 @@ status: offen
 Der Hook liest das Frontmatter der zuletzt geänderten Plan-Datei und upsertet via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert über `name` → keine Dubletten. Erledigte Pläne werden archiviert (`memory_archive`); der Status liegt zentral in ai-rem (cross-machine). Fail-silent: blockiert nie `ExitPlanMode`.
 
 **Installation:** wird vom Client-Setup automatisch deployt — `install_hooks()` holt `save-plan.py` nach `~/.claude/hooks/` (chmod +x) und registriert den `PostToolUse: ExitPlanMode`-Hook in `~/.claude/settings.json`. Kein manueller Schritt (der Datei-Header dokumentiert die Standalone-Installation als Referenz).
+
+---
+
+## Vault-Secret-Erinnerung (Auth-Fehler → Vault)
+
+Ein `PostToolUse`-Hook auf `Bash` (`hooks/vault-secret-reminder.py`, Timeout 5) prüft die Ausgabe jedes Bash-Befehls auf Auth-/Credential-Fehler, damit der Agent zu mykeyvault greift, statt den User um ein interaktives Login zu bitten. Anlass war ein abgelaufenes GitHub-PAT, das den Agenten dazu brachte, den User um `gh auth login` zu bitten — obwohl das passende PAT im Vault lag und sofort funktioniert hätte.
+
+**Patterns:** Ein Regex prüft die Befehlsausgabe auf Anzeichen eines Auth-Fehlers — u. a. `HTTP 401`, `401 Unauthorized`, `403 Forbidden`, `gh auth login`, `Permission denied (publickey)`, `Bad credentials`, `invalid token`, `token expired`, `could not read Username`. Der Ausgabetext wird defensiv aus `tool_response`/`tool_output` gelesen (Feldname und Form variieren je Version: reiner String, Dict mit `stdout`/`stderr`, oder Liste).
+
+**Bei einem Treffer** injiziert er per `additionalContext` eine Erinnerung: das Secret aus dem Vault holen (mykeyvault — `vault_list_items` zum Finden, `vault_run_with_secret` injiziert es wertblind als Env-Var, `vault_run_with_secret_file` für SSH-Keys/PEM-Dateien) statt den User um Token, Passwort oder interaktives Login zu bitten. Erst wenn im Vault nichts Passendes liegt, den User fragen.
+
+**Fail-silent:** blockiert nie einen Bash-Aufruf. Ein False Positive kostet eine überflüssige Kontextzeile, ein verpasster Vault-Griff kostet eine vermeidbare Rückfrage an den User. Ein eingebauter Selbsttest ist über `python3 hooks/vault-secret-reminder.py --selftest` verfügbar.
+
+**Installation:** wird vom Client-Setup automatisch deployt wie die anderen Hooks — `install_hooks()` holt `vault-secret-reminder.py` nach `~/.claude/hooks/` (chmod +x) und registriert den `PostToolUse: Bash`-Hook in `~/.claude/settings.json`.

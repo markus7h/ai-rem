@@ -511,7 +511,8 @@ def write_settings_template(setup_cfg, mcp_endpoint):
             'SessionStart': ['system-check.py (ai-rem, SMB, MCP, settings-sync, tools)'],
             'UserPromptSubmit': ['Tool-Discovery'],
             'PreToolUse': ['claude-md-guard.py (warnt bei CLAUDE.md-Edits → ai-rem)'],
-            'PostToolUse': ['save-plan.py (ExitPlanMode → offener Task in ai-rem)'],
+            'PostToolUse': ['save-plan.py (ExitPlanMode → offener Task in ai-rem)',
+                            'vault-secret-reminder.py (Bash: Auth-Fehler → Secret aus dem Vault)'],
         },
         'additional_directories_templates': ['{HOME}/.claude', '{HOME}'],
         'path_mappings': setup_cfg.get('path_mappings', {}),
@@ -529,7 +530,8 @@ def install_hooks():
     for fname, label in (('system-check.py', 'SessionStart-Hook'),
                          ('auto-memory.py', 'Auto-Memory-Hook'),
                          ('claude-md-guard.py', 'CLAUDE.md-Guard-Hook'),
-                         ('save-plan.py', 'Plan-Saving-Hook')):
+                         ('save-plan.py', 'Plan-Saving-Hook'),
+                         ('vault-secret-reminder.py', 'Vault-Secret-Reminder-Hook')):
         dst = os.path.join(CLAUDE_HOME, 'hooks', fname)
         if fetch_to(KG_URL + '/hooks/' + fname, dst):
             if not IS_WIN:
@@ -670,6 +672,17 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
             g['hooks'].append({'type': 'command', 'command': hook_command(save_plan), 'timeout': 10})
             save_plan_added = True
 
+    # Erinnert bei Auth-/401-Fehlern daran, das Secret aus dem Vault zu holen statt
+    # den User um Token/Login zu bitten (Bash-Matcher, gleiche Gruppe wie andere
+    # Bash-PostToolUse-Hooks).
+    vault_reminder = hook_paths.get('vault-secret-reminder.py', '')
+    vault_reminder_added = False
+    if vault_reminder:
+        g = hook_group('PostToolUse', 'Bash')
+        if not has_hook(g, vault_reminder):
+            g['hooks'].append({'type': 'command', 'command': hook_command(vault_reminder), 'timeout': 5})
+            vault_reminder_added = True
+
     # Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
     # - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
     # - AI_REM_CLI per Discovery (inkl. SMB-Mount /Volumes/<x>/myCode auf macOS)
@@ -718,6 +731,7 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
                  '  Auto-Memory-Hooks: %s' % ', '.join(auto_mem_added) if auto_mem_added else '',
                  '  CLAUDE.md-Guard-Hook' if guard_added else '',
                  '  Plan-Saving-Hook' if save_plan_added else '',
+                 '  Vault-Secret-Reminder-Hook' if vault_reminder_added else '',
                  '  autoMemoryEnabled=false'):
         if line:
             print(line)

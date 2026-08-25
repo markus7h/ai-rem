@@ -38,6 +38,7 @@ ai-rem/
 ├── bin/ai-rem                  # CLI (status/search/ingest/catchup, reine stdlib, kein venv)
 ├── lib/                        # Extraktor (+ md-Fallback/Catch-up), Heuristik, mcp_client
 ├── hooks/save-plan.py          # PostToolUse-Hook: ExitPlanMode → offener Task in ai-rem
+├── hooks/vault-secret-reminder.py  # PostToolUse-Hook: Bash → Vault-Secret-Erinnerung bei Auth-Fehler
 ├── docs/                       # Architektur (md + Mermaid + PDF), MCP-Funktionsdoku,
 │                               #   release-history.md (archivierte Notes ≤ v0.1.5)
 ├── deploy.sh                   # Deploy auf den Heimserver (scp + Remote-Build + Recreate)
