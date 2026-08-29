@@ -13,6 +13,42 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [0.8.25] – 2026-08-29
+
+### Fixed
+- **A failed WAL checkpoint no longer passes as success.** `_checkpoint_wal` logged
+  every error as a warning and returned normally ("failures are uncritical"). During
+  the backfill on 2026-08-29 a chunk checkpoint failed with `buffer pool is full`
+  and the run still reported `Embedding-Backfill fertig (993)`. It only got away
+  with it because the *next* chunk's checkpoint merged the same writes 1.4 s later —
+  the last chunk has no such successor. The checkpoint is now retried once (the
+  failure is typically transient), returns a bool, and the backfill forces a final
+  checkpoint after the loop. Success is reported only when every checkpoint went
+  through; otherwise an `ERROR` names the pool size. The run is deliberately not
+  aborted midway: written chunks are valid and the backfill is idempotent.
+- **`force=True` was a no-op when no WAL file existed** — a bare `return` in the
+  `except OSError` branch. Dirty pages hang off the buffer pool, not the WAL size,
+  so the forced checkpoint is exactly the one that must still run. The quietest of
+  the data-loss paths.
+- **SIGTERM handler alongside `atexit`.** `docker stop` sends SIGTERM, where
+  `atexit` does not run — so the final checkpoint was skipped on *every* container
+  restart. If the process is killed mid-rewrite, a half-written `kg.db` remains:
+  `count()` still answers, every column access segfaults. Verified in operation —
+  before the fix a restart left 917 of 993 entities without a vector, after it none.
+
+### Added
+- `embed_pending` and `embed_enabled` in `/api/status`, surfaced in the web UI and
+  in the SessionStart status line. If the number stays put across restarts, the
+  vectors did not survive the checkpoint — previously visible only as a warning in
+  the volatile log ring.
+- Failed checks in the SessionStart status line are now marked `❌` instead of `✗`,
+  which was near-indistinguishable from `✓`. `scripts/setup.py` keeps `✗`: it writes
+  straight to the TTY and is guarded against cp850 Windows consoles.
+
+### Changed
+- Buffer pool recommendation for `EMBED_URL` setups raised from 512 to 768 MB
+  (`MEM_LIMIT` 1536m); ~1000 entities at 1024 dimensions make for a ~280 MB `kg.db`.
+
 ## [0.8.24] – 2026-08-23
 
 ### Added
