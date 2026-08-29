@@ -43,7 +43,7 @@ AI_REM_TIMEOUT = 5
 # Gleicher Vorrang wie in lib/extractor.py: AI_REM_LLAMA_URL ist der aktuelle
 # Name, AI_REM_OLLAMA_URL bleibt als Alt-Name gueltig. Ohne die erste Variante
 # lief der Check gegen settings-template/Default weiter, obwohl die Umgebung
-# AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ✗" im SessionStart-Report.
+# AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ❌" im SessionStart-Report.
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_LLAMA_URL",
     os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myai:11436")),
@@ -202,11 +202,6 @@ INIT_MSG = json.dumps({
 }) + "\n"
 
 
-def emit(msg):
-    print(json.dumps({"systemMessage": msg, "suppressOutput": True}))
-    sys.exit(0)
-
-
 def check_ai_rem():
     if not AI_REM_ENDPOINT:
         return
@@ -237,7 +232,7 @@ def check_ai_rem():
         sid = resp.headers.get("mcp-session-id")
         resp.read()
         if not sid:
-            results.append("ai-rem ✗ nicht erreichbar")
+            results.append("ai-rem ❌ nicht erreichbar")
             return
 
         try:
@@ -264,7 +259,7 @@ def check_ai_rem():
         except Exception:
             pass
     except Exception:
-        results.append("ai-rem ✗ nicht erreichbar")
+        results.append("ai-rem ❌ nicht erreichbar")
 
 
 def check_smb():
@@ -289,7 +284,7 @@ def check_smb():
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except Exception:
-        results.append("SMB ✗")
+        results.append("SMB ❌")
         return
 
     for _ in range(SMB_RETRIES):
@@ -298,7 +293,7 @@ def check_smb():
             results.append("SMB ✓")
             return
 
-    results.append("SMB ✗ (timeout)")
+    results.append("SMB ❌ (timeout)")
 
 
 def _check_one_stdio(name, path):
@@ -379,7 +374,7 @@ def check_mcp_servers():
     total = len(MCP_STDIO_SERVERS)
 
     if fail:
-        results.append(f"MCP: {len(ok)}/{total}, ✗ {', '.join(fail)}")
+        results.append(f"MCP: {len(ok)}/{total}, ❌ {', '.join(fail)}")
     else:
         results.append(f"MCP: {total}/{total} ✓")
 
@@ -387,7 +382,7 @@ def check_mcp_servers():
 def check_and_sync_settings():
     if not os.path.exists(TEMPLATE) or not os.path.exists(SETTINGS):
         if not os.path.exists(SETTINGS):
-            results.append("settings: keine settings.json")
+            results.append("settings ❌ keine settings.json")
         return
 
     try:
@@ -484,7 +479,7 @@ def check_ollama_and_catchup():
     except Exception:
         up = False
     if not up:
-        results.append("llm ✗")
+        results.append("llm ❌")
         return
     cli = _ai_rem_cli()
     if cli:
@@ -553,24 +548,42 @@ def check_auto_memory():
     if not _auto_memory_registered():
         return ""
     fault = _auto_memory_fault(os.path.join(CLAUDE_DIR, "auto-memory"))
-    results.append("Auto-Memory ✗ gestört" if fault else "Auto-Memory ✓")
+    results.append("Auto-Memory ❌ gestört" if fault else "Auto-Memory ✓")
     return fault
+
+
+def _api_get(path):
+    """JSON von einer /api-Route holen. None bei jedem Fehler — die Checks hier
+    duerfen den Sessionstart nie blockieren."""
+    if not AI_REM_ENDPOINT:
+        return None
+    base = AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp") else AI_REM_ENDPOINT.rstrip("/")
+    headers = {"Authorization": f"Bearer {AI_REM_TOKEN}"} if AI_REM_TOKEN else {}
+    try:
+        req = urllib.request.Request(base + path, headers=headers)
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return None
+
+
+def check_embed_pending():
+    """Entities ohne Vektor: > 0 heisst, der Backfill kam nicht durch — meist weil
+    der WAL-Checkpoint am zu kleinen Buffer-Pool scheiterte und die Vektoren den
+    Neustart nicht ueberlebten. Nur im Fehlerfall eine Zeile."""
+    st = _api_get("/api/status")
+    if not isinstance(st, dict) or not st.get("embed_enabled"):
+        return
+    n = st.get("embed_pending") or 0
+    if n:
+        results.append(f"embed ❌ {n} ohne Vektor")
 
 
 def check_cleanup_pending():
     """Passive Anzeige offener Cleanup-Reviews: bei nicht-leerer Queue einen rein
     informativen additionalContext-Hinweis zurückgeben — KEIN Auto-Auftrag. Die
     Abarbeitung stößt der User selbst über /memory-cleanup an."""
-    if not AI_REM_ENDPOINT:
-        return ""
-    base = AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp") else AI_REM_ENDPOINT.rstrip("/")
-    headers = {"Authorization": f"Bearer {AI_REM_TOKEN}"} if AI_REM_TOKEN else {}
-    try:
-        req = urllib.request.Request(base + "/api/cleanup/pending", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as r:
-            items = json.loads(r.read().decode())
-    except Exception:
-        return ""
+    items = _api_get("/api/cleanup/pending")
     n = len(items) if isinstance(items, list) else 0
     if not n:
         return ""
@@ -588,6 +601,7 @@ check_mcp_servers()
 check_and_sync_settings()
 check_tools()
 check_ollama_and_catchup()
+check_embed_pending()
 _am_fault = check_auto_memory()
 _extra_ctx = "\n".join(x for x in (_am_fault, check_cleanup_pending()) if x)
 

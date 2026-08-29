@@ -16,6 +16,7 @@ import os
 import queue
 import re
 import socket
+import signal
 import sys
 import threading
 import time
@@ -862,22 +863,38 @@ def _do_backup() -> str:
 _shutdown = threading.Event()
 
 
-def _checkpoint_wal(force: bool = False) -> None:
+def _checkpoint_wal(force: bool = False) -> bool:
     """WAL in die DB mergen, damit sie nicht aufstaut. `force` checkpointet
     unabhängig von der Größe (Shutdown); sonst nur ab KUZU_WAL_CHECKPOINT_MB.
-    Fehler sind unkritisch — der nächste Lauf versucht es erneut."""
+    Rückgabe: True = gemerged oder nichts zu tun, False = fehlgeschlagen.
+
+    Ein Fehlschlag ist meist transient ("buffer pool is full" unter Backfill-Last):
+    am 29.08. scheiterte ein Chunk-Checkpoint, der 1,4 s spätere merged dieselben
+    Writes problemlos. Darum ein Retry — der Aufrufer soll nur bei echtem Scheitern
+    eskalieren müssen."""
     wal = DB_PATH + ".wal"
     try:
         mb = os.path.getsize(wal) / 1024 / 1024
     except OSError:
-        return
+        # Keine WAL-Datei: bei force trotzdem checkpointen — die Dirty-Pages hängen
+        # am Buffer-Pool, nicht an der WAL-Größe. Der frühere blanke return machte
+        # genau den erzwungenen Checkpoint zum No-op.
+        if not force:
+            return True
+        mb = 0.0
     if not force and mb < KUZU_WAL_CHECKPOINT_MB:
-        return
-    try:
-        db_exec("CHECKPOINT")
-        log.info("WAL-Checkpoint: %.1f MB gemerged", mb)
-    except Exception as e:
-        log.warning("WAL-Checkpoint fehlgeschlagen (WAL=%.1f MB): %s", mb, e)
+        return True
+    for versuch in (1, 2):
+        try:
+            db_exec("CHECKPOINT")
+            log.info("WAL-Checkpoint: %.1f MB gemerged", mb)
+            return True
+        except Exception as e:
+            if versuch == 1:
+                time.sleep(1)
+                continue
+            log.warning("WAL-Checkpoint fehlgeschlagen (WAL=%.1f MB): %s", mb, e)
+    return False
 
 
 def _scheduler_loop() -> None:
@@ -915,6 +932,12 @@ def _on_exit() -> None:
 
 
 atexit.register(_on_exit)
+# atexit läuft bei SIGTERM nicht — und genau das schickt `docker stop`/`compose up -d`
+# an PID 1. Ohne den Handler fiel der finale Checkpoint bei JEDEM Container-Neustart
+# aus; wird der Prozess dabei mitten im Storage-Rewrite hart beendet, bleibt eine
+# halb geschriebene kg.db zurück (siehe kg.db.segfault-20260829: count() geht,
+# jeder Spaltenzugriff segfaultet).
+signal.signal(signal.SIGTERM, lambda *_: (_on_exit(), sys.exit(0)))
 
 
 # ─── Web UI ──────────────────────────────────────────────────────────────────
@@ -1403,7 +1426,15 @@ async def api_status(request: Request) -> JSONResponse:
     e_count = _rows(await db_exec_async("MATCH (e:Entity) RETURN count(e)"))[0][0]
     r_count = _rows(await db_exec_async("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
     cfg = _load_backup_cfg()
-    return JSONResponse({"version": VERSION, "entities": e_count, "relations": r_count, "last_backup": cfg.get("last_backup")})
+    # embed_pending macht einen abgebrochenen Backfill sichtbar: bleibt die Zahl über
+    # Neustarts hinweg stehen statt gegen 0 zu gehen, überlebten die Vektoren den
+    # Checkpoint nicht. Vorher war das nur an einer WARNING im flüchtigen Log-Ring zu sehen.
+    pending = _rows(await db_exec_async(
+        "MATCH (e:Entity) WHERE (e.embedding IS NULL OR e.embedding = '') "
+        "RETURN count(e)"))[0][0]
+    return JSONResponse({"version": VERSION, "entities": e_count, "relations": r_count,
+                         "last_backup": cfg.get("last_backup"),
+                         "embed_pending": pending, "embed_enabled": EMBED_ENABLED})
 
 
 @mcp.custom_route("/api/backup/config", methods=["GET"])
@@ -2445,6 +2476,7 @@ def _embed_backfill() -> None:
         log.info("Embedding-Backfill: %d Entities (Chunks von %d)",
                  len(rows), EMBED_BACKFILL_CHUNK)
         done = 0
+        ok = True
         for i in range(0, len(rows), EMBED_BACKFILL_CHUNK):
             chunk = rows[i:i + EMBED_BACKFILL_CHUNK]
             vecs = _embed_texts([_embed_payload(nm, descr or "") for _, nm, descr in chunk],
@@ -2453,12 +2485,22 @@ def _embed_backfill() -> None:
                 db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
                         {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
             done += len(chunk)
-            _checkpoint_wal(force=True)
+            ok = _checkpoint_wal(force=True) and ok
             if len(rows) > EMBED_BACKFILL_CHUNK:
                 log.info("Embedding-Backfill: %d/%d", done, len(rows))
+        # Ein gescheiterter Chunk-Checkpoint wird sonst vom nächsten Chunk mitgemerged
+        # — beim LETZTEN gibt es keinen Nachfolger. Der Scheduler greift unter
+        # KUZU_WAL_CHECKPOINT_MB nicht, also hier final erzwingen.
+        ok = _checkpoint_wal(force=True) and ok
         _invalidate_embed_cache()
         _ensure_embed_matrix()
-        log.info("Embedding-Backfill fertig (%d)", done)
+        if ok:
+            log.info("Embedding-Backfill fertig (%d)", done)
+        else:
+            log.error("Embedding-Backfill: %d Vektoren geschrieben, aber mindestens ein "
+                      "WAL-Checkpoint schlug fehl — Buffer-Pool zu klein "
+                      "(KUZU_BUFFER_POOL_SIZE_MB=%d). Ein Teil der Vektoren kann beim "
+                      "nächsten Start fehlen.", done, KUZU_BUFFER_POOL_SIZE_MB)
     except Exception as e:
         log.error("Embedding-Backfill fehlgeschlagen: %s", e)
 

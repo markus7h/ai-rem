@@ -46,7 +46,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </head>
 <body>
 <a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations &nbsp;·&nbsp; <a href="/browse">Browse →</a> &nbsp;·&nbsp; <a href="/graph">Graph →</a> &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/logs">Logs →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations<span id="ep"></span> &nbsp;·&nbsp; <a href="/browse">Browse →</a> &nbsp;·&nbsp; <a href="/graph">Graph →</a> &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/logs">Logs →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
 <div class="grid">
 
   <div class="card">
@@ -112,6 +112,10 @@ async function loadStatus(){
   const r=await j('/api/status').catch(()=>({}));
   document.getElementById('ec').textContent=r.entities??'—';
   document.getElementById('rc').textContent=r.relations??'—';
+  // Offener Backfill: bleibt die Zahl über Neustarts stehen, überlebten die Vektoren
+  // den WAL-Checkpoint nicht (Buffer-Pool zu klein).
+  document.getElementById('ep').textContent=
+    (r.embed_enabled&&r.embed_pending>0)?` · ❌ ${r.embed_pending} ohne Vektor`:'';
   if(r.last_backup){
     document.getElementById('lb').textContent='Last backup: '+new Date(r.last_backup).toLocaleString();
   }
