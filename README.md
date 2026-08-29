@@ -130,11 +130,13 @@ Switching backends changes the vector dimension (384 ↔ 1024), which makes the 
 vectors meaningless. The server detects that on the next backfill and recomputes **all**
 vectors — no manual migration, and it works in both directions.
 
-> **Raise `KUZU_BUFFER_POOL_SIZE_MB` when switching to an external backend** (e.g. 512,
-> and `MEM_LIMIT` to 1280m). The 1024-dimensional vectors put more write pressure on the
+> **Raise `KUZU_BUFFER_POOL_SIZE_MB` when switching to an external backend** (e.g. 768,
+> and `MEM_LIMIT` to 1536m). The 1024-dimensional vectors put more write pressure on the
 > backfill than the 256 MB default can take: the WAL checkpoint fails with `buffer pool is
-> full`, the vectors never reach the database and are recomputed on every start. Look for
-> `WAL-Checkpoint fehlgeschlagen` in the log.
+> full` and the affected vectors never reach the database. A failed checkpoint is retried
+> once, and a backfill that still could not persist everything logs an `ERROR` instead of
+> reporting success — watch for `WAL-Checkpoint fehlgeschlagen` in the log and for
+> `embed_pending` in `/api/status`, which stays above zero across restarts in that case.
 
 > **Note (memory):** Without `KUZU_BUFFER_POOL_SIZE_MB`, kuzu sizes its buffer pool to
 > ~80 % of **host** RAM and ignores the container `mem_limit`. Normal operation on this

@@ -552,20 +552,38 @@ def check_auto_memory():
     return fault
 
 
+def _api_get(path):
+    """JSON von einer /api-Route holen. None bei jedem Fehler — die Checks hier
+    duerfen den Sessionstart nie blockieren."""
+    if not AI_REM_ENDPOINT:
+        return None
+    base = AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp") else AI_REM_ENDPOINT.rstrip("/")
+    headers = {"Authorization": f"Bearer {AI_REM_TOKEN}"} if AI_REM_TOKEN else {}
+    try:
+        req = urllib.request.Request(base + path, headers=headers)
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return None
+
+
+def check_embed_pending():
+    """Entities ohne Vektor: > 0 heisst, der Backfill kam nicht durch — meist weil
+    der WAL-Checkpoint am zu kleinen Buffer-Pool scheiterte und die Vektoren den
+    Neustart nicht ueberlebten. Nur im Fehlerfall eine Zeile."""
+    st = _api_get("/api/status")
+    if not isinstance(st, dict) or not st.get("embed_enabled"):
+        return
+    n = st.get("embed_pending") or 0
+    if n:
+        results.append(f"embed ❌ {n} ohne Vektor")
+
+
 def check_cleanup_pending():
     """Passive Anzeige offener Cleanup-Reviews: bei nicht-leerer Queue einen rein
     informativen additionalContext-Hinweis zurückgeben — KEIN Auto-Auftrag. Die
     Abarbeitung stößt der User selbst über /memory-cleanup an."""
-    if not AI_REM_ENDPOINT:
-        return ""
-    base = AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp") else AI_REM_ENDPOINT.rstrip("/")
-    headers = {"Authorization": f"Bearer {AI_REM_TOKEN}"} if AI_REM_TOKEN else {}
-    try:
-        req = urllib.request.Request(base + "/api/cleanup/pending", headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as r:
-            items = json.loads(r.read().decode())
-    except Exception:
-        return ""
+    items = _api_get("/api/cleanup/pending")
     n = len(items) if isinstance(items, list) else 0
     if not n:
         return ""
@@ -583,6 +601,7 @@ check_mcp_servers()
 check_and_sync_settings()
 check_tools()
 check_ollama_and_catchup()
+check_embed_pending()
 _am_fault = check_auto_memory()
 _extra_ctx = "\n".join(x for x in (_am_fault, check_cleanup_pending()) if x)
 
