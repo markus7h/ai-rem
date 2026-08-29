@@ -43,7 +43,7 @@ AI_REM_TIMEOUT = 5
 # Gleicher Vorrang wie in lib/extractor.py: AI_REM_LLAMA_URL ist der aktuelle
 # Name, AI_REM_OLLAMA_URL bleibt als Alt-Name gueltig. Ohne die erste Variante
 # lief der Check gegen settings-template/Default weiter, obwohl die Umgebung
-# AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ✗" im SessionStart-Report.
+# AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ❌" im SessionStart-Report.
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_LLAMA_URL",
     os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myai:11436")),
@@ -202,11 +202,6 @@ INIT_MSG = json.dumps({
 }) + "\n"
 
 
-def emit(msg):
-    print(json.dumps({"systemMessage": msg, "suppressOutput": True}))
-    sys.exit(0)
-
-
 def check_ai_rem():
     if not AI_REM_ENDPOINT:
         return
@@ -237,7 +232,7 @@ def check_ai_rem():
         sid = resp.headers.get("mcp-session-id")
         resp.read()
         if not sid:
-            results.append("ai-rem ✗ nicht erreichbar")
+            results.append("ai-rem ❌ nicht erreichbar")
             return
 
         try:
@@ -264,7 +259,7 @@ def check_ai_rem():
         except Exception:
             pass
     except Exception:
-        results.append("ai-rem ✗ nicht erreichbar")
+        results.append("ai-rem ❌ nicht erreichbar")
 
 
 def check_smb():
@@ -289,7 +284,7 @@ def check_smb():
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except Exception:
-        results.append("SMB ✗")
+        results.append("SMB ❌")
         return
 
     for _ in range(SMB_RETRIES):
@@ -298,7 +293,7 @@ def check_smb():
             results.append("SMB ✓")
             return
 
-    results.append("SMB ✗ (timeout)")
+    results.append("SMB ❌ (timeout)")
 
 
 def _check_one_stdio(name, path):
@@ -379,7 +374,7 @@ def check_mcp_servers():
     total = len(MCP_STDIO_SERVERS)
 
     if fail:
-        results.append(f"MCP: {len(ok)}/{total}, ✗ {', '.join(fail)}")
+        results.append(f"MCP: {len(ok)}/{total}, ❌ {', '.join(fail)}")
     else:
         results.append(f"MCP: {total}/{total} ✓")
 
@@ -387,7 +382,7 @@ def check_mcp_servers():
 def check_and_sync_settings():
     if not os.path.exists(TEMPLATE) or not os.path.exists(SETTINGS):
         if not os.path.exists(SETTINGS):
-            results.append("settings: keine settings.json")
+            results.append("settings ❌ keine settings.json")
         return
 
     try:
@@ -484,7 +479,7 @@ def check_ollama_and_catchup():
     except Exception:
         up = False
     if not up:
-        results.append("llm ✗")
+        results.append("llm ❌")
         return
     cli = _ai_rem_cli()
     if cli:
@@ -553,7 +548,7 @@ def check_auto_memory():
     if not _auto_memory_registered():
         return ""
     fault = _auto_memory_fault(os.path.join(CLAUDE_DIR, "auto-memory"))
-    results.append("Auto-Memory ✗ gestört" if fault else "Auto-Memory ✓")
+    results.append("Auto-Memory ❌ gestört" if fault else "Auto-Memory ✓")
     return fault
 
 
