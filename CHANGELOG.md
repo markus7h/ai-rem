@@ -16,6 +16,14 @@ German).
 ## [Unreleased]
 
 ### Added
+- **`vault-secret-reminder` hook.** A `PostToolUse` hook on `Bash` scans command output
+  for auth/credential failures and injects a reminder to pull the secret from mykeyvault
+  (`vault_list_items` → `vault_run_with_secret`) instead of asking the user for a token
+  or an interactive login. Deterministic rather than a pinned preference: costs no
+  routine slot and no tokens per turn, fires exactly at the failure. Shipped via
+  `/hooks/vault-secret-reminder.py` and registered by `scripts/setup.py`, so every newly
+  set up device gets it. Display commands (`git diff/log/show`, `grep`, `cat`, …) are
+  exempt — there an auth pattern is almost always quoted text. (#102)
 - Two regression tests in `tests/test_changelog.py` guard the release bookkeeping that
   slipped through four releases: every `## [x.y.z]` section must have its compare-link
   definition, `[Unreleased]` must diff against the newest section, and the version
