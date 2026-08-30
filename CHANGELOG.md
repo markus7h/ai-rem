@@ -13,7 +13,7 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [0.8.27] – 2026-08-30
 
 ### Added
 - **`vault-secret-reminder` hook.** A `PostToolUse` hook on `Bash` scans command output
@@ -25,11 +25,14 @@ German).
   set up device gets it. Display commands (`git diff/log/show`, `grep`, `cat`, …) are
   exempt — there an auth pattern is almost always quoted text. (#102)
 - Two regression tests in `tests/test_changelog.py` guard the release bookkeeping that
-  slipped through four releases: every `## [x.y.z]` section must have its compare-link
-  definition, `[Unreleased]` must diff against the newest section, and the version
+  slipped through four releases: every version heading must have its compare-link
+  definition, the Unreleased link must diff against the newest section, and the version
   anchor at the top of `README.md` / `README.de.md` must match `server.py:VERSION`.
   They run in the existing `tests` CI job, so a release PR that forgets either fails
-  before the tag is pushed.
+  before the tag is pushed. (#107)
+
+### Changed
+- Dependency bumps: `cryptography` 50.0.0 → 50.0.1 (#103), `numpy` 2.5.1 → 2.5.2 (#94).
 
 ## [0.8.26] – 2026-08-30
 
@@ -240,7 +243,8 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.26...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.27...HEAD
+[0.8.27]: https://github.com/markus7h/ai-rem/compare/v0.8.26...v0.8.27
 [0.8.26]: https://github.com/markus7h/ai-rem/compare/v0.8.25...v0.8.26
 [0.8.25]: https://github.com/markus7h/ai-rem/compare/v0.8.24...v0.8.25
 [0.8.24]: https://github.com/markus7h/ai-rem/compare/v0.8.23...v0.8.24
