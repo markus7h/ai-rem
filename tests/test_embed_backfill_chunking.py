@@ -46,12 +46,14 @@ def _scenario() -> None:
     server.EMBED_ENABLED = True
     server._embed_texts = lambda texts, prefix: (batches.append(len(texts))
                                                  or [[0.1, 0.2, 0.3] for _ in texts])
-    server._checkpoint_wal = lambda force=False: checkpoints.append(force)
+    server._checkpoint_wal = lambda force=False: (checkpoints.append(force), True)[1]
 
     server._embed_backfill()
 
     assert batches == [CHUNK, CHUNK, ENTITIES - 2 * CHUNK], f"nicht gechunkt: {batches}"
-    assert checkpoints == [True] * len(batches), f"Checkpoint je Chunk fehlt: {checkpoints}"
+    # len(batches) Chunk-Checkpoints + 1 finaler nach der Schleife (der letzte Chunk
+    # hat keinen Nachfolger, der einen Fehlschlag mitmergen wuerde).
+    assert checkpoints == [True] * (len(batches) + 1), f"Checkpoint je Chunk fehlt: {checkpoints}"
 
     filled = server._rows(server.db_exec(
         "MATCH (e:Entity) WHERE e.embedding <> '' RETURN count(e)"))[0][0]
@@ -67,9 +69,61 @@ def _scenario() -> None:
     print("OK")
 
 
-def test_embed_backfill_chunks_and_checkpoints():
+def _scenario_checkpoint_faellt_aus() -> None:
+    """Scheitert ein Checkpoint, darf der Lauf NICHT "fertig" melden.
+
+    Vorher schluckte _checkpoint_wal jeden Fehler als WARNING und der Backfill
+    meldete Erfolg — die Vektoren hingen aber im vollen Buffer-Pool und waren nach
+    dem naechsten Start weg. Genau so lief es am 29.08. durch.
+    """
+    import logging
+
+    tmp = tempfile.mkdtemp(prefix="ai-rem-backfill-fail-")
+    os.environ["KUZU_DB_PATH"] = os.path.join(tmp, "kg.db")
+    os.environ["BACKUP_DIR"] = os.path.join(tmp, "backups")
+    os.environ["EMBED_ENABLED"] = "0"
+    os.environ["EMBED_BACKFILL_CHUNK"] = str(CHUNK)
+    os.environ.setdefault("AI_REM_API_TOKEN", "test-token")
+    sys.path.insert(0, ROOT)
+
+    import server
+
+    for i in range(ENTITIES):
+        server.memory_add(f"Ent{i:02d}", "Task", description=f"Beschreibung {i}")
+
+    meldungen = []
+
+    class _Fang(logging.Handler):
+        def emit(self, record):
+            meldungen.append((record.levelname, record.getMessage()))
+
+    server.log.addHandler(_Fang())
+
+    rufe = []
+    server.EMBED_ENABLED = True
+    server._embed_texts = lambda texts, prefix: [[0.1, 0.2, 0.3] for _ in texts]
+    # Zweiter Checkpoint scheitert, alle anderen gehen durch.
+    server._checkpoint_wal = lambda force=False: (rufe.append(force), len(rufe) != 2)[1]
+
+    server._embed_backfill()
+
+    fertig = [m for lvl, m in meldungen if "Backfill fertig" in m]
+    fehler = [m for lvl, m in meldungen if lvl == "ERROR" and "Checkpoint schlug fehl" in m]
+    assert not fertig, f"meldet faelschlich Erfolg: {fertig}"
+    assert fehler, f"kein ERROR zum Checkpoint-Fehlschlag: {meldungen}"
+
+    # Geschrieben wird trotzdem alles — der Lauf bricht bewusst nicht ab, die
+    # bereits gemergten Chunks sind gueltig und der naechste Lauf ist idempotent.
+    filled = server._rows(server.db_exec(
+        "MATCH (e:Entity) WHERE e.embedding <> '' RETURN count(e)"))[0][0]
+    assert int(filled) == ENTITIES, f"Vektoren fehlen: {filled}"
+
+    print("OK")
+
+
+def _lauf(szenario):
     r = subprocess.run(
-        [sys.executable, __file__],
+        [sys.executable, __file__, szenario],
         capture_output=True, text=True,
         env={**os.environ, "AI_REM_API_TOKEN": "test-token"},
     )
@@ -77,5 +131,16 @@ def test_embed_backfill_chunks_and_checkpoints():
     assert "OK" in r.stdout
 
 
+def test_embed_backfill_chunks_and_checkpoints():
+    _lauf("chunks")
+
+
+def test_backfill_meldet_keinen_erfolg_bei_checkpoint_fehler():
+    _lauf("checkpoint_faellt_aus")
+
+
 if __name__ == "__main__":
-    _scenario()
+    if len(sys.argv) > 1 and sys.argv[1] == "checkpoint_faellt_aus":
+        _scenario_checkpoint_faellt_aus()
+    else:
+        _scenario()

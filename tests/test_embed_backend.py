@@ -39,7 +39,7 @@ def _scenario_dim_change() -> None:
         server.memory_add(f"Ent{i}", "Task", description=f"Beschreibung {i}")
 
     server.EMBED_ENABLED = True
-    server._checkpoint_wal = lambda force=False: None
+    server._checkpoint_wal = lambda force=False: True
 
     # Erster Lauf mit 3 Dimensionen — Ausgangszustand wie ein fastembed-Bestand.
     server._embed_texts = lambda texts, prefix: [[0.1, 0.2, 0.3] for _ in texts]
@@ -73,7 +73,7 @@ def _scenario_fail_soft() -> None:
     """Backend down: kein Crash, kein Datenverlust — und der Reset loescht NICHTS."""
     server = _boot()
     server.EMBED_ENABLED = True
-    server._checkpoint_wal = lambda force=False: None
+    server._checkpoint_wal = lambda force=False: True
     server._embed_texts = lambda texts, prefix: [[0.1, 0.2, 0.3] for _ in texts]
     server.memory_add("Bestand", "Task", description="hat schon einen Vektor")
     server._embed_backfill()

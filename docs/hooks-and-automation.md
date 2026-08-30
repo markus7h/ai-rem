@@ -40,7 +40,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Visibility:** each successful run writes `~/.claude/auto-memory/last-run.json`; the SessionStart check only surfaces the status `Auto-Memory ✓` — what was stored last stays in that file, not in the status line.
 
-**Fault detection:** because the hook deliberately fails silently (rc=0, so it never breaks `/compact` or session end), a broken auto-memory used to stay invisible — it once ran dead for 7 weeks. The SessionStart check now compares the mtime of `last-run.json` against `errors.log` and reports on two channels: `Auto-Memory ✗ gestört` in the status line, plus the full diagnosis (last error, likely cause, log path) as `additionalContext` so the assistant sees it too and can raise it. Three conditions trigger it: errors newer than the last success, no `last-run.json` at all, or nothing stored for more than 7 days.
+**Fault detection:** because the hook deliberately fails silently (rc=0, so it never breaks `/compact` or session end), a broken auto-memory used to stay invisible — it once ran dead for 7 weeks. The SessionStart check now compares the mtime of `last-run.json` against `errors.log` and reports on two channels: `Auto-Memory ❌ gestört` in the status line, plus the full diagnosis (last error, likely cause, log path) as `additionalContext` so the assistant sees it too and can raise it. Three conditions trigger it: errors newer than the last success, no `last-run.json` at all, or nothing stored for more than 7 days.
 
 **Configuration env:**
 - `AI_REM_ENDPOINT` — MCP URL (default `http://localhost:3456/mcp`)
