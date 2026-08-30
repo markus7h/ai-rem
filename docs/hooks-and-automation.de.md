@@ -99,7 +99,7 @@ Ein `PostToolUse`-Hook auf `Bash` (`hooks/vault-secret-reminder.py`, Timeout 5) 
 
 **Bei einem Treffer** injiziert er per `additionalContext` eine Erinnerung: das Secret aus dem Vault holen (mykeyvault — `vault_list_items` zum Finden, `vault_run_with_secret` injiziert es wertblind als Env-Var, `vault_run_with_secret_file` für SSH-Keys/PEM-Dateien) statt den User um Token, Passwort oder interaktives Login zu bitten. Erst wenn im Vault nichts Passendes liegt, den User fragen.
 
-**Anzeige-Befehle** (`git diff/log/show/blame`, `grep`, `cat`, …) sind ausgenommen — dort ist ein Auth-Muster fast immer zitierter Text, kein echter Fehler. Nur der *führende* Befehl zählt: `gh api … | tail -2` ist ein echter Aufruf, dessen Ausgabe bloß gekürzt wird, und darf die Erinnerung nicht verlieren.
+**Anzeige-Befehle** (`git diff/log/show/blame`, `gh … view/diff/list`, `grep`, `cat`, …) sind ausgenommen — dort ist ein Auth-Muster fast immer zitierter Text, kein echter Fehler. Nur der *führende* Befehl zählt: `gh api … | tail -2` ist ein echter Aufruf, dessen Ausgabe bloß gekürzt wird, und darf die Erinnerung nicht verlieren.
 
 **Fail-silent:** blockiert nie einen Bash-Aufruf. Ein False Positive kostet eine überflüssige Kontextzeile, ein verpasster Vault-Griff kostet eine vermeidbare Rückfrage an den User. Ein eingebauter Selbsttest ist über `python3 hooks/vault-secret-reminder.py --selftest` verfügbar.
 
