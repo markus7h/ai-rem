@@ -38,8 +38,13 @@ _RX = re.compile("|".join(AUTH_PATTERNS), re.IGNORECASE)
 # dessen Ausgabe bloß gekürzt wird — ein \b-Match hätte die Erinnerung verschluckt.
 # ponytail: Befehlsname genügt als Ausschluss. Ein `git diff && curl` verliert damit
 #           die Erinnerung — dann sagt der nächste echte Fehlversuch es erneut.
+# `gh <ding> view|diff|list` gibt fremden Text aus (PR-Beschreibungen, Issue-Bodies),
+# in dem "gh auth login" oder "401" zitiert stehen kann — real beobachtet an einem
+# `gh pr view` auf die PR, die diesen Hook eingefuehrt hat. `gh api` bleibt drin:
+# das ist ein echter Aufruf, dessen 401 die Erinnerung ausloesen soll.
 READERS = re.compile(
-    r"^\s*(git\s+(diff|log|show|blame)|grep|rg|ag|cat|less|head|tail|sed|awk)\b"
+    r"^\s*(git\s+(diff|log|show|blame)|gh\s+\w+\s+(view|diff|list)"
+    r"|grep|rg|ag|cat|less|head|tail|sed|awk)\b"
 )
 
 
@@ -125,6 +130,13 @@ if __name__ == "__main__" and "--selftest" in sys.argv:
     assert detect("HTTP 401", "gh api user | tail -2") == "HTTP 401"
     assert detect("Bad credentials", "git push 2>&1 | head -5")
     assert detect("HTTP 401", "  git diff docs/") is None  # fuehrend trotz Einrueckung
+    # gh-Anzeigebefehle: der Text stammt aus PR-/Issue-Bodies, nicht vom Aufruf
+    assert detect("gh auth login", "gh pr view 102 --json body -q .body") is None
+    assert detect("HTTP 401", "gh issue list") is None
+    assert detect("Bad credentials", "gh release view v1.0") is None
+    # ... waehrend echte gh-Aufrufe weiter melden
+    assert detect("HTTP 401", "gh api user") == "HTTP 401"
+    assert detect("Bad credentials", "gh pr merge 12 --squash")
     print("selftest ok")
     sys.exit(0)
 
