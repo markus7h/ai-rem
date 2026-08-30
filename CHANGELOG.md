@@ -13,6 +13,16 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Added
+- Two regression tests in `tests/test_changelog.py` guard the release bookkeeping that
+  slipped through four releases: every `## [x.y.z]` section must have its compare-link
+  definition, `[Unreleased]` must diff against the newest section, and the version
+  anchor at the top of `README.md` / `README.de.md` must match `server.py:VERSION`.
+  They run in the existing `tests` CI job, so a release PR that forgets either fails
+  before the tag is pushed.
+
 ## [0.8.26] – 2026-08-30
 
 ### Fixed
