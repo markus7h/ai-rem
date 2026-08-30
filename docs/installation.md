@@ -17,7 +17,7 @@ as `python -X utf8 <hook>` commands and the secret pull uses the built-in OpenSS
 The script automatically handles:
 1. `claude mcp add` — register ai-rem as a user-scoped HTTP MCP server
 2. `~/.claude/settings-template.json` — (re)generate base template for permissions, deny rules and hooks from the live setup config
-3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count, open tasks/plans)
+3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count, vector coverage, open tasks/plans)
 4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → llama-server extractor → structured entities)
 5. `~/.local/share/ai-rem/bin/ai-rem` (plus `../lib/`, the modules the CLI imports) — install the CLI itself locally and point `AI_REM_CLI` in `~/.claude/settings.json` at it. A clone path already configured there is replaced: if the clone sits on a network share, the CLI is gone at session end as soon as the mount stalls, and the hook aborts silently (visible only in `~/.claude/auto-memory/errors.log`). A manually set `AI_REM_CLI` pointing at anything other than a clone is left alone. If the hook does not find the CLI there, it also looks under `~/myCode/github/ai-rem/bin/ai-rem`, `~/*/myCode/github/ai-rem/bin/ai-rem`, `/Volumes/*/myCode/…` and `PATH`.
 6. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md

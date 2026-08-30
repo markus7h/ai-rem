@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.8.21](https://github.com/markus7h/ai-rem/releases/tag/v0.8.21)**.
+> Diese Dokumentation bezieht sich auf **[v0.8.26](https://github.com/markus7h/ai-rem/releases/tag/v0.8.26)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes werden im [CHANGELOG.md](CHANGELOG.md) gepflegt und bei jedem Tag in die [GitHub Releases](https://github.com/markus7h/ai-rem/releases) und die Docker-Hub-Beschreibung veröffentlicht; frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
@@ -129,11 +129,14 @@ Ein Backendwechsel ändert die Vektor-Dimension (384 ↔ 1024) und macht gespeic
 Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechnet
 **alle** Vektoren neu — ohne manuelle Migration, in beide Richtungen.
 
-> **Beim Umstellen auf extern `KUZU_BUFFER_POOL_SIZE_MB` erhöhen** (z. B. 512, und
-> `MEM_LIMIT` auf 1280m). Die 1024-dimensionalen Vektoren erzeugen beim Backfill mehr
+> **Beim Umstellen auf extern `KUZU_BUFFER_POOL_SIZE_MB` erhöhen** (z. B. 768, und
+> `MEM_LIMIT` auf 1536m). Die 1024-dimensionalen Vektoren erzeugen beim Backfill mehr
 > Schreiblast, als der 256-MB-Default verkraftet: der WAL-Checkpoint scheitert mit
-> `buffer pool is full`, die Vektoren landen nie dauerhaft in der DB und werden bei
-> jedem Start neu gerechnet. Im Log sichtbar als `WAL-Checkpoint fehlgeschlagen`.
+> `buffer pool is full` und die betroffenen Vektoren landen nie dauerhaft in der DB.
+> Ein fehlgeschlagener Checkpoint wird einmal wiederholt; konnte der Backfill danach
+> nicht alles sichern, meldet er das als `ERROR` statt Erfolg zu behaupten. Im Log
+> sichtbar als `WAL-Checkpoint fehlgeschlagen`, in `/api/status` als `embed_pending`,
+> das dann über Neustarts hinweg über null bleibt.
 
 > **Hinweis (Speicher):** Ohne `KUZU_BUFFER_POOL_SIZE_MB` dimensioniert kuzu seinen
 > Buffer-Pool auf ~80 % des **Host**-RAMs und ignoriert das Container-`mem_limit`.

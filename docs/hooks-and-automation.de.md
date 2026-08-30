@@ -41,7 +41,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Sichtbarkeit:** Jeder erfolgreiche Lauf schreibt `~/.claude/auto-memory/last-run.json`; der SessionStart-Check zeigt daraus nur den Status `Auto-Memory ✓` — was zuletzt gespeichert wurde, steht in der Datei, nicht in der Statuszeile.
 
-**Ausfallerkennung:** Weil der Hook bewusst still scheitert (rc=0, damit er weder `/compact` noch das Session-Ende bricht), blieb ein kaputtes Auto-Memory bisher unsichtbar — es lief hier einmal 7 Wochen lang tot. Der SessionStart-Check vergleicht jetzt die mtime von `last-run.json` gegen `errors.log` und meldet auf zwei Kanälen: `Auto-Memory ✗ gestört` in der Statuszeile plus die volle Diagnose (letzter Fehler, wahrscheinliche Ursache, Log-Pfad) als `additionalContext`, damit auch der Assistent es sieht und ansprechen kann. Drei Auslöser: Fehler neuer als der letzte Erfolg, gar kein `last-run.json`, oder seit über 7 Tagen nichts gespeichert.
+**Ausfallerkennung:** Weil der Hook bewusst still scheitert (rc=0, damit er weder `/compact` noch das Session-Ende bricht), blieb ein kaputtes Auto-Memory bisher unsichtbar — es lief hier einmal 7 Wochen lang tot. Der SessionStart-Check vergleicht jetzt die mtime von `last-run.json` gegen `errors.log` und meldet auf zwei Kanälen: `Auto-Memory ❌ gestört` in der Statuszeile plus die volle Diagnose (letzter Fehler, wahrscheinliche Ursache, Log-Pfad) als `additionalContext`, damit auch der Assistent es sieht und ansprechen kann. Drei Auslöser: Fehler neuer als der letzte Erfolg, gar kein `last-run.json`, oder seit über 7 Tagen nichts gespeichert.
 
 **Konfigurations-Env:**
 - `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)

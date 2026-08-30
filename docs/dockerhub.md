@@ -97,7 +97,7 @@ Set in the Compose `.env`:
 | `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |
 | `EMBED_THRESHOLD` | `0.45` / `0.50` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |
 | `EMBED_MAX_CHARS` | `2000` | Input is truncated to this length before embedding. fastembed truncates silently at the model limit; llama.cpp rejects oversized input with HTTP 500 instead |
-| `KUZU_BUFFER_POOL_SIZE_MB` | `256` | Kuzu buffer pool. **Raise to 512 when using `EMBED_URL`** — 1024-dim vectors make the backfill's WAL checkpoint fail at 256 MB, and the vectors are then lost on restart |
+| `KUZU_BUFFER_POOL_SIZE_MB` | `256` | Kuzu buffer pool. **Raise to 768 when using `EMBED_URL`** — 1024-dim vectors make the backfill's WAL checkpoint fail at 256 MB, and the affected vectors are then lost on restart (the failure is retried once and logged as `ERROR`; `embed_pending` in `/api/status` shows what is missing) |
 | `EMBED_ENABLED` | `1` | `0` disables semantic search entirely (lexical only) |
 
 ---

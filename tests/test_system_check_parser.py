@@ -65,7 +65,13 @@ def test_auto_memory_status_nur_wenn_hook_registriert(tmp_path):
         sc.SETTINGS, sc.results[:] = orig, []
 
 
+def test_fehler_marker_ist_rotes_x():
+    """Fehlgeschlagene Checks muessen ❌ tragen — ✗ geht in der Statuszeile unter."""
+    assert "\u2717" not in _src, "Fehler-Marker in system-check.py: ❌ statt ✗"
+
+
 if __name__ == "__main__":
     test_header_mit_zaehler_wird_erkannt()
     test_ohne_sektion_leer()
+    test_fehler_marker_ist_rotes_x()
     print("OK")

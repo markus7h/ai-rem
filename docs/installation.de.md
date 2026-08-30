@@ -17,7 +17,7 @@ OpenSSH-Client (alternativ `$env:AI_REM_TOKEN` setzen).
 Das Skript erledigt automatisch:
 1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren
 2. `~/.claude/settings-template.json` — Basis-Template für Permissions, Deny-Rules und Hooks aus der Live-Setup-Config schreiben
-3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl, offene Tasks/Pläne)
+3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl, Vektor-Abdeckung, offene Tasks/Pläne)
 4. `~/.claude/hooks/auto-memory.py` — PreCompact + SessionEnd Hook deployen (Transcript → `ai-rem ingest` → llama-server-Extraktor → strukturierte Entities)
 5. `~/.local/share/ai-rem/bin/ai-rem` (+ `../lib/`, die von der CLI importierten Module) — die CLI selbst lokal ablegen und `AI_REM_CLI` in `~/.claude/settings.json` darauf zeigen lassen. Ein dort eingetragener Clone-Pfad wird ersetzt: liegt der Clone auf einem Netzlaufwerk, ist die CLI beim Session-Ende weg, sobald der Mount hängt, und der Hook bricht still ab (nur sichtbar in `~/.claude/auto-memory/errors.log`). Ein manuell gesetztes `AI_REM_CLI`, das auf keinen Clone zeigt, bleibt unangetastet. Findet der Hook die CLI dort nicht, sucht er zusätzlich unter `~/myCode/github/ai-rem/bin/ai-rem`, `~/*/myCode/github/ai-rem/bin/ai-rem`, `/Volumes/*/myCode/…` und im `PATH`.
 6. `~/.claude/hooks/claude-md-guard.py` — PreToolUse-Hook deployen, der (non-blocking) warnt, wenn `~/.claude/CLAUDE.md` editiert wird
