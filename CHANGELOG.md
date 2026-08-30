@@ -13,6 +13,16 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [0.8.26] – 2026-08-30
+
+### Fixed
+- **Patch history caught up.** The compare-link definitions at the end of this file
+  stopped at `[0.8.22]`, so `[0.8.23]`–`[0.8.25]` rendered as plain text and
+  `[Unreleased]` still diffed against v0.8.22. Links for the three missing releases
+  added, `[Unreleased]` moved to v0.8.26.
+- **Version anchor in both READMEs** was still pointing at v0.8.21 while the code
+  had shipped v0.8.25 — updated in `README.md` and `README.de.md`.
+
 ## [0.8.25] – 2026-08-29
 
 ### Fixed
@@ -212,7 +222,11 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.22...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.26...HEAD
+[0.8.26]: https://github.com/markus7h/ai-rem/compare/v0.8.25...v0.8.26
+[0.8.25]: https://github.com/markus7h/ai-rem/compare/v0.8.24...v0.8.25
+[0.8.24]: https://github.com/markus7h/ai-rem/compare/v0.8.23...v0.8.24
+[0.8.23]: https://github.com/markus7h/ai-rem/compare/v0.8.22...v0.8.23
 [0.8.22]: https://github.com/markus7h/ai-rem/compare/v0.8.21...v0.8.22
 [0.8.21]: https://github.com/markus7h/ai-rem/compare/v0.8.20...v0.8.21
 [0.8.20]: https://github.com/markus7h/ai-rem/compare/v0.8.19...v0.8.20
