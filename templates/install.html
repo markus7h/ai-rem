@@ -30,12 +30,29 @@ ul{margin:0 0 0 18px;font-size:13px}
 li{margin-bottom:4px}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--ok);color:var(--ok);border-radius:8px;padding:12px 18px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.show{opacity:1}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.hd img{display:block}
+.hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hd nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1;padding-bottom:3px;border-bottom:2px solid transparent}
+.hd nav a:hover{color:var(--text)}
+.hd nav a.on{color:var(--accent);border-bottom-color:var(--accent)}
 </style>
 </head>
 <body>
-<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<header class="hd">
+<a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
+<nav>
+<a href="/browse">Browse</a>
+<a href="/graph">Graph</a>
+<a href="/prefs">Preferences</a>
+<a href="/cleanup">Cleanup</a>
+<a href="/logs">Logs</a>
+<a href="/install" class="on">Install</a>
+<a href="/logout">Logout</a>
+</nav>
+</header>
 <h1>ai-rem installieren</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; Client-Setup für eine neue Maschine — ein Befehl, idempotent (mehrfach ausführen ist sicher)</p>
+<p class="sub">Client-Setup für eine neue Maschine — ein Befehl, idempotent (mehrfach ausführen ist sicher)</p>
 <div class="grid">
 
   <div class="card">

@@ -37,12 +37,29 @@ input[type=number]{width:60px}
 tr.below{opacity:.5}
 tr.ctxcut td{padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--pin);border-top:2px dashed var(--pin);border-bottom:2px dashed var(--pin);background:rgba(128,128,128,.07)}
 .badge{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--pin);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:1px;white-space:nowrap}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.hd img{display:block}
+.hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hd nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1;padding-bottom:3px;border-bottom:2px solid transparent}
+.hd nav a:hover{color:var(--text)}
+.hd nav a.on{color:var(--accent);border-bottom-color:var(--accent)}
 </style>
 </head>
 <body>
-<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<header class="hd">
+<a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
+<nav>
+<a href="/browse">Browse</a>
+<a href="/graph">Graph</a>
+<a href="/prefs" class="on">Preferences</a>
+<a href="/cleanup">Cleanup</a>
+<a href="/logs">Logs</a>
+<a href="/install">Install</a>
+<a href="/logout">Logout</a>
+</nav>
+</header>
 <h1>Preferences</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; <a href="/install">Install</a> &nbsp;·&nbsp; <span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext &nbsp;·&nbsp; Top <b>__CTX_LIMIT__</b> werden in den Kontext geladen</p>
+<p class="sub"><span id="cnt">—</span> Einträge &nbsp;·&nbsp; 📌 = immer in Session-Kontext &nbsp;·&nbsp; Top <b>__CTX_LIMIT__</b> werden in den Kontext geladen</p>
 <table>
   <thead><tr>
     <th style="width:32px">📌</th>

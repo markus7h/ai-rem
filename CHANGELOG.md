@@ -13,6 +13,15 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Changed
+- **Web UI: navigation moved into the logo row.** The page links used to hang off the
+  end of the metadata line, in a different order and selection on every page. They are
+  now a proper header nav to the right of the logo — same seven entries everywhere,
+  the current page underlined in the accent colour. The line below the logo keeps only
+  what belongs to the page itself (counts, hints).
+
 ## [0.8.27] – 2026-08-30
 
 ### Added
