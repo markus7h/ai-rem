@@ -66,3 +66,38 @@ def test_docker_hub_block_passt_ins_limit():
     gefuellt = seite.replace(f"{start}\n{ende}", f"{start}\n\n{_run('latest', '3')}\n\n{ende}")
     groesse = len(gefuellt.encode())
     assert groesse <= 25000, f"{groesse} Bytes ueber dem 25000-Byte-Limit"
+
+
+def _version() -> str:
+    src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
+    return re.search(r"^VERSION\s*=\s*[\"']([^\"']+)", src, re.M).group(1)
+
+
+def test_patch_historie_ist_gepflegt():
+    """Jeder Abschnitt braucht seine compare-Link-Definition, und [Unreleased] muss
+    gegen die juengste diffen. Faellt sonst nur beim Lesen der gerenderten Datei auf:
+    ohne Link-Def rendert `## [0.8.24]` als Klartext statt als Vergleichslink."""
+    text = open(CHANGELOG, encoding="utf-8").read()
+    abschnitte = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", text, re.M)
+    defs = set(re.findall(r"^\[(\d+\.\d+\.\d+)\]:\s*http", text, re.M))
+    fehlend = [v for v in abschnitte if v not in defs]
+    assert not fehlend, f"Link-Definition fehlt fuer: {', '.join(fehlend)}"
+
+    unreleased = re.search(r"^\[Unreleased\]:\s*\S+/compare/v(\S+?)\.\.\.HEAD\s*$",
+                           text, re.M)
+    assert unreleased, "[Unreleased]-Link fehlt oder hat ein fremdes Format"
+    assert unreleased.group(1) == abschnitte[0], (
+        f"[Unreleased] difft gegen v{unreleased.group(1)}, "
+        f"juengster Abschnitt ist {abschnitte[0]}")
+
+
+def test_readme_versionsanker_zeigt_auf_die_aktuelle_version():
+    """Der Anker oben in beiden READMEs blieb ueber vier Releases auf v0.8.21 stehen —
+    Leser bekamen die Doku als aelter verkauft, als sie war."""
+    version = _version()
+    for name in ("README.md", "README.de.md"):
+        kopf = open(os.path.join(ROOT, name), encoding="utf-8").read()[:600]
+        anker = re.search(r"releases/tag/v(\d+\.\d+\.\d+)", kopf)
+        assert anker, f"kein Versionsanker im Kopf von {name}"
+        assert anker.group(1) == version, (
+            f"{name} nennt v{anker.group(1)}, server.py sagt {version}")
