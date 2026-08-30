@@ -2,9 +2,10 @@
 
 [← Back to README](../README.md)
 
-ai-rem ships three Claude Code hooks that keep the graph fed and tidy without manual work:
-**Auto-Memory** (session → graph), **Nightly cleanup** (dedup/archive), and **Plan saving**
-(plans → open tasks). All three are deployed by the client setup script.
+ai-rem ships four Claude Code hooks that keep the graph fed and tidy without manual work:
+**Auto-Memory** (session → graph), **Nightly cleanup** (dedup/archive), **Plan saving**
+(plans → open tasks), and **Vault secret reminder** (auth failure → vault). All four are
+deployed by the client setup script.
 
 > **Where the hook sources live:** `hooks/*.py` in this repo — plain, lintable Python files.
 > `server.py` reads them at import time and serves them unchanged under `/hooks/<name>.py`;
@@ -87,3 +88,19 @@ status: offen
 The hook reads the newest plan file's frontmatter and upserts via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert is keyed by `name`, so re-finalizing a plan never duplicates. Completed plans are archived (`memory_archive`) — the status lives in ai-rem, so it stays consistent across machines. Fail-silent: never blocks `ExitPlanMode`.
 
 **Install:** deployed automatically by the client setup — `install_hooks()` fetches `save-plan.py` to `~/.claude/hooks/` (chmod +x) and registers the `PostToolUse: ExitPlanMode` hook in `~/.claude/settings.json`. No manual step (the file header documents the standalone install for reference).
+
+---
+
+## Vault secret reminder (auth failure → vault)
+
+A `PostToolUse` hook on `Bash` (`hooks/vault-secret-reminder.py`, timeout 5) scans the output of every Bash command for auth/credential failures, so the agent reaches for mykeyvault instead of asking the user to log in interactively. The trigger: an expired GitHub PAT once made the agent ask the user to run `gh auth login`, even though a matching PAT was sitting right there in the vault and would have worked immediately.
+
+**Patterns:** a regex checks the command output for signs of an auth failure — `HTTP 401`, `401 Unauthorized`, `403 Forbidden`, `gh auth login`, `Permission denied (publickey)`, `Bad credentials`, `invalid token`, `token expired`, `could not read Username`, among others. It reads the output defensively from `tool_response`/`tool_output` (the field name and shape vary by version: a plain string, a dict with `stdout`/`stderr`, or a list).
+
+**On a hit**, it injects a reminder via `additionalContext`: fetch the secret from the vault (mykeyvault — `vault_list_items` to find it, `vault_run_with_secret` injects it value-blind as an env var, `vault_run_with_secret_file` for SSH keys/PEM files) instead of asking the user for a token, password, or interactive login. Only ask the user once nothing matching is found in the vault.
+
+**Display commands** (`git diff/log/show/blame`, `grep`, `cat`, …) are exempt — there an auth pattern is almost always quoted text, not a real failure. Only the *leading* command counts: `gh api … | tail -2` is a real call whose output merely gets truncated, and must not lose the reminder.
+
+**Fail-silent:** it never blocks a Bash call. A false positive costs one superfluous context line; a missed vault lookup costs one avoidable question back to the user. A built-in self-test is available via `python3 hooks/vault-secret-reminder.py --selftest`.
+
+**Install:** deployed automatically by the client setup like the other hooks — `install_hooks()` fetches `vault-secret-reminder.py` to `~/.claude/hooks/` (chmod +x) and registers the `PostToolUse: Bash` hook in `~/.claude/settings.json`.

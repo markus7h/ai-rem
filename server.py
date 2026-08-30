@@ -175,6 +175,11 @@ CLI_LIB_FILES = {name: _pkg_text("lib/" + name) for name in
 # als offenen Task in ai-rem (Frontmatter name/description/status). Fail-silent.
 SAVE_PLAN_PY = _pkg_text("hooks/save-plan.py")
 
+# vault-secret-reminder.py: PostToolUse-Hook auf Bash — erkennt Auth-/401-Fehler in
+# der Ausgabe und erinnert daran, das Secret aus dem Vault zu holen statt den User um
+# Token/Login zu bitten. Fail-silent.
+VAULT_SECRET_REMINDER_PY = _pkg_text("hooks/vault-secret-reminder.py")
+
 # setup.py: die GESAMTE Setup-Logik, plattformneutral (macOS/Linux/WSL/Windows).
 # Eine Quelle der Wahrheit - die /setup- (bash) und /setup.ps1-Wrapper laden und
 # starten nur dieses Script.
@@ -1084,6 +1089,11 @@ async def claude_md_guard_hook_route(request: Request) -> PlainTextResponse:
 @mcp.custom_route("/hooks/save-plan.py", methods=["GET"])
 async def save_plan_hook_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(SAVE_PLAN_PY, media_type="text/x-python")
+
+
+@mcp.custom_route("/hooks/vault-secret-reminder.py", methods=["GET"])
+async def vault_secret_reminder_hook_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(VAULT_SECRET_REMINDER_PY, media_type="text/x-python")
 
 
 @mcp.custom_route("/bin/ai-rem", methods=["GET"])

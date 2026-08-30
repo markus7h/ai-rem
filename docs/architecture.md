@@ -12,7 +12,7 @@ Sie spielen so zusammen: Alle HTTP-MCP-Kanäle laufen über **Caddy** (TLS inter
 flowchart TB
   subgraph MAC["Mac - Claude Code Client"]
     CC["Claude Code"]
-    HOOKS["Hooks: system-check / auto-memory<br/>claude-md-guard / save-plan"]
+    HOOKS["Hooks: system-check / auto-memory<br/>claude-md-guard / save-plan<br/>vault-secret-reminder"]
     CLI["bin/ai-rem CLI"]
     TMCP["tools-registry (MCP stdio, lokal)"]
     CACHE[("~/.cache/tools-registry/scripts")]
