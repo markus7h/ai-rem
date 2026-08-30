@@ -13,14 +13,14 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [0.8.28] – 2026-08-30
 
 ### Changed
 - **Web UI: navigation moved into the logo row.** The page links used to hang off the
   end of the metadata line, in a different order and selection on every page. They are
   now a proper header nav to the right of the logo — same seven entries everywhere,
   the current page underlined in the accent colour. The line below the logo keeps only
-  what belongs to the page itself (counts, hints).
+  what belongs to the page itself (counts, hints). (#109)
 
 ## [0.8.27] – 2026-08-30
 
@@ -252,7 +252,8 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.27...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.28...HEAD
+[0.8.28]: https://github.com/markus7h/ai-rem/compare/v0.8.27...v0.8.28
 [0.8.27]: https://github.com/markus7h/ai-rem/compare/v0.8.26...v0.8.27
 [0.8.26]: https://github.com/markus7h/ai-rem/compare/v0.8.25...v0.8.26
 [0.8.25]: https://github.com/markus7h/ai-rem/compare/v0.8.24...v0.8.25

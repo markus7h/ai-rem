@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.8.27](https://github.com/markus7h/ai-rem/releases/tag/v0.8.27)**.
+> Diese Dokumentation bezieht sich auf **[v0.8.28](https://github.com/markus7h/ai-rem/releases/tag/v0.8.28)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes werden im [CHANGELOG.md](CHANGELOG.md) gepflegt und bei jedem Tag in die [GitHub Releases](https://github.com/markus7h/ai-rem/releases) und die Docker-Hub-Beschreibung veröffentlicht; frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
