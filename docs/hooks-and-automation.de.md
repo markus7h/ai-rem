@@ -18,7 +18,7 @@ halten: **Auto-Memory** (Session → Graph), **Nightly-Cleanup** (Dedup/Archivie
 
 Das eingebaute Markdown-Auto-Memory von Claude Code wird durch einen Transcript-Extraktor ersetzt, der **strukturierte Entities und Relations** in ai-rem schreibt.
 
-**Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → llama-server (`mistral-small3.2:24b` auf `AI_REM_OLLAMA_URL`, OpenAI-kompatibel `/v1/chat/completions`, default `http://myubuntu:11434`) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
+**Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → llama-server (`mistral-small3.2:24b` auf `AI_REM_OLLAMA_URL`, OpenAI-kompatibel `/v1/chat/completions`, default `http://myai:11436`) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, reine stdlib — kein venv nötig, läuft auf jedem `python3 ≥3.8` unter Windows/Linux/macOS):
 
@@ -40,11 +40,11 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Sichtbarkeit:** Jeder erfolgreiche Lauf schreibt `~/.claude/auto-memory/last-run.json`; der SessionStart-Check zeigt daraus nur den Status `Auto-Memory ✓` — was zuletzt gespeichert wurde, steht in der Datei, nicht in der Statuszeile.
 
-**Ausfallerkennung:** Weil der Hook bewusst still scheitert (rc=0, damit er weder `/compact` noch das Session-Ende bricht), blieb ein kaputtes Auto-Memory bisher unsichtbar — es lief hier einmal 7 Wochen lang tot. Der SessionStart-Check vergleicht jetzt die mtime von `last-run.json` gegen `errors.log` und meldet auf zwei Kanälen: `Auto-Memory ✗ gestört` in der Statuszeile plus die volle Diagnose (letzter Fehler, wahrscheinliche Ursache, Log-Pfad) als `additionalContext`, damit auch der Assistent es sieht und ansprechen kann. Drei Auslöser: Fehler neuer als der letzte Erfolg, gar kein `last-run.json`, oder seit über 7 Tagen nichts gespeichert.
+**Ausfallerkennung:** Weil der Hook bewusst still scheitert (rc=0, damit er weder `/compact` noch das Session-Ende bricht), blieb ein kaputtes Auto-Memory bisher unsichtbar — es lief hier einmal 7 Wochen lang tot. Der SessionStart-Check vergleicht jetzt die mtime von `last-run.json` gegen `errors.log` und meldet auf zwei Kanälen: `Auto-Memory ❌ gestört` in der Statuszeile plus die volle Diagnose (letzter Fehler, wahrscheinliche Ursache, Log-Pfad) als `additionalContext`, damit auch der Assistent es sieht und ansprechen kann. Drei Auslöser: Fehler neuer als der letzte Erfolg, gar kein `last-run.json`, oder seit über 7 Tagen nichts gespeichert.
 
 **Konfigurations-Env:**
 - `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)
-- `AI_REM_LLAMA_URL` (Alt-Name: `AI_REM_OLLAMA_URL`) — llama-server-Basis-URL (OpenAI-kompatibel, `/v1` wird intern angehängt; Env hat Vorrang, dabei `AI_REM_LLAMA_URL` vor `AI_REM_OLLAMA_URL`; sonst `ollama_url` aus setup-config / settings-template; default `http://myubuntu:11434`); Modell ist fix via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`), da llama-server genau ein Modell hostet
+- `AI_REM_LLAMA_URL` (Alt-Name: `AI_REM_OLLAMA_URL`) — llama-server-Basis-URL; das Setup schreibt sie aus `ollama_url` der setup-config nach `~/.claude/settings.json` → `env`, weil die CLI (anders als der Hook) das `settings-template.json` nicht liest (OpenAI-kompatibel, `/v1` wird intern angehängt; Env hat Vorrang, dabei `AI_REM_LLAMA_URL` vor `AI_REM_OLLAMA_URL`; sonst `ollama_url` aus setup-config / settings-template; default `http://myai:11436`); Modell ist fix via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`), da llama-server genau ein Modell hostet
 - `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`). Das Setup trägt hier `~/.local/share/ai-rem/bin/ai-rem` ein, die lokal installierte Kopie. Zeigt der Wert stattdessen in einen Clone auf einem Netzlaufwerk, bricht der Hook bei jedem Session-Ende still mit `ai-rem CLI not found` ab, sobald der Mount hängt — dann `/setup` erneut laufen lassen. Gehört in den `env`-Block von `~/.claude/settings.json`, damit Hooks ihn erben.
 
 ---
@@ -55,7 +55,18 @@ Ein Daemon-Thread im Container fährt täglich einen Wartungslauf (default 03:00
 
 Mehrdeutige Fälle (und alles, wenn llama-server nachts down war) landen in einer Review-Queue. Eine nicht-leere Queue wird beim Session-Start nur als informativer Hinweis angezeigt (keine Auto-Ausführung). Abarbeiten auf zwei Wegen: **(a)** in der `/cleanup`-Web-UI, wo jedes Pending-Item beide Beschreibungen mit **Mergen/Archivieren** (anwenden) und **Verwerfen** (beide behalten) zeigt (`POST /api/cleanup/resolve`); oder **(b)** der Slash-Command `/memory-cleanup`, der die Einträge von Claude mit Urteil abarbeiten lässt. Beide nutzen dieselben nicht-destruktiven `memory_merge` / `memory_archive`-Operationen — nichts wird gelöscht.
 
-> **llama-server-Erreichbarkeit:** Der nächtliche Judge braucht einen erreichbaren llama-server unter `AI_REM_OLLAMA_URL`; das beurteilende Modell ist fix via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In der mitgelieferten `docker-compose.yml` ist der Default `http://myubuntu:11434` (pro Deployment via `.env` überschreibbar). Ist es nicht gesetzt/erreichbar, läuft der Cleanup trotzdem, schiebt aber jedes mehrdeutige Paar in die Review-Queue statt es automatisch zu beurteilen (`ollama_used=false` im Lauf-Log).
+### Veraltungs-Check (Infrastruktur-Fakten)
+
+Derselbe Lauf sucht zusätzlich nach Einträgen, deren **Inhalt** verrottet ist — Netzwerk-Setup, Dienste, Geräte: IP-Adressen, `host:port`, Container- und Portlisten, Versionen. Drei Stufen, billig nach teuer: ein Regex-Vorfilter auf verderbliche Fakten im `descr`, dann das Prüf-Alter, dann ein llama-server-Urteil, ob der Eintrag überhaupt real veränderliche Fakten behauptet (Konzept- und Konventionswissen fällt raus).
+
+**Nie automatisch:** Verdachtsfälle landen ausschließlich als Pending-Item vom Typ `verify` in der Review-Queue — mit den Buttons **Passt noch** (geprüft, alles aktuell) und **Verwerfen**. Über `/memory-cleanup` gilt: live prüfen (`ssh`, `docker ps`, Port-Check) und bei Abweichung korrigieren; was nicht geprüft werden kann, bleibt in der Queue und wird dem User vorgelegt.
+
+Das Prüf-Alter ist bewusst **nicht** `updated_at`: jedes `memory_add` setzt das neu, auch wenn nur ein Nebensatz ergänzt wurde — „zuletzt geschrieben" ist nicht „zuletzt gegen die Realität geprüft". Gezählt wird ab dem jüngsten Datum aus `extra`: `verify_checked` (setzt der Check selbst), sonst den gewachsenen Bestands-Markern `geprueft_am`, `verifiziert_am`, `korrigiert_am`, `erhoben_am`, `gemessen_am`; erst wenn keiner davon existiert, zählt `updated_at`. `verify_checked` wird bei jedem Ausgang gesetzt (LLM sagt „aktuell", User klickt „Passt noch" oder verwirft) und wirkt als Cooldown — ohne ihn stünde derselbe Eintrag jede Nacht wieder in der Queue. Einträge, deren `descr` mit `VERALTET` beginnt, werden übersprungen.
+
+- `CLEANUP_VERIFY_AFTER_DAYS` — Prüf-Alter, ab dem ein Eintrag vorgeschlagen wird (Default `90`)
+- `CLEANUP_VERIFY_MAX_PER_RUN` — Kandidaten pro Nacht, ältester zuerst (Default `5`; hält Queue und LLM-Last klein)
+
+> **llama-server-Erreichbarkeit:** Der nächtliche Judge braucht einen erreichbaren llama-server unter `AI_REM_OLLAMA_URL`; das beurteilende Modell ist fix via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In der mitgelieferten `docker-compose.yml` ist der Default `http://myai:11436` (pro Deployment via `.env` überschreibbar). Ist es nicht gesetzt/erreichbar, läuft der Cleanup trotzdem, schiebt aber jedes mehrdeutige Paar in die Review-Queue statt es automatisch zu beurteilen (`ollama_used=false` im Lauf-Log).
 
 ---
 

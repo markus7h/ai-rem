@@ -1,7 +1,7 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.8.13](https://github.com/markus7h/ai-rem/releases/tag/v0.8.13)**.
-> Release notes live in the [GitHub Releases](https://github.com/markus7h/ai-rem/releases); notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
+> This documentation describes **[v0.8.26](https://github.com/markus7h/ai-rem/releases/tag/v0.8.26)**.
+> Release notes are kept in [CHANGELOG.md](CHANGELOG.md) and published to the [GitHub Releases](https://github.com/markus7h/ai-rem/releases) and the Docker Hub description on every tag; notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
 Static memory files like `CLAUDE.md` sit in context in full and are tied to individual projects and machines. ai-rem takes a more efficient approach: relevant information — open tasks, decisions made, solved problems, projects, tools used — lives in a knowledge graph on your home server, is loaded selectively instead of wholesale, and is available from any machine, independent of where you work.
@@ -69,7 +69,7 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 Three Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
 
 - **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via llama-server, with an md-fallback + catch-up when llama-server is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. The setup installs the CLI to `~/.local/share/ai-rem/bin/ai-rem` and points `AI_REM_CLI` at it, so the hook does not depend on where the repo was cloned.
-- **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue.
+- **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue. Plus a **staleness check** that flags entries with perishable infrastructure facts (IPs, ports, services, devices) for a reality check — never automatically.
 - **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
 
 → **[Hooks & automation in detail](docs/hooks-and-automation.md)**
@@ -130,11 +130,13 @@ Switching backends changes the vector dimension (384 ↔ 1024), which makes the 
 vectors meaningless. The server detects that on the next backfill and recomputes **all**
 vectors — no manual migration, and it works in both directions.
 
-> **Raise `KUZU_BUFFER_POOL_SIZE_MB` when switching to an external backend** (e.g. 512,
-> and `MEM_LIMIT` to 1280m). The 1024-dimensional vectors put more write pressure on the
+> **Raise `KUZU_BUFFER_POOL_SIZE_MB` when switching to an external backend** (e.g. 768,
+> and `MEM_LIMIT` to 1536m). The 1024-dimensional vectors put more write pressure on the
 > backfill than the 256 MB default can take: the WAL checkpoint fails with `buffer pool is
-> full`, the vectors never reach the database and are recomputed on every start. Look for
-> `WAL-Checkpoint fehlgeschlagen` in the log.
+> full` and the affected vectors never reach the database. A failed checkpoint is retried
+> once, and a backfill that still could not persist everything logs an `ERROR` instead of
+> reporting success — watch for `WAL-Checkpoint fehlgeschlagen` in the log and for
+> `embed_pending` in `/api/status`, which stays above zero across restarts in that case.
 
 > **Note (memory):** Without `KUZU_BUFFER_POOL_SIZE_MB`, kuzu sizes its buffer pool to
 > ~80 % of **host** RAM and ignores the container `mem_limit`. Normal operation on this
@@ -219,6 +221,9 @@ Local hygiene hooks mirror the CI ruff gate and add whitespace/EOF fixes plus a
 
 Releases are tag-triggered (`.github/workflows/docker-publish.yml`); a `VERSION ↔ Tag`
 step fails the build if `VERSION` in `server.py` does not match the pushed tag (`v1.2.3` → `1.2.3`).
+The same run creates the GitHub release from the matching `CHANGELOG.md` section and
+refreshes the "What's new" block in the Docker Hub description — so add the entry
+before tagging.
 
 ---
 

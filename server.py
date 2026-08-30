@@ -16,6 +16,7 @@ import os
 import queue
 import re
 import socket
+import signal
 import sys
 import threading
 import time
@@ -71,7 +72,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "0.8.21"
+VERSION = "0.8.26"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -279,6 +280,11 @@ Admin-Tools nicht mehr im MCP-Surface liegen (Issue #32). Auth: `Authorization: 
      Wenn unklar oder verschieden → nicht mergen.
    - `kind == "archive"`: prüfe, ob `target` wirklich überholt ist. Wenn ja → `POST __KG_URL__/api/tool`
      mit Body `{"name": "memory_archive", "arguments": {"name": "<target>", "compressed_description": "<knappe Kurzfassung>", "superseded_by": "<falls zutreffend>"}}`.
+   - `kind == "verify"`: Der Eintrag behauptet Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte),
+     die lange nicht bestätigt wurden. **Nicht raten.** Kannst du live prüfen (`ssh`, `docker ps`,
+     `ping`, Port-Check)? Dann prüfen, den Eintrag bei Abweichung per `memory_add` korrigieren und
+     das Item danach über Schritt 4 als erledigt melden. Kannst du nicht prüfen: Item **in der Queue
+     lassen** (nicht resolven) — es gehört dem User vorgelegt.
 4. Bearbeitete Items (angewandt ODER bewusst verworfen) als erledigt markieren:
    `POST __KG_URL__/api/cleanup/pending` mit Body `{"resolved": ["<id>", …]}`.
 5. Max. 20 Items pro Lauf. Keine Zusammenfassung an den User nötig — die `/cleanup`-Web-UI
@@ -857,22 +863,38 @@ def _do_backup() -> str:
 _shutdown = threading.Event()
 
 
-def _checkpoint_wal(force: bool = False) -> None:
+def _checkpoint_wal(force: bool = False) -> bool:
     """WAL in die DB mergen, damit sie nicht aufstaut. `force` checkpointet
     unabhängig von der Größe (Shutdown); sonst nur ab KUZU_WAL_CHECKPOINT_MB.
-    Fehler sind unkritisch — der nächste Lauf versucht es erneut."""
+    Rückgabe: True = gemerged oder nichts zu tun, False = fehlgeschlagen.
+
+    Ein Fehlschlag ist meist transient ("buffer pool is full" unter Backfill-Last):
+    am 29.08. scheiterte ein Chunk-Checkpoint, der 1,4 s spätere merged dieselben
+    Writes problemlos. Darum ein Retry — der Aufrufer soll nur bei echtem Scheitern
+    eskalieren müssen."""
     wal = DB_PATH + ".wal"
     try:
         mb = os.path.getsize(wal) / 1024 / 1024
     except OSError:
-        return
+        # Keine WAL-Datei: bei force trotzdem checkpointen — die Dirty-Pages hängen
+        # am Buffer-Pool, nicht an der WAL-Größe. Der frühere blanke return machte
+        # genau den erzwungenen Checkpoint zum No-op.
+        if not force:
+            return True
+        mb = 0.0
     if not force and mb < KUZU_WAL_CHECKPOINT_MB:
-        return
-    try:
-        db_exec("CHECKPOINT")
-        log.info("WAL-Checkpoint: %.1f MB gemerged", mb)
-    except Exception as e:
-        log.warning("WAL-Checkpoint fehlgeschlagen (WAL=%.1f MB): %s", mb, e)
+        return True
+    for versuch in (1, 2):
+        try:
+            db_exec("CHECKPOINT")
+            log.info("WAL-Checkpoint: %.1f MB gemerged", mb)
+            return True
+        except Exception as e:
+            if versuch == 1:
+                time.sleep(1)
+                continue
+            log.warning("WAL-Checkpoint fehlgeschlagen (WAL=%.1f MB): %s", mb, e)
+    return False
 
 
 def _scheduler_loop() -> None:
@@ -910,6 +932,12 @@ def _on_exit() -> None:
 
 
 atexit.register(_on_exit)
+# atexit läuft bei SIGTERM nicht — und genau das schickt `docker stop`/`compose up -d`
+# an PID 1. Ohne den Handler fiel der finale Checkpoint bei JEDEM Container-Neustart
+# aus; wird der Prozess dabei mitten im Storage-Rewrite hart beendet, bleibt eine
+# halb geschriebene kg.db zurück (siehe kg.db.segfault-20260829: count() geht,
+# jeder Spaltenzugriff segfaultet).
+signal.signal(signal.SIGTERM, lambda *_: (_on_exit(), sys.exit(0)))
 
 
 # ─── Web UI ──────────────────────────────────────────────────────────────────
@@ -963,8 +991,11 @@ mcp = FastMCP(
 
 def _load_setup_cfg() -> dict:
     # Persoenliche Config bevorzugen, sonst generisches Starter-Template.
+    # isfile statt exists: die Config kommt per Bind-Mount rein, und Docker legt
+    # ein *Verzeichnis* an, wenn die Quelldatei auf dem Host fehlt — open() waere
+    # dann ein IsADirectoryError und /setup-config eine 500 statt eines Fallbacks.
     for path in (_SETUP_CONFIG_PATH, _SETUP_CONFIG_EXAMPLE_PATH):
-        if os.path.exists(path):
+        if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 return json.load(f)
     return {}
@@ -1395,7 +1426,15 @@ async def api_status(request: Request) -> JSONResponse:
     e_count = _rows(await db_exec_async("MATCH (e:Entity) RETURN count(e)"))[0][0]
     r_count = _rows(await db_exec_async("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
     cfg = _load_backup_cfg()
-    return JSONResponse({"version": VERSION, "entities": e_count, "relations": r_count, "last_backup": cfg.get("last_backup")})
+    # embed_pending macht einen abgebrochenen Backfill sichtbar: bleibt die Zahl über
+    # Neustarts hinweg stehen statt gegen 0 zu gehen, überlebten die Vektoren den
+    # Checkpoint nicht. Vorher war das nur an einer WARNING im flüchtigen Log-Ring zu sehen.
+    pending = _rows(await db_exec_async(
+        "MATCH (e:Entity) WHERE (e.embedding IS NULL OR e.embedding = '') "
+        "RETURN count(e)"))[0][0]
+    return JSONResponse({"version": VERSION, "entities": e_count, "relations": r_count,
+                         "last_backup": cfg.get("last_backup"),
+                         "embed_pending": pending, "embed_enabled": EMBED_ENABLED})
 
 
 @mcp.custom_route("/api/backup/config", methods=["GET"])
@@ -2437,6 +2476,7 @@ def _embed_backfill() -> None:
         log.info("Embedding-Backfill: %d Entities (Chunks von %d)",
                  len(rows), EMBED_BACKFILL_CHUNK)
         done = 0
+        ok = True
         for i in range(0, len(rows), EMBED_BACKFILL_CHUNK):
             chunk = rows[i:i + EMBED_BACKFILL_CHUNK]
             vecs = _embed_texts([_embed_payload(nm, descr or "") for _, nm, descr in chunk],
@@ -2445,12 +2485,22 @@ def _embed_backfill() -> None:
                 db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
                         {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
             done += len(chunk)
-            _checkpoint_wal(force=True)
+            ok = _checkpoint_wal(force=True) and ok
             if len(rows) > EMBED_BACKFILL_CHUNK:
                 log.info("Embedding-Backfill: %d/%d", done, len(rows))
+        # Ein gescheiterter Chunk-Checkpoint wird sonst vom nächsten Chunk mitgemerged
+        # — beim LETZTEN gibt es keinen Nachfolger. Der Scheduler greift unter
+        # KUZU_WAL_CHECKPOINT_MB nicht, also hier final erzwingen.
+        ok = _checkpoint_wal(force=True) and ok
         _invalidate_embed_cache()
         _ensure_embed_matrix()
-        log.info("Embedding-Backfill fertig (%d)", done)
+        if ok:
+            log.info("Embedding-Backfill fertig (%d)", done)
+        else:
+            log.error("Embedding-Backfill: %d Vektoren geschrieben, aber mindestens ein "
+                      "WAL-Checkpoint schlug fehl — Buffer-Pool zu klein "
+                      "(KUZU_BUFFER_POOL_SIZE_MB=%d). Ein Teil der Vektoren kann beim "
+                      "nächsten Start fehlen.", done, KUZU_BUFFER_POOL_SIZE_MB)
     except Exception as e:
         log.error("Embedding-Backfill fehlgeschlagen: %s", e)
 
@@ -3297,13 +3347,16 @@ async def api_tool(request: Request) -> JSONResponse:
 # 'ollama_url' > Default. Var-Name bleibt AI_REM_OLLAMA_URL für Env-Rückwärts-
 # kompatibilität; /v1 wird in den Calls angehängt.
 AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myubuntu:11434")
+    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myai:11436")
 )
 # llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
 CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
                           os.getenv("CLEANUP_OLLAMA_MODEL", "mistral-small3.2:24b")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "30"))
+# Veraltungs-Check: ab wann ein Infra-Eintrag erneut gegen die Realitaet geprueft gehoert.
+CLEANUP_VERIFY_AFTER_DAYS = int(os.getenv("CLEANUP_VERIFY_AFTER_DAYS", "90"))
+CLEANUP_VERIFY_MAX_PER_RUN = int(os.getenv("CLEANUP_VERIFY_MAX_PER_RUN", "5"))
 CLEANUP_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "cleanup")
 _CLEANUP_CONFIG = os.path.join(BACKUP_DIR, "cleanup.config.json")
 _CLEANUP_PENDING = os.path.join(CLEANUP_DIR, "pending.json")
@@ -3313,6 +3366,13 @@ _STOPWORDS = {"der", "die", "das", "und", "the", "a", "an", "von", "fuer", "für
               "mit", "im", "in", "of", "for", "to", "ai", "rem"}
 _DONE_STATUSES = {"erledigt", "done", "closed", "abgeschlossen", "fertig", "geschlossen"}
 _OBSOLETE_STATUSES = {"obsolet", "obsolete", "veraltet", "deprecated", "überholt", "ueberholt"}
+# Verderbliche Fakten: was hier matcht, kann sich in der realen Infrastruktur geaendert haben.
+_PERISHABLE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b|\bfd[0-9a-f]{2}:|"
+                         r"\b[a-z][\w.-]*:\d{2,5}\b|\bports?\s*\d{2,5}|"
+                         r"\bv?\d+\.\d+\.\d+\b|\b[\w-]+\.lan\b", re.I)
+# Pruef-Datum: verify_checked setzt der Check selbst, der Rest ist gewachsene Bestands-Konvention.
+_VERIFY_MARKERS = ("verify_checked", "geprueft_am", "verifiziert_am",
+                   "korrigiert_am", "erhoben_am", "gemessen_am")
 
 
 
@@ -3336,6 +3396,16 @@ def _age_days(iso_ts: str, now: datetime) -> Optional[int]:
         return (now - datetime.fromisoformat(iso_ts)).days
     except (ValueError, TypeError):
         return None
+
+
+def _verify_age(e: dict, now: datetime) -> Optional[int]:
+    """Tage seit der letzten Realitaets-Pruefung: juengster Marker aus extra, sonst updated_at.
+
+    "Zuletzt geschrieben" ist nicht "zuletzt geprueft" — jedes memory_add setzt updated_at
+    neu, auch wenn nur ein Nebensatz ergänzt wurde."""
+    ages = [d for d in (_age_days(str(e["extra"][k])[:19], now)
+                        for k in _VERIFY_MARKERS if e["extra"].get(k)) if d is not None]
+    return min(ages) if ages else _age_days(e["updated_at"], now)
 
 
 def _load_cleanup_cfg() -> dict:
@@ -3417,7 +3487,12 @@ def _add_pending(new_items: list) -> int:
 def _resolve_pending(ids: list) -> int:
     with _cleanup_lock:
         existing = _load_pending()
-        keep = [it for it in existing if it.get("id") not in set(ids)]
+        done = set(ids)
+        keep = [it for it in existing if it.get("id") not in done]
+        # Abgehakte verify-Items brauchen den Cooldown, sonst stehen sie morgen Nacht wieder da.
+        for it in existing:
+            if it.get("id") in done and it.get("kind") == "verify":
+                _mark_verify_checked(it["target"], _now())
         _save_pending(keep)
         return len(existing) - len(keep)
 
@@ -3426,8 +3501,9 @@ def _resolve_pending_action(pid: str, action: str) -> dict:
     """Ein einzelnes Pending-Item aus der Web-UI abarbeiten — ersetzt /memory-cleanup.
 
     action='apply' führt die vorgeschlagene Aktion aus (merge → memory_merge,
-    archive → memory_archive), 'dismiss' verwirft den Vorschlag nur. In beiden
-    Fällen wird das Item aus der Queue entfernt. Nicht-destruktiv (kein delete).
+    archive → memory_archive, verify → als geprüft markieren), 'dismiss' verwirft den
+    Vorschlag nur — bei 'verify' wird der Cooldown trotzdem gesetzt. In beiden Fällen
+    wird das Item aus der Queue entfernt. Nicht-destruktiv (kein delete).
     """
     with _cleanup_lock:
         items = _load_pending()
@@ -3441,10 +3517,18 @@ def _resolve_pending_action(pid: str, action: str) -> dict:
                 msg = memory_merge(item["canonical"], item["duplicate"])
             elif kind == "archive":
                 msg = memory_archive(item["target"])
+            elif kind == "verify":
+                msg = ("Als geprüft markiert: " + item["target"]
+                       if _mark_verify_checked(item["target"], _now())
+                       else "Nicht gefunden: " + item["target"])
             else:
                 return {"error": f"unbekannte kind: {kind}"}
+        elif item.get("kind") == "verify":
+            # 'Verwerfen' heisst hier "nicht meldenswert" — braucht denselben Cooldown,
+            # sonst steht der Eintrag morgen Nacht wieder in der Queue.
+            _mark_verify_checked(item["target"], _now())
         _save_pending([it for it in items if it.get("id") != pid])
-    if action == "apply":
+    if action == "apply" and item.get("kind") != "verify":
         _embed_backfill()  # gemergte/archivierte Entity aus der Vektor-Matrix nachziehen
     return {"status": "ok", "action": action, "result": msg}
 
@@ -3517,12 +3601,73 @@ def _ollama_judge_pair(a: dict, b: dict) -> Optional[dict]:
     return None
 
 
+def _ollama_judge_stale(name: str, descr: str, days: int) -> Optional[dict]:
+    """Behauptet der Eintrag pruefbare Infrastruktur-Fakten, die veraltet sein koennen?
+    Returns {"verdict": "verify"|"ok", "reason": "<kurz>"} oder None bei Fehler."""
+    sys_p = ('Antworte NUR mit JSON: {"verdict":"verify|ok","reason":"<ein knapper Satz>"}. '
+             '"verify" nur, wenn der Eintrag konkrete Infrastruktur-Fakten behauptet '
+             '(IP-Adressen, Ports, laufende Dienste/Container, Geräte, Hardware, Versionen), '
+             'die sich real geändert haben können. Konzept-, Konventions- oder Erfahrungswissen '
+             'ohne solche Fakten ist "ok". reason nennt, was konkret nachzuprüfen ist.')
+    usr = f"Zuletzt bestätigt vor {days} Tagen.\n\n{name}: {descr}"
+    content = _ollama_chat(sys_p, usr, as_json=True)
+    if not content:
+        return None
+    try:
+        obj = json.loads(content)
+        if obj.get("verdict") in ("verify", "ok"):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    return None
+
+
 def _ollama_summarize(name: str, descr: str) -> str:
     if not descr:
         return ""
     sys_p = "Fasse den Eintrag in EINEM knappen deutschen Satz (max 200 Zeichen) zusammen. Nur den Satz."
     content = _ollama_chat(sys_p, f"{name}: {descr}", as_json=False, timeout=45)
     return (content or "")[:240].strip()
+
+
+def _mark_verify_checked(name: str, ts: str) -> bool:
+    """extra.verify_checked setzen — Cooldown des Veraltungs-Checks.
+
+    Laesst updated_at bewusst unangetastet: eine Pruefung ist keine inhaltliche Aenderung
+    und darf weder Ranking noch Task-Retention verschieben."""
+    eid = _id(name)
+    rows = _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.extra", {"id": eid}))
+    if not rows:
+        return False
+    try:
+        extra = json.loads(rows[0][0] or "{}")
+    except json.JSONDecodeError:
+        extra = {}
+    extra["verify_checked"] = ts
+    db_exec("MATCH (e:Entity {id: $id}) SET e.extra = $extra",
+            {"id": eid, "extra": json.dumps(extra, ensure_ascii=False)})
+    return True
+
+
+def _stale_candidates(ents: list, skip: set) -> list:
+    """Infra-Eintraege, deren Fakten lange nicht gegen die Realitaet geprueft wurden.
+
+    Nur Vorfilter (Regex + Pruef-Alter) — das teure LLM-Urteil faellt erst in _cleanup_run.
+    ponytail: gescannt wird nur descr; extra ist im Bestand zu uneinheitlich, um daraus
+    verlaesslich Fakten zu ziehen."""
+    now = datetime.now()
+    cands = []
+    for e in ents:
+        if e["name"] in skip:
+            continue
+        descr = e["descr"]
+        if descr.lstrip().upper().startswith("VERALTET") or not _PERISHABLE.search(descr):
+            continue
+        age = _verify_age(e, now)
+        if age is not None and age >= CLEANUP_VERIFY_AFTER_DAYS:
+            cands.append({"name": e["name"], "descr": descr, "days": age})
+    cands.sort(key=lambda c: c["days"], reverse=True)
+    return cands[:CLEANUP_VERIFY_MAX_PER_RUN]
 
 
 def _cleanup_candidates() -> dict:
@@ -3589,7 +3734,11 @@ def _cleanup_candidates() -> dict:
                                    "a": {"name": a["name"], "descr": a["descr"][:600]},
                                    "b": {"name": b["name"], "descr": b["descr"][:600]}})
                     seen_pairs.add(pair)
-    return {"auto_archive": auto_archive, "auto_merge": auto_merge, "review": review}
+    # Bereits in der Queue liegende Eintraege nicht erneut vorschlagen (und kein LLM darauf verbrennen).
+    queued = {it.get("target") for it in _load_pending() if it.get("kind") == "verify"}
+    verify = _stale_candidates(ents, archived_names | queued)
+    return {"auto_archive": auto_archive, "auto_merge": auto_merge, "review": review,
+            "verify": verify}
 
 
 def _graph_invariants() -> list[str]:
@@ -3691,10 +3840,25 @@ def _cleanup_run(triggered_by: str = "scheduler") -> dict:
         else:
             to_pending.append(_review_pending(pair))
 
+    # Veraltungs-Check: nie automatisch archivieren — Verdachtsfaelle gehen immer in die Queue.
+    verify_ok = 0
+    for c in (cands["verify"] if ollama else []):
+        verdict = _ollama_judge_stale(c["name"], c["descr"], c["days"])
+        if verdict is None:
+            continue  # llama-Fehler: Check gilt als nicht gelaufen, also kein Cooldown
+        if verdict["verdict"] == "verify":
+            to_pending.append({
+                "kind": "verify", "target": c["name"],
+                "reason": f"seit {c['days']}d unbestätigt — {verdict.get('reason', '')}".strip(),
+                "detail": {"a": {"name": c["name"], "descr": c["descr"][:600]}}})
+        else:
+            verify_ok += _mark_verify_checked(c["name"], ts)
+
     pending_added = _add_pending(to_pending)
     log_obj = {"ts": ts, "triggered_by": triggered_by, "backup": backup_file,
                "ollama_used": ollama, "applied": applied,
                "applied_count": len(applied), "pending_added": pending_added,
+               "verify_checked": verify_ok,
                "pending_total": len(_load_pending()),
                "invariant_violations": invariants}
     log_obj["log_file"] = _write_cleanup_log(log_obj)

@@ -26,7 +26,7 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
 .item{border-bottom:1px solid var(--border);padding:9px 0;font-size:13px}.item:last-child{border-bottom:none}
 .det{color:var(--muted);font-size:12px;white-space:pre-wrap;margin-top:7px;padding-left:2px;max-height:160px;overflow:auto}
 .tag{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--muted);margin-right:6px}
-.tag.merge{color:var(--accent);border-color:var(--accent)}.tag.archive{color:var(--warn);border-color:var(--warn)}
+.tag.merge{color:var(--accent);border-color:var(--accent)}.tag.archive{color:var(--warn);border-color:var(--warn)}.tag.verify{color:var(--warn);border-color:var(--warn)}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
 </style>
@@ -72,14 +72,15 @@ async function load(){
   $('lr').textContent=cfg.last_run?('letzter Lauf: '+cfg.last_run.replace('T',' ')):'noch kein Lauf';
   const pend=await (await fetch('/api/cleanup/pending')).json();
   $('pending').innerHTML=pend.length?pend.map(p=>{
-    const isM=p.kind==='merge';
+    const isM=p.kind==='merge', isV=p.kind==='verify';
     const head=isM?`<b>${esc(p.duplicate)}</b> → <b>${esc(p.canonical)}</b>`:`<b>${esc(p.target)}</b>`;
-    const det=p.detail?`<div class="det">A) ${esc((p.detail.a||{}).descr||'')}
+    const det=p.detail?(isV?`<div class="det">${esc((p.detail.a||{}).descr||'')}</div>`
+      :`<div class="det">A) ${esc((p.detail.a||{}).descr||'')}
 
-B) ${esc((p.detail.b||{}).descr||'')}</div>`:'';
+B) ${esc((p.detail.b||{}).descr||'')}</div>`):'';
     return `<div class="item"><div class="row"><span class="tag ${p.kind}">${p.kind}</span>${head} <span class="muted">${esc(p.reason||'')}</span>`+
       `<span style="margin-left:auto"></span>`+
-      `<button onclick="resolve('${p.id}','apply')">${isM?'Mergen':'Archivieren'}</button>`+
+      `<button onclick="resolve('${p.id}','apply')">${isM?'Mergen':isV?'Passt noch':'Archivieren'}</button>`+
       `<button class="ghost" onclick="resolve('${p.id}','dismiss')">Verwerfen</button></div>${det}</div>`;
   }).join(''):'<span class="muted">keine offenen Reviews</span>';
   const logs=await (await fetch('/api/cleanup/log')).json();

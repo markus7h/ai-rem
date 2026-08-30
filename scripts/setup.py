@@ -85,16 +85,20 @@ def http_get(url, timeout=10, insecure=False):
 
 
 def fetch_to(url, dst):
-    # Atomarer Download: erst Temp-Datei im Zielverzeichnis, nur bei Erfolg +
-    # nicht-leer per os.replace ersetzen. Verhindert, dass ein transienter
-    # Serverfehler eine bestehende Datei truncatet.
+    # Atomarer Download: erst Temp-Datei im Zielverzeichnis, nur bei Erfolg per
+    # os.replace ersetzen. Verhindert, dass ein transienter Serverfehler eine
+    # bestehende Datei truncatet.
+    #
+    # Fehler ist allein die Exception (Timeout, 4xx/5xx, DNS) — NICHT ein leerer
+    # Body: lib/__init__.py ist regulaer 0 Bytes. Das fruehere "if not data"
+    # brach install_cli() genau dort ab, nachdem bin/ai-rem schon geschrieben,
+    # aber noch nicht ausfuehrbar gemacht war -> halb installierte CLI, und der
+    # Auto-Memory-Hook meldete still "CLI not found".
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     try:
         data = http_get(url)
-    except Exception:
-        data = b''
-    if not data:
-        print('✗ Download fehlgeschlagen, %s unveraendert: %s' % (dst, url))
+    except Exception as e:
+        print('✗ Download fehlgeschlagen, %s unveraendert: %s (%s)' % (dst, url, e))
         return False
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dst), suffix='.tmp')
     try:
@@ -492,7 +496,7 @@ def write_settings_template(setup_cfg, mcp_endpoint):
         'smb': setup_cfg.get('smb', {}),
         'mcp_stdio_servers': setup_cfg.get('mcp_stdio_servers', {}),
         'tools_scripts_dir': setup_cfg.get('tools_scripts_dir', ''),
-        'ollama_url': setup_cfg.get('ollama_url', 'http://myubuntu:11434'),
+        'ollama_url': setup_cfg.get('ollama_url', 'http://myai:11436'),
         'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto'},
         'permissions_allow_portable': setup_cfg.get('permissions_allow_portable', [
             # Nur noch die 4 Kern-MCP-Tools (Issue #32). Admin-Ops laufen über
@@ -669,10 +673,17 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
     # Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
     # - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
     # - AI_REM_CLI per Discovery (inkl. SMB-Mount /Volumes/<x>/myCode auf macOS)
+    # - AI_REM_LLAMA_URL aus der setup-config: der system-check-Hook liest die URL
+    #   zwar aus settings-template.json, die CLI aber nicht — lib/extractor.py kennt
+    #   nur die Env. Ohne diesen Eintrag faellt `ai-rem ingest` auf den eingebauten
+    #   Default zurueck und meldet {"skipped": "llm_down"}, waehrend der
+    #   SessionStart-Report gleichzeitig "llm ✓" zeigt.
     # setdefault => bewusste manuelle Overrides bleiben erhalten.
     env = data.setdefault('env', {})
     if mcp_endpoint:
         env.setdefault('AI_REM_ENDPOINT', mcp_endpoint)
+    if setup_cfg.get('ollama_url'):
+        env.setdefault('AI_REM_LLAMA_URL', setup_cfg['ollama_url'])
 
     def usable_cli(p):
         # X_OK ist auf Windows bedeutungslos; dort ruft der Hook die CLI eh via python auf.

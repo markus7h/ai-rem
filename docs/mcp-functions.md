@@ -54,7 +54,7 @@ Memory-Senke bleibt.
 
 **C) ai-rem Ingest-Hook (Session-Ende)** — *nicht* Claude Codes natives Auto-Memory (das ist aus)
 1. `auto-memory.py` (PreCompact/SessionEnd) reicht das Transcript an `ai-rem ingest`.
-2. Der Extractor schickt es an **llama-server** (`myubuntu:11434`, OpenAI-kompatibel `/v1/chat/completions`, festes Modell, Default `mistral-small3.2:24b`, JSON-Antwort).
+2. Der Extractor schickt es an **llama-server** (`myai:11436`, OpenAI-kompatibel `/v1/chat/completions`, festes Modell, Default `mistral-small3.2:24b`, JSON-Antwort).
 3. Strukturierte Entities/Relations → Bulk-Upsert über `/mcp`.
 4. llama-server langsam/kalt/nicht erreichbar → Transcript wandert in die Queue (`pending.jsonl`); `ai-rem catchup` (läuft zu Beginn jedes Hook-Laufs) zieht es nach, sobald llama-server warm/erreichbar ist.
 5. Voraussetzung in der Hook-Umgebung: `AI_REM_CLI` (CLI-Pfad) und `AI_REM_ENDPOINT` (z. B. `https://airem.lan/mcp`) — sonst kein Ingest.

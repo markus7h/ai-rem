@@ -16,6 +16,11 @@ services:
     volumes:
       - ${KG_DATA_PATH:-./data}:/data
       - ${KG_BACKUP_PATH:-./backups}:/backups
+      # Persoenliche Setup-Config read-only reinreichen. Das Docker-Hub-Image
+      # enthaelt nur setup-config.example.json — ohne diesen Mount liefert
+      # /setup-config die Platzhalter (ollama_url: http://your-server:11434) und
+      # jede Neuinstallation bekommt eine tote llama-URL ins settings-template.
+      - ./setup-config.json:/app/setup-config.json:ro
     environment:
       # Dual-stack: der Container ist ueber IPv6 UND den published
       # IPv4-Port erreichbar (server.py setzt IPV6_V6ONLY=0).
@@ -23,10 +28,11 @@ services:
       - PORT=${PORT:-3456}
       - KUZU_DB_PATH=/data/kg.db
       - KG_PUBLIC_URL=${KG_PUBLIC_URL:-http://localhost:${PORT:-3456}}
-      # Ollama für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
-      # Default zeigt auf das Ollama mit mistral auf myUbuntu; pro Deployment via .env überschreibbar.
+      # llama-server für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
+      # Default zeigt auf qwen3-14B auf myai; pro Deployment via .env überschreibbar.
+      # (Vorher myubuntu:11434 — dort ist llm-mistral seit 2026-08-04 dauerhaft gestoppt.)
       # Ohne Erreichbarkeit läuft der Cleanup weiter, schiebt aber unklare Fälle nur in die Review-Queue.
-      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://myubuntu:11434}
+      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://myai:11436}
       - BACKUP_DIR=/backups
       - MAX_BACKUPS=${MAX_BACKUPS:-10}
       # Anzahl gepinnter Routinen, die /discover je Prompt injiziert (Slots,
@@ -60,8 +66,10 @@ services:
       # ACHTUNG bei EMBED_URL: externe Modelle liefern deutlich groessere Vektoren
       # (bge-m3 1024 statt 384 Dimensionen). Mit dem 256-MB-Default scheitert beim
       # Backfill der WAL-Checkpoint ("buffer pool is full") — die Writes bleiben in
-      # der WAL und sind nach dem naechsten Start wieder weg. 512 MB Pool und ~1.25 GB
-      # mem_limit tragen 685 Entities.
+      # der WAL und sind nach dem naechsten Start wieder weg. _checkpoint_wal
+      # wiederholt einmal und der Backfill meldet den Rest als ERROR (statt wie
+      # frueher still "fertig"), aber der Pool muss trotzdem passen: 768 MB und
+      # ~1.5 GB mem_limit tragen ~1000 Entities (kg.db ~280 MB).
       # Cosine-Schwelle der semantischen Treffer. Leer = passender Default je
       # Backend (0.45 in-process, 0.50 fuer bge-m3).
       - EMBED_THRESHOLD=${EMBED_THRESHOLD:-}

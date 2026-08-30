@@ -1,8 +1,8 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.8.13](https://github.com/markus7h/ai-rem/releases/tag/v0.8.13)**.
+> Diese Dokumentation bezieht sich auf **[v0.8.26](https://github.com/markus7h/ai-rem/releases/tag/v0.8.26)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
-> Release-Notes stehen in den [GitHub Releases](https://github.com/markus7h/ai-rem/releases); frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
+> Release-Notes werden im [CHANGELOG.md](CHANGELOG.md) gepflegt und bei jedem Tag in die [GitHub Releases](https://github.com/markus7h/ai-rem/releases) und die Docker-Hub-Beschreibung veröffentlicht; frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
 **ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
 Statische Memory-Dateien wie `CLAUDE.md` liegen vollständig im Kontext und sind an einzelne Projekte und Rechner gebunden. ai-rem geht effizienter vor: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – liegen in einem Knowledge Graph auf dem Heimserver, werden gezielt statt komplett geladen und sind rechnerunabhängig von jeder Maschine aus verfügbar.
@@ -68,7 +68,7 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 Drei Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph befüllt und sauber:
 
 - **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via llama-server, mit md-Fallback + Catch-up, wenn llama-server down ist. Er läuft detached (die Extraktion dauert Minuten) und meldet beim nächsten Sessionstart, wenn er gestört ist. Das Setup legt die CLI nach `~/.local/share/ai-rem/bin/ai-rem` und richtet `AI_REM_CLI` darauf aus — der Hook hängt damit nicht daran, wohin das Repo geklont wurde.
-- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue.
+- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
 - **Plan-Speicherung** — ein `ExitPlanMode`-Hook speichert jeden finalisierten Plan als offenen `Task`, sodass Pläne eine zentrale, maschinenübergreifende Liste werden.
 
 → **[Hooks & Automatisierung im Detail](docs/hooks-and-automation.de.md)**
@@ -128,11 +128,14 @@ Ein Backendwechsel ändert die Vektor-Dimension (384 ↔ 1024) und macht gespeic
 Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechnet
 **alle** Vektoren neu — ohne manuelle Migration, in beide Richtungen.
 
-> **Beim Umstellen auf extern `KUZU_BUFFER_POOL_SIZE_MB` erhöhen** (z. B. 512, und
-> `MEM_LIMIT` auf 1280m). Die 1024-dimensionalen Vektoren erzeugen beim Backfill mehr
+> **Beim Umstellen auf extern `KUZU_BUFFER_POOL_SIZE_MB` erhöhen** (z. B. 768, und
+> `MEM_LIMIT` auf 1536m). Die 1024-dimensionalen Vektoren erzeugen beim Backfill mehr
 > Schreiblast, als der 256-MB-Default verkraftet: der WAL-Checkpoint scheitert mit
-> `buffer pool is full`, die Vektoren landen nie dauerhaft in der DB und werden bei
-> jedem Start neu gerechnet. Im Log sichtbar als `WAL-Checkpoint fehlgeschlagen`.
+> `buffer pool is full` und die betroffenen Vektoren landen nie dauerhaft in der DB.
+> Ein fehlgeschlagener Checkpoint wird einmal wiederholt; konnte der Backfill danach
+> nicht alles sichern, meldet er das als `ERROR` statt Erfolg zu behaupten. Im Log
+> sichtbar als `WAL-Checkpoint fehlgeschlagen`, in `/api/status` als `embed_pending`,
+> das dann über Neustarts hinweg über null bleibt.
 
 > **Hinweis (Speicher):** Ohne `KUZU_BUFFER_POOL_SIZE_MB` dimensioniert kuzu seinen
 > Buffer-Pool auf ~80 % des **Host**-RAMs und ignoriert das Container-`mem_limit`.

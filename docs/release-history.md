@@ -2,7 +2,9 @@
 
 Konsolidierte Release-Notes der frühen Versionen (v0.0.4 – v0.1.5), ursprünglich als
 einzelne `release-notes-v*.md` im Repo-Root. **Ab v0.2.0 stehen Release-Notes in den
-[GitHub Releases](https://github.com/markus7h/ai-rem/releases).**
+[GitHub Releases](https://github.com/markus7h/ai-rem/releases); gepflegt werden sie
+ab v0.8.14 im [CHANGELOG.md](../CHANGELOG.md), aus dem der Publish-Workflow das
+Release und den „What's new"-Block auf Docker Hub erzeugt.**
 
 ---
 

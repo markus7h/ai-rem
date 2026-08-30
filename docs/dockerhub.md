@@ -92,13 +92,24 @@ Set in the Compose `.env`:
 | `KUZU_DB_PATH` | `/data/kg.db` | Database path |
 | `BACKUP_DIR` | `/backups` | Backup files |
 | `MAX_BACKUPS` | `10` | Backups to keep |
-| `AI_REM_OLLAMA_URL` | `http://myubuntu:11434` | llama-server (OpenAI-compatible) for nightly cleanup / extraction |
+| `AI_REM_OLLAMA_URL` | `http://myai:11436` | llama-server (OpenAI-compatible) for nightly cleanup / extraction |
 | `EMBED_URL` | — | Embedding backend. Empty = in-process (fastembed/MiniLM, bundled in `latest`). Set to an OpenAI-compatible `/v1/embeddings` URL to use an external service — required for `-slim` images. Switching backends re-computes all vectors on the next start; if the endpoint is down, entries are stored without a vector and the backfill catches up later |
 | `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |
 | `EMBED_THRESHOLD` | `0.45` / `0.50` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |
 | `EMBED_MAX_CHARS` | `2000` | Input is truncated to this length before embedding. fastembed truncates silently at the model limit; llama.cpp rejects oversized input with HTTP 500 instead |
-| `KUZU_BUFFER_POOL_SIZE_MB` | `256` | Kuzu buffer pool. **Raise to 512 when using `EMBED_URL`** — 1024-dim vectors make the backfill's WAL checkpoint fail at 256 MB, and the vectors are then lost on restart |
+| `KUZU_BUFFER_POOL_SIZE_MB` | `256` | Kuzu buffer pool. **Raise to 768 when using `EMBED_URL`** — 1024-dim vectors make the backfill's WAL checkpoint fail at 256 MB, and the affected vectors are then lost on restart (the failure is retried once and logged as `ERROR`; `embed_pending` in `/api/status` shows what is missing) |
 | `EMBED_ENABLED` | `1` | `0` disables semantic search entirely (lexical only) |
+
+---
+
+## What's new
+
+The three most recent releases; the block is regenerated from
+[CHANGELOG.md](https://github.com/markus7h/ai-rem/blob/main/CHANGELOG.md) on every
+tagged build. Full history: [GitHub Releases](https://github.com/markus7h/ai-rem/releases).
+
+<!-- CHANGELOG:START -->
+<!-- CHANGELOG:END -->
 
 ---
 

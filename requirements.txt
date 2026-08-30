@@ -6,7 +6,7 @@
 fastmcp==3.4.7
 kuzu==0.11.3
 numpy==2.5.2
-cryptography==50.0.0
+cryptography==50.0.1
 pyyaml==6.0.3
 
 # fastembed (in-process Embeddings) steht in requirements-embed.txt und wird nur
