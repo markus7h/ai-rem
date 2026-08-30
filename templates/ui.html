@@ -42,11 +42,28 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .toast.show{opacity:1}
 .toast.ok{border-color:var(--ok);color:var(--ok)}
 .toast.err{border-color:var(--err);color:var(--err)}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.hd img{display:block}
+.hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hd nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1;padding-bottom:3px;border-bottom:2px solid transparent}
+.hd nav a:hover{color:var(--text)}
+.hd nav a.on{color:var(--accent);border-bottom-color:var(--accent)}
 </style>
 </head>
 <body>
-<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations<span id="ep"></span> &nbsp;·&nbsp; <a href="/browse">Browse →</a> &nbsp;·&nbsp; <a href="/graph">Graph →</a> &nbsp;·&nbsp; <a href="/prefs">Preferences →</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup →</a> &nbsp;·&nbsp; <a href="/logs">Logs →</a> &nbsp;·&nbsp; <a href="/install">Install →</a> &nbsp;·&nbsp; <a href="/logout">Logout →</a></p>
+<header class="hd">
+<a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
+<nav>
+<a href="/browse">Browse</a>
+<a href="/graph">Graph</a>
+<a href="/prefs">Preferences</a>
+<a href="/cleanup">Cleanup</a>
+<a href="/logs">Logs</a>
+<a href="/install">Install</a>
+<a href="/logout">Logout</a>
+</nav>
+</header>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; v__VERSION__ &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations<span id="ep"></span></p>
 <div class="grid">
 
   <div class="card">

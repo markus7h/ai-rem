@@ -32,12 +32,29 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
 #leg{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
 #leg span{font-size:12px;display:inline-flex;align-items:center;gap:5px}
 .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.hd img{display:block}
+.hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hd nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1;padding-bottom:3px;border-bottom:2px solid transparent}
+.hd nav a:hover{color:var(--text)}
+.hd nav a.on{color:var(--accent);border-bottom-color:var(--accent)}
 </style>
 </head>
 <body>
-<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<header class="hd">
+<a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
+<nav>
+<a href="/browse">Browse</a>
+<a href="/graph" class="on">Graph</a>
+<a href="/prefs">Preferences</a>
+<a href="/cleanup">Cleanup</a>
+<a href="/logs">Logs</a>
+<a href="/install">Install</a>
+<a href="/logout">Logout</a>
+</nav>
+</header>
 <h1>Graph</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <span id="cnt">lädt…</span></p>
+<p class="sub"><span id="cnt">lädt…</span></p>
 <div class="bar">
   <label class="muted">Kontext
     <select id="ctx" onchange="build()">

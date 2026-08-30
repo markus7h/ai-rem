@@ -31,12 +31,29 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
 .lv.DEBUG{color:var(--warn)}.lv.INFO{color:var(--accent)}.lv.WARNING{color:#b8860b}.lv.ERROR,.lv.CRITICAL{color:var(--err)}
 .msg{flex:1 1 auto}
 .empty{color:var(--muted);font-size:13px;padding:14px 2px}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.hd img{display:block}
+.hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hd nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1;padding-bottom:3px;border-bottom:2px solid transparent}
+.hd nav a:hover{color:var(--text)}
+.hd nav a.on{color:var(--accent);border-bottom-color:var(--accent)}
 </style>
 </head>
 <body>
-<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<header class="hd">
+<a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
+<nav>
+<a href="/browse">Browse</a>
+<a href="/graph">Graph</a>
+<a href="/prefs">Preferences</a>
+<a href="/cleanup">Cleanup</a>
+<a href="/logs" class="on">Logs</a>
+<a href="/install">Install</a>
+<a href="/logout">Logout</a>
+</nav>
+</header>
 <h1>Server-Log</h1>
-<p class="sub"><a href="/ui">← ai-rem</a> &nbsp;·&nbsp; <a href="/browse">Browse</a> &nbsp;·&nbsp; <a href="/prefs">Preferences</a> &nbsp;·&nbsp; <a href="/cleanup">Cleanup</a> &nbsp;·&nbsp; nur seit dem letzten Container-Start</p>
+<p class="sub">nur seit dem letzten Container-Start</p>
 
 <div class="card">
   <div class="row">
