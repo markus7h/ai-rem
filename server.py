@@ -72,7 +72,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "0.8.29"
+VERSION = "0.8.30"
 DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
@@ -2116,7 +2116,7 @@ def _combined_hits(query: str, context: str = "", include_archived: bool = False
     return [meta[n] for n in ranked[:limit]]
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 def memory_search(query: str, limit: int = 15, context: str = "", include_archived: bool = False) -> str:
     """Entities nach Name oder Beschreibung durchsuchen.
 
@@ -2751,7 +2751,7 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
 
 
 # ─── MCP-Tools: Lesen (context, list, relations) ────────────────────────────
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 def memory_get_context(topic: str = "", context: str = "", include_archived: bool = False) -> str:
     """Relevanten Kontext aus dem Knowledge Graph laden.
 

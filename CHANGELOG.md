@@ -13,6 +13,18 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [0.8.30] – 2026-09-01
+
+### Fixed
+- **Read tools are annotated `readOnlyHint`, so plan mode stops asking.** Claude
+  Code gates MCP calls in plan mode on the server-supplied `readOnlyHint`
+  annotation, independently of the permission allowlist: without the annotation
+  it defaults to "not read-only" and prompts on every call, even for tools the
+  user has explicitly allowed. `memory_search` and `memory_get_context` now
+  declare `annotations={"readOnlyHint": True}`. The writing tools (`memory_add`,
+  `memory_relate`) keep prompting, which is correct. Takes effect after the
+  client reconnects, since `tools/list` is fetched on connect.
+
 ## [0.8.29] – 2026-09-01
 
 ### Fixed
