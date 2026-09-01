@@ -287,7 +287,9 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.28...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.30...HEAD
+[0.8.30]: https://github.com/markus7h/ai-rem/compare/v0.8.29...v0.8.30
+[0.8.29]: https://github.com/markus7h/ai-rem/compare/v0.8.28...v0.8.29
 [0.8.28]: https://github.com/markus7h/ai-rem/compare/v0.8.27...v0.8.28
 [0.8.27]: https://github.com/markus7h/ai-rem/compare/v0.8.26...v0.8.27
 [0.8.26]: https://github.com/markus7h/ai-rem/compare/v0.8.25...v0.8.26
