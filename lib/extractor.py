@@ -27,7 +27,12 @@ from typing import Any, List, Optional
 
 from .mcp_client import MCPClient
 
-LOG_DIR = Path(os.path.expanduser("~/.claude/auto-memory"))
+# Muss demselben Config-Dir folgen wie hooks/auto-memory.py und hooks/system-check.py:
+# der Hook schreibt errors.log nach $CLAUDE_CONFIG_DIR/auto-memory, der Extraktor
+# schrieb last-run.json hart nach ~/.claude — in einer Session mit eigenem Config-Dir
+# sah der Sessionstart-Check dort nur Fehler und nie einen Erfolg ("Auto-Memory gestört").
+_CC = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+LOG_DIR = Path(_CC or os.path.expanduser("~/.claude")) / "auto-memory"
 LOCK_FILE = Path("/tmp/ai-rem-ingest.lock")
 FALLBACK_MD = LOG_DIR / "fallback.md"        # klassisches md-Auto-Memory wenn Ollama down
 PENDING_JSONL = LOG_DIR / "pending.jsonl"    # verpasste Sessions → vom catchup nachgezogen
