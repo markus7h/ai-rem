@@ -517,7 +517,7 @@ def _auto_memory_fault(base):
             hint = " → $AI_REM_CLI im env-Block von ~/.claude/settings.json setzen."
         return (f"⚠️ Auto-Memory gestört: seit dem letzten Erfolg nur Fehler. "
                 f"Letzter Eintrag: {tail[:200]}{hint} "
-                f"Voll: ~/.claude/auto-memory/errors.log")
+                f"Voll: {err_path}")
     if not last_ok:
         return ("⚠️ Auto-Memory hat noch nie erfolgreich gespeichert "
                 "(kein last-run.json) — nichts aus bisherigen Sessions ist im Graph gelandet.")

@@ -16,6 +16,13 @@ German).
 ## [Unreleased]
 
 ### Fixed
+- **Auto-memory log directory now follows `CLAUDE_CONFIG_DIR`.** The hook and the
+  SessionStart check derive it from the config dir, but `lib/extractor.py` was pinned to
+  `~/.claude`. In a session with its own config dir the write and read paths diverged:
+  `errors.log` in the profile dir, `last-run.json` in the global one. The check never saw
+  a success there and reported `Auto-Memory gestört` on every start while the ingest was
+  in fact running fine. The fault message also names the real `errors.log` path now
+  instead of always the global one. (#113)
 - **Documented that the cleanup hour must sit outside the LLM host's sleep schedule.**
   The nightly run also backfills missing embedding vectors, so if `AI_REM_OLLAMA_URL` or
   `EMBED_URL` point at a machine that sleeps at night, both go nowhere: the judge stays
