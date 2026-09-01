@@ -13,7 +13,7 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [0.8.29] – 2026-09-01
 
 ### Fixed
 - **Auto-memory log directory now follows `CLAUDE_CONFIG_DIR`.** The hook and the
@@ -34,7 +34,7 @@ German).
   foreign text — PR descriptions, issue bodies — which can quote `gh auth login` or a
   401. Observed on a `gh pr view` of the very PR that introduced the hook. Added to the
   display-command exemption; `gh api`, `gh pr merge` and friends still report, since
-  there a 401 is the call's own.
+  there a 401 is the call's own. (#111)
 
 ## [0.8.28] – 2026-08-30
 
