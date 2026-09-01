@@ -16,6 +16,13 @@ German).
 ## [Unreleased]
 
 ### Fixed
+- **Documented that the cleanup hour must sit outside the LLM host's sleep schedule.**
+  The nightly run also backfills missing embedding vectors, so if `AI_REM_OLLAMA_URL` or
+  `EMBED_URL` point at a machine that sleeps at night, both go nowhere: the judge stays
+  silent (`ollama_used=false`) and the backfill dies at the dimension probe before writing
+  a single chunk — leaving `embed_pending` stuck, since the nightly run is its only trigger
+  besides container start. Noted in `docker-compose.yml` and both language versions of
+  `docs/hooks-and-automation`. (#112)
 - **`vault-secret-reminder` no longer fires on `gh … view/diff/list`.** Those print
   foreign text — PR descriptions, issue bodies — which can quote `gh auth login` or a
   401. Observed on a `gh pr view` of the very PR that introduced the hook. Added to the
