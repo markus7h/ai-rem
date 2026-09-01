@@ -58,6 +58,10 @@ services:
       # kleinere Image :latest-slim nutzen (ohne fastembed und Modell).
       # Ein Wechsel rechnet beim naechsten Start alle Vektoren neu (andere Dimension);
       # ist der Dienst nicht erreichbar, faellt die Suche auf rein lexikalisch zurueck.
+      # Schlaeft der Ziel-Host nachts (gilt genauso fuer AI_REM_OLLAMA_URL oben), muss die
+      # Cleanup-Stunde in der /cleanup-UI HINTER dessen Aufwachzeit liegen: der Nightly-Lauf
+      # ist neben dem Container-Start der einzige Backfill-Trigger, und er bricht bei
+      # unerreichbarem Dienst komplett ab (kein Chunk geschrieben, embed_pending bleibt stehen).
       - EMBED_URL=${EMBED_URL:-}
       - EMBED_HTTP_MODEL=${EMBED_HTTP_MODEL:-bge-m3}
       # Laengenbremse: llama.cpp lehnt zu lange Eingaben mit HTTP 500 ab, statt sie
