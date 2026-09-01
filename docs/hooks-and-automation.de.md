@@ -68,6 +68,8 @@ Das Prüf-Alter ist bewusst **nicht** `updated_at`: jedes `memory_add` setzt das
 - `CLEANUP_VERIFY_MAX_PER_RUN` — Kandidaten pro Nacht, ältester zuerst (Default `5`; hält Queue und LLM-Last klein)
 
 > **llama-server-Erreichbarkeit:** Der nächtliche Judge braucht einen erreichbaren llama-server unter `AI_REM_OLLAMA_URL`; das beurteilende Modell ist fix via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In der mitgelieferten `docker-compose.yml` ist der Default `http://myai:11436` (pro Deployment via `.env` überschreibbar). Ist es nicht gesetzt/erreichbar, läuft der Cleanup trotzdem, schiebt aber jedes mehrdeutige Paar in die Review-Queue statt es automatisch zu beurteilen (`ollama_used=false` im Lauf-Log).
+>
+> **Cleanup-Stunde und Schlafzeitplan:** Der Lauf zieht am Ende auch die fehlenden Embedding-Vektoren nach (`EMBED_URL`). Liegen llama-server oder Embedding-Dienst auf einem Host, der nachts schläft, muss die Cleanup-Stunde **hinter** dessen Aufwachzeit liegen — sonst laufen beide ins Leere: der Judge stumm (`ollama_used=false`), der Backfill mit `No route to host`, und `embed_pending` in `/api/status` bleibt stehen, weil der Nightly-Lauf neben dem Container-Start der einzige Backfill-Trigger ist.
 
 ---
 
