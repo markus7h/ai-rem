@@ -2240,10 +2240,12 @@ EMBED_THREADS = int(os.getenv("EMBED_THREADS", "2"))  # onnxruntime-Threads zäh
 # Backfill-Chunkgröße. Ein Vollbatch über alle Entities riss den Container nach
 # einem Restore (Modell + 500+ Texte über mem_limit, Writes über den Buffer-Pool).
 EMBED_BACKFILL_CHUNK = int(os.getenv("EMBED_BACKFILL_CHUNK", "32"))
-# Vektoren je Checkpoint. Kuzu 0.11.3 verliert Property-Writes, wenn viele kleine
-# Checkpoints aufeinander folgen: 1342 Vektoren in 32er-Chunks mit Checkpoint je
-# Chunk ließen 0 übrig — bei 300er-Portionen (3 Checkpoints) blieb alles stehen.
-# Nach oben begrenzt der Buffer-Pool: bei 768 MB sprengte die vierte Portion ihn.
+# Vektoren je Checkpoint. Jeder Checkpoint schreibt in Kuzu 0.11.3 die komplette
+# Spalte neu, die Datei wächst also mit der Zahl der Checkpoints statt mit den
+# Daten — und sobald sie den Buffer-Pool übersteigt, scheitert der nächste
+# Checkpoint und nimmt alles mit, was frühere schon persistiert hatten. 1342
+# Vektoren in 32er-Chunks: 771 MB Datei, 0 Vektoren übrig. Weniger Checkpoints
+# heißt kleinere Datei; nach oben begrenzt sie der Buffer-Pool.
 EMBED_BACKFILL_PORTION = int(os.getenv("EMBED_BACKFILL_PORTION", "300"))
 
 _embed_model = None
@@ -2529,14 +2531,16 @@ def _embed_backfill(alle: bool = False) -> None:
     und mit größerem Limit dann der Kuzu-Buffer-Pool. Geschriebene Portionen
     bleiben bei einem Abbruch erhalten, der nächste Lauf macht am Rest weiter.
 
-    Eine Portion je Kuzu-Session, weil Kuzu 0.11.3 Property-Writes verliert,
-    sobald mehrere Checkpoints in derselben Session aufeinander folgen. Gemessen
-    auf einer frischen DB (1342 Vektoren, 1024 dim): Checkpoint je 32er-Chunk →
-    0 überlebten und die Datei wuchs von 3 MB auf 771 MB; 300er-Portionen in
+    Eine Portion je Kuzu-Session, weil jeder Checkpoint in Kuzu 0.11.3 die ganze
+    Spalte neu schreibt: die Datei wächst mit der Zahl der Checkpoints statt mit
+    den Daten, und sobald sie den Buffer-Pool übersteigt, scheitert der nächste
+    Checkpoint — und verwirft dabei auch alles, was frühere schon persistiert
+    hatten. Gemessen auf einer frischen DB (1342 Vektoren, 1024 dim):
+    Checkpoint je 32er-Chunk → 771 MB Datei, 0 Vektoren übrig; 300er-Portionen in
     einer Session → beim vierten Checkpoint waren alle 1200 vorherigen weg;
     300er-Portionen mit `_reopen_db()` dazwischen → alle 1342 blieben, bei 151 MB.
-    Ganz ohne Zwischen-Checkpoint sprengen die Dirty-Pages den Buffer-Pool, ein
-    einzelner am Ende ist also auch keine Lösung.
+    Ganz ohne Zwischen-Checkpoint sprengen die Dirty-Pages den Buffer-Pool schon
+    beim Schreiben, ein einzelner am Ende ist also auch keine Lösung.
 
     `alle=True` arbeitet deshalb alle Portionen ab und baut die Session zwischen
     ihnen neu auf — nur beim Start erlaubt, siehe `_reopen_db`. Sonst bleibt es
@@ -2580,7 +2584,7 @@ def _embed_backfill(alle: bool = False) -> None:
                             {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
             # Genau EIN Checkpoint je Session: `db.close()` in _reopen_db macht ihn
             # selbst, ein zusätzlicher expliziter davor wäre schon der zweite — und
-            # der zweite ist der, bei dem Kuzu die Portion davor wegwirft.
+            # jeder weitere schreibt die Spalte noch einmal komplett neu.
             if alle:
                 _reopen_db()
             elif not _checkpoint_wal(force=True):

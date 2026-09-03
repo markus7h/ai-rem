@@ -178,8 +178,10 @@ aus dem letzten Backup.
 
 ### Warum der Embedding-Backfill eine Portion je Session schreibt
 
-Kuzu 0.11.3 verwirft Property-Writes stillschweigend, sobald mehrere `CHECKPOINT`s **in
-derselben Session** aufeinander folgen. Gemessen auf einer frischen Datenbank (1342
+Jeder `CHECKPOINT` schreibt in Kuzu 0.11.3 die komplette Spalte neu. Die Datei wächst
+damit mit der **Zahl der Checkpoints** statt mit den Daten — und sobald sie den
+Buffer-Pool übersteigt, scheitert der nächste Checkpoint und verwirft dabei auch alles,
+was frühere schon persistiert hatten. Gemessen auf einer frischen Datenbank (1342
 Vektoren, 1024 Dimensionen):
 
 | Schreibweise des Backfills | überlebende Vektoren | Dateigröße |
@@ -188,9 +190,9 @@ Vektoren, 1024 Dimensionen):
 | 300er-Portionen, alle in einer Session | 0 / 1342 (weg beim 4. Checkpoint) | — |
 | 300er-Portionen, frische Session je Portion | **1342 / 1342** | 3 MB → **151 MB** |
 
-Der Checkpoint meldet in allen Fällen Erfolg — das kostete einen Tag mit „Backfill fertig
-(1251)" im Log, während `embed_pending` bei 1210 stehen blieb. Die Zwischen-Checkpoints
-ganz wegzulassen geht auch nicht: die Dirty-Pages sprengen dann nach ~500 Writes den
+Im Log steht davon nichts — der Lauf meldet „Backfill fertig (1251)", während
+`embed_pending` bei 1210 stehen bleibt. Die Zwischen-Checkpoints ganz wegzulassen geht
+auch nicht: die Dirty-Pages sprengen dann schon beim Schreiben nach ~500 Writes den
 Buffer-Pool.
 
 Der Backfill schreibt deshalb `EMBED_BACKFILL_PORTION` Vektoren und bindet danach die

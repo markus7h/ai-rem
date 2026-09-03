@@ -6,9 +6,11 @@ Texte plus Modell ueber dem mem_limit, und mit groesserem Limit dann der
 Kuzu-Buffer-Pool ("buffer pool is full") nach ~290 Writes, weil Kuzu die
 Dirty-Pages bis zum Checkpoint haelt.
 
-Der Checkpoint je Chunk, der daraus folgte, war aber die naechste Falle: Kuzu
-0.11.3 verliert Property-Writes, sobald mehrere Checkpoints in DERSELBEN Session
-aufeinander folgen. Auf einer frischen DB gemessen (1342 Vektoren, 1024 dim):
+Der Checkpoint je Chunk, der daraus folgte, war aber die naechste Falle: jeder
+Checkpoint schreibt in Kuzu 0.11.3 die ganze Spalte neu, die Datei waechst also
+mit der Zahl der Checkpoints — und ein Checkpoint, der nicht mehr in den
+Buffer-Pool passt, verwirft auch das, was fruehere schon persistiert hatten.
+Auf einer frischen DB gemessen (1342 Vektoren, 1024 dim):
 Checkpoint je 32er-Chunk → 0 ueberlebten und die Datei wuchs von 3 MB auf 771 MB;
 300er-Portionen in einer Session → beim vierten Checkpoint waren alle 1200
 vorherigen weg; 300er-Portionen mit _reopen_db() dazwischen → alle 1342 blieben,

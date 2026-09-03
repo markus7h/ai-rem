@@ -16,12 +16,14 @@ German).
 ## [Unreleased]
 
 ### Fixed
-- **The embedding backfill no longer loses everything it writes.** Kuzu 0.11.3 silently
-  discards property writes once several `CHECKPOINT`s follow one another in the same
-  session — and the backfill checkpointed after every 32-vector chunk. On a fresh
-  database, 1342 vectors written that way left **0** behind while the file grew from
-  3 MB to 771 MB; the checkpoint reported success every time. In production this showed
-  up as `Embedding-Backfill fertig (1251)` in the log with `embed_pending` still at 1210.
+- **The embedding backfill no longer loses everything it writes.** Every `CHECKPOINT`
+  rewrites the entire column in Kuzu 0.11.3, so the file grows with the *number of
+  checkpoints* rather than with the data — and once it outgrows the buffer pool, the
+  next checkpoint fails and discards what earlier ones had already persisted. The
+  backfill checkpointed after every 32-vector chunk: on a fresh database, 1342 vectors
+  written that way grew the file from 3 MB to 771 MB and left **0** behind. In
+  production this showed up as `Embedding-Backfill fertig (1251)` in the log with
+  `embed_pending` still at 1210.
   The backfill now writes `EMBED_BACKFILL_PORTION` (default 300) vectors per Kuzu session
   and rebinds the session in between — all 1342 survive, and the file grows to 151 MB
   instead of 771 MB. It also samples one entity after each portion and stops with an

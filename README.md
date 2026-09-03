@@ -179,9 +179,10 @@ helps.
 
 ### Why the embedding backfill runs one portion per session
 
-Kuzu 0.11.3 silently discards property writes once several `CHECKPOINT`s follow one
-another **in the same session**. Measured on a fresh database (1342 vectors, 1024
-dimensions):
+Every `CHECKPOINT` rewrites the whole column in Kuzu 0.11.3. The file therefore grows
+with the **number of checkpoints** rather than with the data — and once it outgrows the
+buffer pool, the next checkpoint fails and discards what earlier ones had already
+persisted. Measured on a fresh database (1342 vectors, 1024 dimensions):
 
 | how the backfill writes | vectors surviving | file size |
 |---|---|---|
@@ -189,10 +190,9 @@ dimensions):
 | 300-vector portions, all in one session | 0 / 1342 (gone at the 4th checkpoint) | — |
 | 300-vector portions, fresh session per portion | **1342 / 1342** | 3 MB → **151 MB** |
 
-The checkpoint reports success either way, so this cost a full day of "backfill
-finished (1251)" in the log while `embed_pending` stayed at 1210. Dropping the
-intermediate checkpoints entirely is not an option either — the dirty pages then blow
-the buffer pool after ~500 writes.
+Nothing in the log says so — the run reports "backfill finished (1251)" while
+`embed_pending` stays at 1210. Dropping the intermediate checkpoints entirely is not an
+option either: the dirty pages then blow the buffer pool after ~500 writes.
 
 So the backfill writes `EMBED_BACKFILL_PORTION` vectors, then rebinds the Kuzu session
 (`db.close()` checkpoints on its own — exactly one per session). That rebinding tolerates

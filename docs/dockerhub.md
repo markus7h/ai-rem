@@ -100,7 +100,7 @@ Set in the Compose `.env`:
 | `KUZU_BUFFER_POOL_SIZE_MB` | `256` | Kuzu buffer pool. **Raise to 768 when using `EMBED_URL`** — 1024-dim vectors make the backfill's WAL checkpoint fail at 256 MB, and the affected vectors are then lost on restart (the failure is retried once and logged as `ERROR`; `embed_pending` in `/api/status` shows what is missing) |
 | `EMBED_ENABLED` | `1` | `0` disables semantic search entirely (lexical only) |
 | `KG_REBUILD_MB` | `2048` | If kg.db exceeds this at startup, the server compacts it (dump → fresh DB → import). Kuzu never reclaims space on property overwrites and has no `VACUUM`, so a repeatedly rerun embedding backfill inflates the file indefinitely |
-| `EMBED_BACKFILL_PORTION` | `300` | Vectors written per Kuzu session. Kuzu 0.11.3 discards property writes when several checkpoints follow one another in one session — 1342 vectors with a checkpoint per 32-chunk left 0 behind, one portion per session left all 1342. Raise only together with `KUZU_BUFFER_POOL_SIZE_MB` |
+| `EMBED_BACKFILL_PORTION` | `300` | Vectors written per Kuzu session. Every checkpoint rewrites the whole column in Kuzu 0.11.3, so the file grows with the number of checkpoints and a checkpoint that no longer fits the buffer pool discards what earlier ones persisted — 1342 vectors with a checkpoint per 32-chunk grew the file to 771 MB and left 0 behind, one portion per session left all 1342 at 151 MB. Raise only together with `KUZU_BUFFER_POOL_SIZE_MB` |
 | `KG_MAX_MB` | `4096` | Above this size the embedding backfill stops writing altogether — vectors are derived data and must not fill the disk |
 | `KG_MIN_FREE_MB` | `1024` | Free disk space the backfill requires before it writes |
 
