@@ -13,7 +13,7 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [0.8.30] – 2026-09-03
 
 ### Fixed
 - **kg.db cannot silently eat the disk any more.** Kuzu never returns space when a
@@ -26,15 +26,7 @@ German).
   `restart: on-failure:5` so a crash loop ends; the backfill refuses to write above
   `KG_MAX_MB` or below `KG_MIN_FREE_MB` free disk; and a start with kg.db above
   `KG_REBUILD_MB` compacts it via dump → fresh DB → import (backed up to
-  `BACKUP_DIR` beforehand, old DB kept if that fails).
-
-### Added
-- `/api/status` reports `db_mb` plus both thresholds, so the bloat is visible before
-  it becomes an outage.
-
-## [0.8.30] – 2026-09-01
-
-### Fixed
+  `BACKUP_DIR` beforehand, old DB kept if that fails). (#116)
 - **Read tools are annotated `readOnlyHint`, so plan mode stops asking.** Claude
   Code gates MCP calls in plan mode on the server-supplied `readOnlyHint`
   annotation, independently of the permission allowlist: without the annotation
@@ -42,7 +34,11 @@ German).
   user has explicitly allowed. `memory_search` and `memory_get_context` now
   declare `annotations={"readOnlyHint": True}`. The writing tools (`memory_add`,
   `memory_relate`) keep prompting, which is correct. Takes effect after the
-  client reconnects, since `tools/list` is fetched on connect.
+  client reconnects, since `tools/list` is fetched on connect. (#115)
+
+### Added
+- `/api/status` reports `db_mb` plus both thresholds, so the bloat is visible before
+  it becomes an outage. (#116)
 
 ## [0.8.29] – 2026-09-01
 
