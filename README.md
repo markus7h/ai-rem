@@ -103,6 +103,9 @@ KUZU_POOL_SIZE=4                         # Connection pool size
 DISCOVER_ROUTINES_LIMIT=10               # Pinned routines injected per prompt via /discover (curated by sort_order)
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu buffer pool in MiB (0 = default: 80% of host RAM)
 KUZU_WAL_CHECKPOINT_MB=2                  # self-checkpoint the WAL above this size (0/empty = off)
+KG_REBUILD_MB=2048                        # compact kg.db on the next start above this size (Kuzu has no VACUUM)
+KG_MAX_MB=4096                            # above this the embedding backfill stops writing entirely
+KG_MIN_FREE_MB=1024                       # free disk space the backfill requires before it writes
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
 AI_REM_LOG_RING=500                       # Lines of server log kept in memory for /logs
 EMBED_URL=                                # Empty = in-process embeddings; set to an OpenAI-compatible /v1/embeddings URL for an external service
@@ -144,6 +147,34 @@ vectors — no manual migration, and it works in both directions.
 > DB needs only ~32 MB, so 256 MiB is plenty. `KUZU_WAL_CHECKPOINT_MB` keeps the WAL
 > small (periodically + on shutdown) — a bloated WAL would trigger an expensive recovery
 > on open (several GB → OOM).
+
+### Database size: why kg.db grows, and how it stays small
+
+Kuzu **never returns space** when a property is overwritten — a checkpoint rewrites the
+affected column and leaves the old version sitting in the file. There is no `VACUUM`. The
+embedding backfill hits this hardest: every run writes whole vector columns, which with
+`bge-m3` (1024 dimensions) is ~680 MB for 1300 entities. As long as it runs rarely, that
+goes unnoticed.
+
+The dangerous part is crash plus restart: after a crash the un-checkpointed vectors are
+gone, the next start rewrites **all** of them, and the file grows by another column. With
+`restart: unless-stopped` that becomes an endless loop — on 2026-09-03 kg.db went from
+~680 MB to 27 GB across 264 restarts and filled the partition, taking the neighbouring
+containers down with it. Three guards prevent that:
+
+- **`restart: on-failure:5`** (in `docker-compose.yml`): a crash loop ends after five
+  attempts instead of running unnoticed for days.
+- **`KG_MAX_MB` / `KG_MIN_FREE_MB`**: the backfill stops writing entirely once the DB is
+  too large or the disk too full. Vectors are derived data — search keeps working with
+  whatever is stored, lexically if need be.
+- **`KG_REBUILD_MB`**: if kg.db exceeds this at startup, the server compacts it itself
+  (dump → fresh DB → import, the equivalent of the missing `VACUUM`). The dump is written
+  to `BACKUP_DIR` as a regular backup first; if that fails, the old DB is left untouched.
+
+The current size is exposed as `db_mb` in `/api/status`, along with both thresholds. A
+file Kuzu has already corrupted shows up as `count()` still working while any column
+access segfaults (container exit 139) — at that point only a restore from the last backup
+helps.
 
 When `AI_REM_BACKUP_KEY` is set, backups are written encrypted with AES-256-GCM
 (`backup_<ts>.json.enc`) and downloads return the encrypted blob, so the data

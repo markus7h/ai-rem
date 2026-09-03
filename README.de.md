@@ -101,6 +101,9 @@ AI_REM_BACKUP_KEY=...                     # Optional — Backups verschlüsseln 
 KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu Buffer-Pool in MiB (0 = Default: 80% Host-RAM)
 KUZU_WAL_CHECKPOINT_MB=2                 # WAL selbst mergen ab dieser Größe (0/leer = aus)
+KG_REBUILD_MB=2048                       # kg.db beim nächsten Start kompaktieren ab dieser Größe (Kuzu kennt kein VACUUM)
+KG_MAX_MB=4096                           # darüber schreibt der Embedding-Backfill gar nicht mehr
+KG_MIN_FREE_MB=1024                      # so viel Plattenplatz muss für einen Backfill frei sein
 AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im RAM gehalten werden
 EMBED_URL=                               # Leer = Embeddings im Container; gesetzt = OpenAI-kompatible /v1/embeddings-URL eines externen Dienstes
 EMBED_HTTP_MODEL=bge-m3                  # Modellname, der an EMBED_URL geschickt wird
@@ -143,6 +146,34 @@ Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechn
 > Der Normalbetrieb braucht bei dieser DB nur ~32 MB, daher genügen 256 MiB.
 > `KUZU_WAL_CHECKPOINT_MB` hält die WAL klein (periodisch + beim Shutdown) — eine
 > aufgestaute WAL würde beim Öffnen eine teure Recovery auslösen (mehrere GB → OOM).
+
+### Datenbankgröße: warum kg.db wächst und wie sie klein bleibt
+
+Kuzu gibt beim Überschreiben von Properties **keinen Speicher zurück** — ein Checkpoint
+schreibt die betroffene Column neu und lässt die alte Version in der Datei liegen. Ein
+`VACUUM` gibt es nicht. Der Embedding-Backfill trifft das am härtesten: er schreibt bei
+jedem Lauf ganze Vektor-Columns, mit `bge-m3` (1024 Dimensionen) sind das ~680 MB bei
+1300 Entities. Solange er selten läuft, ist das unauffällig.
+
+Gefährlich wird die Kombination aus Crash und Neustart: nach einem Absturz fehlen die
+nicht gecheckpointeten Vektoren, der nächste Start schreibt **alle** neu, und die Datei
+wächst um eine weitere Column. Mit `restart: unless-stopped` ist das eine Endlosschleife
+— am 03.09.2026 lief kg.db so in 264 Neustarts von ~680 MB auf 27 GB und füllte die
+Partition, was auch die Nachbar-Container lahmlegte. Drei Riegel verhindern das:
+
+- **`restart: on-failure:5`** (in `docker-compose.yml`): ein Crash-Loop endet nach fünf
+  Versuchen, statt tagelang unbemerkt weiterzulaufen.
+- **`KG_MAX_MB` / `KG_MIN_FREE_MB`**: der Backfill schreibt gar nichts mehr, wenn die DB
+  zu groß oder die Platte zu voll ist. Vektoren sind abgeleitete Daten — die Suche läuft
+  mit den vorhandenen weiter, notfalls rein lexikalisch.
+- **`KG_REBUILD_MB`**: liegt kg.db beim Start darüber, kompaktiert der Server sie selbst
+  (Dump → frische DB → Import, das Äquivalent zum fehlenden `VACUUM`). Die Sicherung geht
+  vorher als reguläres Backup ins `BACKUP_DIR`; scheitert sie, bleibt die alte DB liegen.
+
+Die aktuelle Größe steht als `db_mb` in `/api/status`, zusammen mit beiden Schwellen.
+Eine von Kuzu bereits zerschossene Datei ist daran erkennbar, dass `count()` noch geht,
+jeder Spaltenzugriff aber segfaultet (Container-Exit 139) — dann hilft nur ein Restore
+aus dem letzten Backup.
 
 Ist `AI_REM_BACKUP_KEY` gesetzt, werden Backups mit AES-256-GCM verschlüsselt
 geschrieben (`backup_<ts>.json.enc`) und beim Download als verschlüsselter Blob
