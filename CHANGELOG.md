@@ -13,6 +13,25 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Fixed
+- **kg.db cannot silently eat the disk any more.** Kuzu never returns space when a
+  property is overwritten — a checkpoint rewrites the column and leaves the old
+  version in the file, and there is no `VACUUM`. On 2026-09-03 the container
+  segfaulted in the 60s WAL checkpoint; `restart: unless-stopped` restarted it 264
+  times, and every start rewrote all 1291 embedding vectors (bge-m3, 1024 dim).
+  kg.db grew from ~680 MB to 27 GB, filled the 30 GB partition and took the
+  neighbouring containers with it. Three guards now bound this: Compose uses
+  `restart: on-failure:5` so a crash loop ends; the backfill refuses to write above
+  `KG_MAX_MB` or below `KG_MIN_FREE_MB` free disk; and a start with kg.db above
+  `KG_REBUILD_MB` compacts it via dump → fresh DB → import (backed up to
+  `BACKUP_DIR` beforehand, old DB kept if that fails).
+
+### Added
+- `/api/status` reports `db_mb` plus both thresholds, so the bloat is visible before
+  it becomes an outage.
+
 ## [0.8.30] – 2026-09-01
 
 ### Fixed

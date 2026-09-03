@@ -10,7 +10,13 @@ services:
         # Feste Adresse, damit der Reverse-Proxy den Container direkt
         # adressieren kann (Host-ID = Port, nur zur Lesbarkeit).
         ipv6_address: fd00:24:9:68:19::3456
-    restart: unless-stopped
+    # on-failure (nicht unless-stopped): ein Crash-Loop muss enden. Am 03.09.2026
+    # segfaultete kuzu im 60s-WAL-Checkpoint, `unless-stopped` startete den Container
+    # 264× neu, und jeder Start schrieb per Embedding-Backfill alle Vektoren erneut in
+    # eine DB, die Speicher nie zurückgibt — kg.db wuchs auf 27 GB und füllte die
+    # Partition samt Nachbar-Containern. Nach 5 Fehlversuchen bleibt er jetzt unten
+    # (Docker setzt den Zähler zurück, sobald er wieder länger läuft).
+    restart: on-failure:5
     ports:
       - "${PORT:-3456}:${PORT:-3456}"
     volumes:

@@ -93,6 +93,45 @@ KUZU_BUFFER_POOL_SIZE_MB = int(os.getenv("KUZU_BUFFER_POOL_SIZE_MB", "256"))
 # (6.9 MB WAL → ~2.4 GB Buffer-Peak → OOM). Darum checkpointen wir selbst, sobald
 # die WAL diese Schwelle überschreitet (Scheduler, 60s-Takt) + einmal beim Shutdown.
 KUZU_WAL_CHECKPOINT_MB = float(os.getenv("KUZU_WAL_CHECKPOINT_MB", "2"))
+
+# Kuzu gibt beim Überschreiben von Properties keinen Speicher zurück: ein Checkpoint
+# schreibt die betroffene Column neu und lässt die alte Version in der Datei liegen.
+# Ein VACUUM gibt es nicht — der einzige Weg zurück ist Dump → frische DB → Import.
+# Am 03.09.2026 lief das aus dem Ruder: der Container segfaultete im 60s-Checkpoint,
+# `restart: unless-stopped` startete ihn 264× neu, und jeder Start schrieb per
+# _embed_backfill alle 1248 Vektoren (bge-m3, 1024 dim) erneut — kg.db wuchs von
+# ~280 MB auf 27 GB und füllte die Partition, was auch die Nachbar-Container traf.
+# Drei Schwellen halten das jetzt ein (Compose ergänzt `restart: on-failure:5`,
+# damit ein Crash-Loop überhaupt endet):
+#   KG_REBUILD_MB   darüber wird beim Start kompaktiert (_rebuild_db)
+#   KG_MAX_MB       darüber schreibt der Backfill gar nichts mehr
+#   KG_MIN_FREE_MB  so viel freier Plattenplatz muss für einen Backfill übrig sein
+# Kalibriert am echten Normalzustand: 1291 Entities mit bge-m3 (1024 dim) ergeben
+# nach einem frischen Import ~680 MB. Rebuild also bei ~3×, harter Stopp bei ~6×.
+KG_REBUILD_MB = float(os.getenv("KG_REBUILD_MB", "2048"))
+KG_MAX_MB = float(os.getenv("KG_MAX_MB", "4096"))
+KG_MIN_FREE_MB = float(os.getenv("KG_MIN_FREE_MB", "1024"))
+
+
+def _db_size_mb() -> float:
+    """Belegung von kg.db + WAL in MiB (0.0 wenn noch nichts existiert)."""
+    total = 0
+    for p in (DB_PATH, DB_PATH + ".wal"):
+        try:
+            total += os.path.getsize(p)
+        except OSError:
+            pass
+    return total / 1024 / 1024
+
+
+def _free_mb() -> float:
+    """Freier Platz auf dem Dateisystem der DB. inf, wenn nicht ermittelbar —
+    ein unbekannter Wert darf den Backfill nicht blockieren."""
+    try:
+        st = os.statvfs(os.path.dirname(DB_PATH) or ".")
+    except OSError:
+        return float("inf")
+    return st.f_bavail * st.f_frsize / 1024 / 1024
 _BACKUP_CONFIG = os.path.join(BACKUP_DIR, ".config.json")
 
 # API-Token für alle sensiblen HTTP-Routen (/mcp, /api/*, /export, /import …).
@@ -1444,7 +1483,12 @@ async def api_status(request: Request) -> JSONResponse:
         "RETURN count(e)"))[0][0]
     return JSONResponse({"version": VERSION, "entities": e_count, "relations": r_count,
                          "last_backup": cfg.get("last_backup"),
-                         "embed_pending": pending, "embed_enabled": EMBED_ENABLED})
+                         "embed_pending": pending, "embed_enabled": EMBED_ENABLED,
+                         # Macht den Kuzu-Bloat sichtbar, bevor er die Platte füllt:
+                         # steigt db_mb über KG_REBUILD_MB, kompaktiert der nächste
+                         # Start; über KG_MAX_MB schreibt der Backfill nicht mehr.
+                         "db_mb": round(_db_size_mb(), 1),
+                         "db_rebuild_mb": KG_REBUILD_MB, "db_max_mb": KG_MAX_MB})
 
 
 @mcp.custom_route("/api/backup/config", methods=["GET"])
@@ -2474,6 +2518,17 @@ def _embed_backfill() -> None:
     an der WAL-Größe, der größenbasierte Check wäre also ein No-op.
     """
     if not EMBED_ENABLED:
+        return
+    # Vektoren sind abgeleitete Daten — sie nachzuschreiben darf niemals die Platte
+    # füllen. Ohne diesen Guard schrieb der Backfill nach jedem Crash alles neu und
+    # blähte kg.db bei jedem Durchlauf um eine komplette Embedding-Column auf.
+    size, free = _db_size_mb(), _free_mb()
+    if size > KG_MAX_MB or free < KG_MIN_FREE_MB:
+        log.error("Embedding-Backfill übersprungen: kg.db %.0f MB (Limit %.0f), "
+                  "%.0f MB frei (Minimum %.0f). Semantische Suche läuft mit den "
+                  "vorhandenen Vektoren weiter; kg.db kompaktieren — ein Neustart "
+                  "rebuildet ab %.0f MB automatisch.",
+                  size, KG_MAX_MB, free, KG_MIN_FREE_MB, KG_REBUILD_MB)
         return
     try:
         _embed_reset_on_dim_change()
@@ -3905,6 +3960,51 @@ def _cleanup_scheduler_loop() -> None:
 
 
 threading.Thread(target=_cleanup_scheduler_loop, daemon=True, name="cleanup-scheduler").start()
+
+def _rebuild_db() -> None:
+    """kg.db durch eine frisch importierte Kopie ersetzen — Kuzus fehlendes VACUUM.
+
+    Nur beim Start aufrufen: uvicorn läuft noch nicht, kein anderer Thread hält
+    eine Connection, deshalb ist das Neubinden von `db`/`_pool` hier gefahrlos.
+    Die Sicherung geht als Backup nach BACKUP_DIR (eigener Mount), bevor die alte
+    Datei gelöscht wird — sie zur Seite zu kopieren scheidet aus, denn im Ernstfall
+    fehlt genau dieser Platz. Scheitert das Backup, bleibt die alte DB unangetastet.
+    """
+    global db, _pool
+    before = _db_size_mb()
+    log.warning("kg.db ist %.0f MB (Schwelle %.0f) — kompaktiere über Dump + Import.",
+                before, KG_REBUILD_MB)
+    body = _dump_graph()
+    backup = _do_backup()
+    db.close()
+    for p in (DB_PATH, DB_PATH + ".wal"):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+    db = kuzu.Database(
+        DB_PATH,
+        buffer_pool_size=KUZU_BUFFER_POOL_SIZE_MB * 1024 * 1024 if KUZU_BUFFER_POOL_SIZE_MB else 0,
+    )
+    _pool = queue.Queue(maxsize=KUZU_POOL_SIZE)
+    for _ in range(KUZU_POOL_SIZE):
+        _pool.put(kuzu.Connection(db))
+    init_schema()
+    res = _apply_import(body, "replace")
+    _checkpoint_wal(force=True)
+    log.warning("kg.db kompaktiert: %.0f → %.0f MB (%s Entities, %s Relationen, "
+                "Sicherung %s). Die Vektoren fehlen jetzt und werden nachgezogen.",
+                before, _db_size_mb(), res.get("entities_created"),
+                res.get("relations_created"), backup)
+
+
+if _db_size_mb() > KG_REBUILD_MB:
+    try:
+        _rebuild_db()
+    except Exception as e:
+        # Weiterlaufen mit der aufgeblähten DB ist besser als gar kein Dienst —
+        # der Backfill-Guard verhindert, dass sie noch weiter wächst.
+        log.error("kg.db-Rebuild fehlgeschlagen, laufe mit der bisherigen DB weiter: %s", e)
 
 # Embeddings nach dem Start im Hintergrund nachziehen (lädt Modell, embedded fehlende).
 _warn_if_no_embed_backend()
