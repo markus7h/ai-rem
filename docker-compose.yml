@@ -93,7 +93,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      # Nach einem Restore zieht der Backfill vor dem Serverstart alle Vektoren nach
+      # (gut eine Minute bei ~1300 Entities) — solange darf /health noch fehlschlagen.
+      start_period: 300s
 
 networks:
   # IPv6 aus dem gerouteten Praefix fd00:24:9:68::/64 (Rueckroute im Router auf

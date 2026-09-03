@@ -13,6 +13,25 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Fixed
+- **The embedding backfill no longer loses everything it writes.** Kuzu 0.11.3 silently
+  discards property writes once several `CHECKPOINT`s follow one another in the same
+  session — and the backfill checkpointed after every 32-vector chunk. On a fresh
+  database, 1342 vectors written that way left **0** behind while the file grew from
+  3 MB to 771 MB; the checkpoint reported success every time. In production this showed
+  up as `Embedding-Backfill fertig (1251)` in the log with `embed_pending` still at 1210.
+  The backfill now writes `EMBED_BACKFILL_PORTION` (default 300) vectors per Kuzu session
+  and rebinds the session in between — all 1342 survive, and the file grows to 151 MB
+  instead of 771 MB. It also samples one entity after each portion and stops with an
+  `ERROR` if the checkpoint threw the portion away.
+- **The startup backfill runs before uvicorn.** Rebinding the Kuzu session tolerates no
+  concurrent access. A restore therefore costs about a minute of startup time, covered by
+  a `start_period` of 300s in the compose healthcheck; with nothing to backfill (the
+  normal case) startup is unchanged. At runtime one portion is written per run and the
+  next run continues with the rest.
+
 ## [0.8.30] – 2026-09-03
 
 ### Fixed

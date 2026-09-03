@@ -2240,6 +2240,11 @@ EMBED_THREADS = int(os.getenv("EMBED_THREADS", "2"))  # onnxruntime-Threads zäh
 # Backfill-Chunkgröße. Ein Vollbatch über alle Entities riss den Container nach
 # einem Restore (Modell + 500+ Texte über mem_limit, Writes über den Buffer-Pool).
 EMBED_BACKFILL_CHUNK = int(os.getenv("EMBED_BACKFILL_CHUNK", "32"))
+# Vektoren je Checkpoint. Kuzu 0.11.3 verliert Property-Writes, wenn viele kleine
+# Checkpoints aufeinander folgen: 1342 Vektoren in 32er-Chunks mit Checkpoint je
+# Chunk ließen 0 übrig — bei 300er-Portionen (3 Checkpoints) blieb alles stehen.
+# Nach oben begrenzt der Buffer-Pool: bei 768 MB sprengte die vierte Portion ihn.
+EMBED_BACKFILL_PORTION = int(os.getenv("EMBED_BACKFILL_PORTION", "300"))
 
 _embed_model = None
 _embed_model_lock = threading.Lock()
@@ -2502,20 +2507,43 @@ def _embed_reset_on_dim_change() -> None:
     _invalidate_embed_cache()
 
 
-def _embed_backfill() -> None:
-    """Idempotent: embedded alle Entities ohne Vektor. Startup + Nightly-Reconcile.
+def _hat_vektor(eid: str) -> bool:
+    """Stichprobe über den Primärschlüssel: steht bei dieser Entity ein Vektor?
+
+    Bewusst eine einzelne Entity statt `count()` über alle — ein Vergleich auf
+    e.embedding scannt die ganze Spalte und zieht damit sämtliche Vektoren in den
+    Buffer-Pool, was den Backfill selbst in "buffer pool is full" laufen ließ. Als
+    Verlustprobe reicht eine Entity: der Checkpoint verwirft ganze Spalten, nicht
+    einzelne Werte.
+    """
+    rows = _rows(db_exec("MATCH (e:Entity {id:$id}) RETURN e.embedding", {"id": eid}))
+    return bool(rows and rows[0][0])
+
+
+def _embed_backfill(alle: bool = False) -> None:
+    """Idempotent: embedded Entities ohne Vektor. Startup + Nightly-Reconcile.
 
     Chunkweise (EMBED_BACKFILL_CHUNK): der frühere Einzelcall über alle Entities
     ging im Normalbetrieb gut (nie viele Vektoren offen), riss aber nach einem
     Restore den Container — 524 Texte auf einmal plus Modell über dem mem_limit,
-    und mit größerem Limit dann der Kuzu-Buffer-Pool. Geschriebene Chunks bleiben
-    bei einem Abbruch erhalten, der nächste Lauf macht am offenen Rest weiter.
+    und mit größerem Limit dann der Kuzu-Buffer-Pool. Geschriebene Portionen
+    bleiben bei einem Abbruch erhalten, der nächste Lauf macht am Rest weiter.
 
-    Erzwungener Checkpoint je Chunk, weil Kuzu die Dirty-Pages der Writes bis
-    dahin im Pool hält: ohne das lief der gechunkte Backfill bei 256 MB Pool
-    nach ~290 Writes in "buffer pool is full". force=True ist nötig — die WAL
-    bleibt dabei unter KUZU_WAL_CHECKPOINT_MB, die Pool-Last hängt hier nicht
-    an der WAL-Größe, der größenbasierte Check wäre also ein No-op.
+    Eine Portion je Kuzu-Session, weil Kuzu 0.11.3 Property-Writes verliert,
+    sobald mehrere Checkpoints in derselben Session aufeinander folgen. Gemessen
+    auf einer frischen DB (1342 Vektoren, 1024 dim): Checkpoint je 32er-Chunk →
+    0 überlebten und die Datei wuchs von 3 MB auf 771 MB; 300er-Portionen in
+    einer Session → beim vierten Checkpoint waren alle 1200 vorherigen weg;
+    300er-Portionen mit `_reopen_db()` dazwischen → alle 1342 blieben, bei 151 MB.
+    Ganz ohne Zwischen-Checkpoint sprengen die Dirty-Pages den Buffer-Pool, ein
+    einzelner am Ende ist also auch keine Lösung.
+
+    `alle=True` arbeitet deshalb alle Portionen ab und baut die Session zwischen
+    ihnen neu auf — nur beim Start erlaubt, siehe `_reopen_db`. Sonst bleibt es
+    bei einer Portion pro Lauf (die erste einer Session ist immer heil), den Rest
+    holt der nächste Lauf. Nach jeder Portion wird nachgezählt: die Vektoren still
+    zu verlieren war der teure Teil — der Backfill meldete "fertig (1251)",
+    `embed_pending` stand weiter bei 1210 und niemand sah, warum.
     """
     if not EMBED_ENABLED:
         return
@@ -2538,34 +2566,46 @@ def _embed_backfill() -> None:
         if not rows:
             _ensure_embed_matrix()
             return
-        log.info("Embedding-Backfill: %d Entities (Chunks von %d)",
-                 len(rows), EMBED_BACKFILL_CHUNK)
+        log.info("Embedding-Backfill: %d Entities (Portionen von %d)",
+                 len(rows), EMBED_BACKFILL_PORTION)
         done = 0
-        ok = True
-        for i in range(0, len(rows), EMBED_BACKFILL_CHUNK):
-            chunk = rows[i:i + EMBED_BACKFILL_CHUNK]
-            vecs = _embed_texts([_embed_payload(nm, descr or "") for _, nm, descr in chunk],
-                                EMBED_PASSAGE_PREFIX)
-            for (eid, _nm, _d), v in zip(chunk, vecs):
-                db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
-                        {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
-            done += len(chunk)
-            ok = _checkpoint_wal(force=True) and ok
-            if len(rows) > EMBED_BACKFILL_CHUNK:
+        for p in range(0, len(rows), EMBED_BACKFILL_PORTION):
+            portion = rows[p:p + EMBED_BACKFILL_PORTION]
+            for i in range(0, len(portion), EMBED_BACKFILL_CHUNK):
+                chunk = portion[i:i + EMBED_BACKFILL_CHUNK]
+                vecs = _embed_texts([_embed_payload(nm, descr or "") for _, nm, descr in chunk],
+                                    EMBED_PASSAGE_PREFIX)
+                for (eid, _nm, _d), v in zip(chunk, vecs):
+                    db_exec("MATCH (e:Entity {id:$id}) SET e.embedding = $emb",
+                            {"id": eid, "emb": json.dumps([round(float(x), 6) for x in v])})
+            # Genau EIN Checkpoint je Session: `db.close()` in _reopen_db macht ihn
+            # selbst, ein zusätzlicher expliziter davor wäre schon der zweite — und
+            # der zweite ist der, bei dem Kuzu die Portion davor wegwirft.
+            if alle:
+                _reopen_db()
+            elif not _checkpoint_wal(force=True):
+                log.error("Embedding-Backfill nach %d/%d abgebrochen: WAL-Checkpoint "
+                          "fehlgeschlagen, Buffer-Pool zu klein "
+                          "(KUZU_BUFFER_POOL_SIZE_MB=%d). Der nächste Lauf macht am "
+                          "Rest weiter.", done, len(rows), KUZU_BUFFER_POOL_SIZE_MB)
+                break
+            # Kuzu meldet den Checkpoint als erfolgreich und verwirft die Writes
+            # trotzdem — nur Nachsehen deckt das auf.
+            if not _hat_vektor(portion[0][0]):
+                log.error("Embedding-Backfill nach %d/%d abgebrochen: der Checkpoint hat "
+                          "die gerade geschriebene Portion verworfen (Kuzu %s). Der "
+                          "nächste Start holt den Rest in frischen Sessions nach.",
+                          done, len(rows), kuzu.__version__)
+                break
+            done += len(portion)
+            if len(rows) > EMBED_BACKFILL_PORTION:
                 log.info("Embedding-Backfill: %d/%d", done, len(rows))
-        # Ein gescheiterter Chunk-Checkpoint wird sonst vom nächsten Chunk mitgemerged
-        # — beim LETZTEN gibt es keinen Nachfolger. Der Scheduler greift unter
-        # KUZU_WAL_CHECKPOINT_MB nicht, also hier final erzwingen.
-        ok = _checkpoint_wal(force=True) and ok
+            if not alle:
+                break                    # laufender Betrieb: nur die erste Portion
         _invalidate_embed_cache()
         _ensure_embed_matrix()
-        if ok:
+        if done == len(rows):
             log.info("Embedding-Backfill fertig (%d)", done)
-        else:
-            log.error("Embedding-Backfill: %d Vektoren geschrieben, aber mindestens ein "
-                      "WAL-Checkpoint schlug fehl — Buffer-Pool zu klein "
-                      "(KUZU_BUFFER_POOL_SIZE_MB=%d). Ein Teil der Vektoren kann beim "
-                      "nächsten Start fehlen.", done, KUZU_BUFFER_POOL_SIZE_MB)
     except Exception as e:
         log.error("Embedding-Backfill fehlgeschlagen: %s", e)
 
@@ -3961,6 +4001,28 @@ def _cleanup_scheduler_loop() -> None:
 
 threading.Thread(target=_cleanup_scheduler_loop, daemon=True, name="cleanup-scheduler").start()
 
+def _reopen_db() -> None:
+    """`db` und `_pool` neu an kg.db binden — eine frische Kuzu-Session.
+
+    NUR beim Start aufrufen: läuft uvicorn schon, halten andere Threads
+    Connections aus dem alten Pool, und `db.close()` zieht sie ihnen weg.
+    """
+    global db, _pool
+    # Erst die Connections wegwerfen, dann die Database: solange eine Connection
+    # lebt, gibt Kuzu den Buffer-Pool nicht frei, und die nächste Session läuft
+    # in "buffer pool is full", obwohl sie frisch ist.
+    while not _pool.empty():
+        _pool.get_nowait()
+    db.close()
+    db = kuzu.Database(
+        DB_PATH,
+        buffer_pool_size=KUZU_BUFFER_POOL_SIZE_MB * 1024 * 1024 if KUZU_BUFFER_POOL_SIZE_MB else 0,
+    )
+    _pool = queue.Queue(maxsize=KUZU_POOL_SIZE)
+    for _ in range(KUZU_POOL_SIZE):
+        _pool.put(kuzu.Connection(db))
+
+
 def _rebuild_db() -> None:
     """kg.db durch eine frisch importierte Kopie ersetzen — Kuzus fehlendes VACUUM.
 
@@ -3970,7 +4032,6 @@ def _rebuild_db() -> None:
     Datei gelöscht wird — sie zur Seite zu kopieren scheidet aus, denn im Ernstfall
     fehlt genau dieser Platz. Scheitert das Backup, bleibt die alte DB unangetastet.
     """
-    global db, _pool
     before = _db_size_mb()
     log.warning("kg.db ist %.0f MB (Schwelle %.0f) — kompaktiere über Dump + Import.",
                 before, KG_REBUILD_MB)
@@ -3982,13 +4043,7 @@ def _rebuild_db() -> None:
             os.remove(p)
         except FileNotFoundError:
             pass
-    db = kuzu.Database(
-        DB_PATH,
-        buffer_pool_size=KUZU_BUFFER_POOL_SIZE_MB * 1024 * 1024 if KUZU_BUFFER_POOL_SIZE_MB else 0,
-    )
-    _pool = queue.Queue(maxsize=KUZU_POOL_SIZE)
-    for _ in range(KUZU_POOL_SIZE):
-        _pool.put(kuzu.Connection(db))
+    _reopen_db()
     init_schema()
     res = _apply_import(body, "replace")
     _checkpoint_wal(force=True)
@@ -4006,9 +4061,13 @@ if _db_size_mb() > KG_REBUILD_MB:
         # der Backfill-Guard verhindert, dass sie noch weiter wächst.
         log.error("kg.db-Rebuild fehlgeschlagen, laufe mit der bisherigen DB weiter: %s", e)
 
-# Embeddings nach dem Start im Hintergrund nachziehen (lädt Modell, embedded fehlende).
+# Fehlende Embeddings nachziehen, bevor uvicorn startet (lädt ggf. das Modell).
+# Blockierend statt im Thread, weil der Backfill zwischen den Portionen die
+# Kuzu-Session neu aufbaut — das verträgt keine parallelen Requests. Sind keine
+# Vektoren offen (Normalfall), kehrt er sofort zurück; nach einem Restore kostet
+# es gut eine Minute, dafür ist der Graph danach vollständig durchsuchbar.
 _warn_if_no_embed_backend()
-threading.Thread(target=_embed_backfill, daemon=True, name="embed-backfill").start()
+_embed_backfill(alle=True)
 
 
 # ─── auth ─────────────────────────────────────────────────────────────────────
