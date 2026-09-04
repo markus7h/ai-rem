@@ -104,6 +104,7 @@ DISCOVER_ROUTINES_LIMIT=10               # Pinned routines injected per prompt v
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu buffer pool in MiB (0 = default: 80% of host RAM)
 KUZU_WAL_CHECKPOINT_MB=2                  # self-checkpoint the WAL above this size (0/empty = off)
 KG_REBUILD_MB=2048                        # compact kg.db on the next start above this size (Kuzu has no VACUUM)
+EMBED_BACKFILL_PORTION=300                # vectors per Kuzu session; more checkpoints per session lose writes
 KG_MAX_MB=4096                            # above this the embedding backfill stops writing entirely
 KG_MIN_FREE_MB=1024                       # free disk space the backfill requires before it writes
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
@@ -175,6 +176,32 @@ The current size is exposed as `db_mb` in `/api/status`, along with both thresho
 file Kuzu has already corrupted shows up as `count()` still working while any column
 access segfaults (container exit 139) — at that point only a restore from the last backup
 helps.
+
+### Why the embedding backfill runs one portion per session
+
+Every `CHECKPOINT` rewrites the whole column in Kuzu 0.11.3. The file therefore grows
+with the **number of checkpoints** rather than with the data — and once it outgrows the
+buffer pool, the next checkpoint fails and discards what earlier ones had already
+persisted. Measured on a fresh database (1342 vectors, 1024 dimensions):
+
+| how the backfill writes | vectors surviving | file size |
+|---|---|---|
+| checkpoint after every 32-vector chunk | 0 / 1342 | 3 MB → 771 MB |
+| 300-vector portions, all in one session | 0 / 1342 (gone at the 4th checkpoint) | — |
+| 300-vector portions, fresh session per portion | **1342 / 1342** | 3 MB → **151 MB** |
+
+Nothing in the log says so — the run reports "backfill finished (1251)" while
+`embed_pending` stays at 1210. Dropping the intermediate checkpoints entirely is not an
+option either: the dirty pages then blow the buffer pool after ~500 writes.
+
+So the backfill writes `EMBED_BACKFILL_PORTION` vectors, then rebinds the Kuzu session
+(`db.close()` checkpoints on its own — exactly one per session). That rebinding tolerates
+no concurrent access, which is why the startup backfill now runs **before** uvicorn
+starts: a restore costs about a minute of startup time (`start_period` in the healthcheck
+covers it), and the graph is fully searchable afterwards. At runtime — nightly reconcile,
+after an import — a single portion per run is written and the next run continues with the
+rest. After each portion one entity is sampled: if its vector is gone, the run stops with
+an `ERROR` instead of recomputing 40 portions the same checkpoint would throw away again.
 
 When `AI_REM_BACKUP_KEY` is set, backups are written encrypted with AES-256-GCM
 (`backup_<ts>.json.enc`) and downloads return the encrypted blob, so the data

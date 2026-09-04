@@ -102,6 +102,7 @@ KUZU_POOL_SIZE=4                         # Connection-Pool-Größe
 KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu Buffer-Pool in MiB (0 = Default: 80% Host-RAM)
 KUZU_WAL_CHECKPOINT_MB=2                 # WAL selbst mergen ab dieser Größe (0/leer = aus)
 KG_REBUILD_MB=2048                       # kg.db beim nächsten Start kompaktieren ab dieser Größe (Kuzu kennt kein VACUUM)
+EMBED_BACKFILL_PORTION=300               # Vektoren je Kuzu-Session; mehrere Checkpoints je Session verlieren Writes
 KG_MAX_MB=4096                           # darüber schreibt der Embedding-Backfill gar nicht mehr
 KG_MIN_FREE_MB=1024                      # so viel Plattenplatz muss für einen Backfill frei sein
 AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im RAM gehalten werden
@@ -174,6 +175,35 @@ Die aktuelle Größe steht als `db_mb` in `/api/status`, zusammen mit beiden Sch
 Eine von Kuzu bereits zerschossene Datei ist daran erkennbar, dass `count()` noch geht,
 jeder Spaltenzugriff aber segfaultet (Container-Exit 139) — dann hilft nur ein Restore
 aus dem letzten Backup.
+
+### Warum der Embedding-Backfill eine Portion je Session schreibt
+
+Jeder `CHECKPOINT` schreibt in Kuzu 0.11.3 die komplette Spalte neu. Die Datei wächst
+damit mit der **Zahl der Checkpoints** statt mit den Daten — und sobald sie den
+Buffer-Pool übersteigt, scheitert der nächste Checkpoint und verwirft dabei auch alles,
+was frühere schon persistiert hatten. Gemessen auf einer frischen Datenbank (1342
+Vektoren, 1024 Dimensionen):
+
+| Schreibweise des Backfills | überlebende Vektoren | Dateigröße |
+|---|---|---|
+| Checkpoint nach jedem 32er-Chunk | 0 / 1342 | 3 MB → 771 MB |
+| 300er-Portionen, alle in einer Session | 0 / 1342 (weg beim 4. Checkpoint) | — |
+| 300er-Portionen, frische Session je Portion | **1342 / 1342** | 3 MB → **151 MB** |
+
+Im Log steht davon nichts — der Lauf meldet „Backfill fertig (1251)", während
+`embed_pending` bei 1210 stehen bleibt. Die Zwischen-Checkpoints ganz wegzulassen geht
+auch nicht: die Dirty-Pages sprengen dann schon beim Schreiben nach ~500 Writes den
+Buffer-Pool.
+
+Der Backfill schreibt deshalb `EMBED_BACKFILL_PORTION` Vektoren und bindet danach die
+Kuzu-Session neu (`db.close()` checkpointet selbst — genau einmal je Session). Dieses
+Neubinden verträgt keinen parallelen Zugriff, darum läuft der Startup-Backfill jetzt
+**vor** uvicorn: nach einem Restore kostet das gut eine Minute Startzeit (der
+`start_period` des Healthchecks deckt sie ab), dafür ist der Graph danach vollständig
+durchsuchbar. Im laufenden Betrieb — Nightly-Reconcile, nach einem Import — wird eine
+Portion pro Lauf geschrieben, den Rest holt der nächste Lauf. Nach jeder Portion wird
+eine Entity stichprobenartig geprüft: fehlt ihr Vektor, bricht der Lauf mit einem
+`ERROR` ab, statt 40 Portionen zu rechnen, die derselbe Checkpoint wieder wegwirft.
 
 Ist `AI_REM_BACKUP_KEY` gesetzt, werden Backups mit AES-256-GCM verschlüsselt
 geschrieben (`backup_<ts>.json.enc`) und beim Download als verschlüsselter Blob
