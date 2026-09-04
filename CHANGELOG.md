@@ -13,7 +13,7 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [0.8.31] – 2026-09-04
 
 ### Fixed
 - **The embedding backfill no longer loses everything it writes.** Every `CHECKPOINT`
@@ -23,7 +23,7 @@ German).
   backfill checkpointed after every 32-vector chunk: on a fresh database, 1342 vectors
   written that way grew the file from 3 MB to 771 MB and left **0** behind. In
   production this showed up as `Embedding-Backfill fertig (1251)` in the log with
-  `embed_pending` still at 1210.
+  `embed_pending` still at 1210. (#118)
   The backfill now writes `EMBED_BACKFILL_PORTION` (default 300) vectors per Kuzu session
   and rebinds the session in between — all 1342 survive, and the file grows to 151 MB
   instead of 771 MB. It also samples one entity after each portion and stops with an
@@ -32,7 +32,7 @@ German).
   concurrent access. A restore therefore costs about a minute of startup time, covered by
   a `start_period` of 300s in the compose healthcheck; with nothing to backfill (the
   normal case) startup is unchanged. At runtime one portion is written per run and the
-  next run continues with the rest.
+  next run continues with the rest. (#118)
 
 ## [0.8.30] – 2026-09-03
 
@@ -323,7 +323,8 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.30...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.31...HEAD
+[0.8.31]: https://github.com/markus7h/ai-rem/compare/v0.8.30...v0.8.31
 [0.8.30]: https://github.com/markus7h/ai-rem/compare/v0.8.29...v0.8.30
 [0.8.29]: https://github.com/markus7h/ai-rem/compare/v0.8.28...v0.8.29
 [0.8.28]: https://github.com/markus7h/ai-rem/compare/v0.8.27...v0.8.28

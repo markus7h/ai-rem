@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.8.30](https://github.com/markus7h/ai-rem/releases/tag/v0.8.30)**.
+> This documentation describes **[v0.8.31](https://github.com/markus7h/ai-rem/releases/tag/v0.8.31)**.
 > Release notes are kept in [CHANGELOG.md](CHANGELOG.md) and published to the [GitHub Releases](https://github.com/markus7h/ai-rem/releases) and the Docker Hub description on every tag; notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
@@ -189,6 +189,9 @@ persisted. Measured on a fresh database (1342 vectors, 1024 dimensions):
 | checkpoint after every 32-vector chunk | 0 / 1342 | 3 MB → 771 MB |
 | 300-vector portions, all in one session | 0 / 1342 (gone at the 4th checkpoint) | — |
 | 300-vector portions, fresh session per portion | **1342 / 1342** | 3 MB → **151 MB** |
+
+Kuzu was archived on 2025-10-10 with v0.11.3 as its last release, so this will not be
+fixed upstream — the workaround below is permanent.
 
 Nothing in the log says so — the run reports "backfill finished (1251)" while
 `embed_pending` stays at 1210. Dropping the intermediate checkpoints entirely is not an

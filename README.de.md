@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.8.30](https://github.com/markus7h/ai-rem/releases/tag/v0.8.30)**.
+> Diese Dokumentation bezieht sich auf **[v0.8.31](https://github.com/markus7h/ai-rem/releases/tag/v0.8.31)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes werden im [CHANGELOG.md](CHANGELOG.md) gepflegt und bei jedem Tag in die [GitHub Releases](https://github.com/markus7h/ai-rem/releases) und die Docker-Hub-Beschreibung veröffentlicht; frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
@@ -189,6 +189,9 @@ Vektoren, 1024 Dimensionen):
 | Checkpoint nach jedem 32er-Chunk | 0 / 1342 | 3 MB → 771 MB |
 | 300er-Portionen, alle in einer Session | 0 / 1342 (weg beim 4. Checkpoint) | — |
 | 300er-Portionen, frische Session je Portion | **1342 / 1342** | 3 MB → **151 MB** |
+
+Kuzu wurde am 10.10.2025 archiviert, v0.11.3 ist das letzte Release — upstream wird das
+nicht mehr behoben, der Workaround unten bleibt also dauerhaft.
 
 Im Log steht davon nichts — der Lauf meldet „Backfill fertig (1251)", während
 `embed_pending` bei 1210 stehen bleibt. Die Zwischen-Checkpoints ganz wegzulassen geht
