@@ -491,13 +491,17 @@ def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
 
 def write_settings_template(setup_cfg, mcp_endpoint):
     tmpl = {
-        'version': '2026-05-25',
+        'version': '2026-09-04',
         'ai_rem_endpoint': mcp_endpoint or (KG_URL + '/mcp'),
         'smb': setup_cfg.get('smb', {}),
         'mcp_stdio_servers': setup_cfg.get('mcp_stdio_servers', {}),
         'tools_scripts_dir': setup_cfg.get('tools_scripts_dir', ''),
         'ollama_url': setup_cfg.get('ollama_url', 'http://myai:11436'),
-        'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto'},
+        'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto',
+                    # Plan Mode + Auto Mode: Bash laeuft im Plan Mode ueber den
+                    # Auto-Mode-Klassifizierer statt ueber Einzel-Prompts.
+                    # Schreibzugriffe bleiben blockiert, der Plan bleibt bestaetigungspflichtig.
+                    'skipAutoPermissionPrompt': True, 'useAutoModeDuringPlan': True},
         'permissions_allow_portable': setup_cfg.get('permissions_allow_portable', [
             # Nur noch die 4 Kern-MCP-Tools (Issue #32). Admin-Ops laufen über
             # `Bash` (ai-rem CLI / curl POST /api/tool), das ohnehin erlaubt ist.
@@ -506,6 +510,7 @@ def write_settings_template(setup_cfg, mcp_endpoint):
             'mcp__ai-rem__memory_add', 'mcp__ai-rem__memory_relate',
         ]),
         'permissions_allow_path_templates': ['Read(//{HOME}/.claude/**)', 'Read(//{TMP}/**)'],
+        'permissions_default_mode': setup_cfg.get('permissions_default_mode', 'plan'),
         'permissions_deny': setup_cfg.get('permissions_deny', []),
         'hooks': {
             'SessionStart': ['system-check.py (ai-rem, SMB, MCP, settings-sync, tools)'],
@@ -598,6 +603,10 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
         ):
             allow.append(p)
             added.append(p)
+
+    default_mode = tmpl.get('permissions_default_mode')
+    if default_mode:
+        perms.setdefault('defaultMode', default_mode)
 
     deny = perms.setdefault('deny', [])
     deny_set = set(deny)
