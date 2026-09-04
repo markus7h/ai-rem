@@ -13,6 +13,19 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [0.8.32] – 2026-09-04
+
+### Changed
+- **A fresh install no longer has to click through a permission prompt for every
+  `grep`.** Plan mode and the permission allowlist are two separate gates: with
+  `defaultMode: plan`, shell commands are prompted for one by one no matter how many
+  `Bash(...)` allow rules are configured. `settings-template.json` now carries
+  `skipAutoPermissionPrompt` and `useAutoModeDuringPlan`, which route shell commands in
+  plan mode through Claude Code's auto-mode classifier instead — writes stay blocked and
+  the plan itself still needs the user's approval.
+- **`permissions_default_mode`** is a new `setup-config.json` key (default `plan`) and
+  seeds `permissions.defaultMode`; previously the template could not express it at all.
+
 ## [0.8.31] – 2026-09-04
 
 ### Fixed
@@ -323,7 +336,8 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.31...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.32...HEAD
+[0.8.32]: https://github.com/markus7h/ai-rem/compare/v0.8.31...v0.8.32
 [0.8.31]: https://github.com/markus7h/ai-rem/compare/v0.8.30...v0.8.31
 [0.8.30]: https://github.com/markus7h/ai-rem/compare/v0.8.29...v0.8.30
 [0.8.29]: https://github.com/markus7h/ai-rem/compare/v0.8.28...v0.8.29

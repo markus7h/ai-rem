@@ -15,6 +15,7 @@ Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-c
   "ssh_hostname": "your-server.lan",
   "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
   "permissions_deny": ["Bash(bw get *)", ...],
+  "permissions_default_mode": "plan",
   "smb": {"mount": "/path/to/mount", "url": "smb://server/share"},
   "mcp_register": {
     "mykeyvault": {"http": {"url": "http://server:3458/mcp", "https_url": "https://keyvault.example/mcp"}, "vault_url": "http://server:8223"},
@@ -26,6 +27,8 @@ Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`/setup-c
 ```
 
 Die persönliche `setup-config.json` ist gitignored und landet daher nie im öffentlichen Image. Sie kommt stattdessen per Bind-Mount aus dem Deployment-Verzeichnis in den Container (`./setup-config.json:/app/setup-config.json:ro` in der `docker-compose.yml`) — der `COPY setup-config*.json ./` im Dockerfile greift nur beim lokalen Build. **Ohne den Mount liefert ein aus dem Docker-Hub-Image gestarteter Container die Platzhalter des Examples** (u. a. `ollama_url: http://your-server:11434`), und jede Neuinstallation erbt eine tote llama-URL in ihrem `settings-template.json`. Stattdessen liegt eine generische **`setup-config.example.json`** im Repo: Fehlt eine persönliche Config, fällt `/setup-config` darauf zurück — ein frisches Deployment seedet so ein sinnvolles Starter-Set an Verhaltens-Preferences plus generische Permission-/Deny-Regeln. Eine eigene `setup-config.json` überschreibt das Template komplett.
+
+**`permissions_default_mode`** seedet `permissions.defaultMode` (Default `plan`). Das Template setzt zusätzlich `skipAutoPermissionPrompt` und `useAutoModeDuringPlan`: Im Plan Mode laufen Shell-Kommandos dann über den Auto-Mode-Klassifizierer statt über Einzel-Prompts — Schreibzugriffe bleiben blockiert, und der Plan selbst bleibt bestätigungspflichtig.
 
 **`mcp_register`** lässt das Setup Begleit-MCP-Server einrichten, mit Tokens, die es über SSH von `ssh_host` zieht:
 - **mykeyvault** wird als HTTP-MCP aus `http.url` registriert (oder `https_url`, wenn ai-rem selbst über einen vertrauenswürdigen HTTPS-Endpunkt läuft).
