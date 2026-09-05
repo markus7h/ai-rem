@@ -13,13 +13,13 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [0.10.0] – 2026-09-05
+## [0.9.1] – 2026-09-05
 
 ### Changed
 - **A task whose description starts with a done marker is now archived by the nightly
   cleanup**, even when nobody set `extra.status`. Closing a task in prose
   ("ERLEDIGT 2026-09-01: …") was the common case, so the open-task counter only ever
-  grew: 156 tasks counted as open, 108 of which were finished or had never been
+  grew: 156 tasks counted as open, 123 of which were finished or had never been
   standalone work. The regex `_DONE_BODY` (ERLEDIGT/GELÖST/GEGENSTANDSLOS/OBSOLET/…)
   is the second axis next to `_DONE_STATUSES`; the existing retention window
   (`CLEANUP_TASK_RETENTION_DAYS`, 30 days) and the "never destructive" rule apply
@@ -386,8 +386,8 @@ running 0.8.x instance via `/api/export`, then import the JSON into the new cont
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.10.0...HEAD
-[0.10.0]: https://github.com/markus7h/ai-rem/compare/v0.9.0...v0.10.0
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.0
 [0.8.32]: https://github.com/markus7h/ai-rem/compare/v0.8.31...v0.8.32
 [0.8.31]: https://github.com/markus7h/ai-rem/compare/v0.8.30...v0.8.31
