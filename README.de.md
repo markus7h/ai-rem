@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v0.9.0](https://github.com/markus7h/ai-rem/releases/tag/v0.9.0)**.
+> Diese Dokumentation bezieht sich auf **[v0.10.0](https://github.com/markus7h/ai-rem/releases/tag/v0.10.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > Release-Notes werden im [CHANGELOG.md](CHANGELOG.md) gepflegt und bei jedem Tag in die [GitHub Releases](https://github.com/markus7h/ai-rem/releases) und die Docker-Hub-Beschreibung veröffentlicht; frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
@@ -68,7 +68,7 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 Vier Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph befüllt und sauber:
 
 - **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via llama-server, mit md-Fallback + Catch-up, wenn llama-server down ist. Er läuft detached (die Extraktion dauert Minuten) und meldet beim nächsten Sessionstart, wenn er gestört ist. Das Setup legt die CLI nach `~/.local/share/ai-rem/bin/ai-rem` und richtet `AI_REM_CLI` darauf aus — der Hook hängt damit nicht daran, wohin das Repo geklont wurde.
-- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
+- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Erledigte Tasks werden nach der Aufbewahrungsfrist archiviert — egal ob sie über `extra.status` oder nur im Beschreibungstext geschlossen wurden („ERLEDIGT: …"). Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
 - **Plan-Speicherung** — ein `ExitPlanMode`-Hook speichert jeden finalisierten Plan als offenen `Task`, sodass Pläne eine zentrale, maschinenübergreifende Liste werden.
 - **Vault-Secret-Erinnerung** — ein `PostToolUse`-Hook durchsucht die Bash-Ausgabe nach Auth-/Credential-Fehlern und injiziert eine Erinnerung, das passende Secret via mykeyvault aus dem Vault zu holen, statt den User nach Token oder Passwort zu fragen — fail-silent, blockiert also nie einen Befehl.
 

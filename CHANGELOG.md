@@ -13,6 +13,25 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [0.10.0] – 2026-09-05
+
+### Changed
+- **A task whose description starts with a done marker is now archived by the nightly
+  cleanup**, even when nobody set `extra.status`. Closing a task in prose
+  ("ERLEDIGT 2026-09-01: …") was the common case, so the open-task counter only ever
+  grew: 156 tasks counted as open, 108 of which were finished or had never been
+  standalone work. The regex `_DONE_BODY` (ERLEDIGT/GELÖST/GEGENSTANDSLOS/OBSOLET/…)
+  is the second axis next to `_DONE_STATUSES`; the existing retention window
+  (`CLEANUP_TASK_RETENTION_DAYS`, 30 days) and the "never destructive" rule apply
+  unchanged. An explicit `status` still wins — `status: offen` with a done marker in the
+  body stays open, and only `Task` entities are affected.
+- **The extractor no longer stores work steps as tasks.** Names like `PR #262`,
+  `task_556`, `T1: …`, `Phase 0`, `Implementierer A0` or a bare `status` are steps
+  inside a finished session, not standing work — 97 such orphans had accumulated.
+  `is_step_task()` in `lib/extractor.py` drops them before the upsert (tasks only;
+  a `Decision` of the same name is unaffected), and the system prompt now says
+  explicitly that `Task` is for work that outlives the session.
+
 ## [0.9.0] – 2026-09-05
 
 ### Changed
@@ -367,7 +386,8 @@ running 0.8.x instance via `/api/export`, then import the JSON into the new cont
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/markus7h/ai-rem/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.0
 [0.8.32]: https://github.com/markus7h/ai-rem/compare/v0.8.31...v0.8.32
 [0.8.31]: https://github.com/markus7h/ai-rem/compare/v0.8.30...v0.8.31

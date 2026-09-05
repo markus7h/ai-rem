@@ -72,7 +72,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -3482,6 +3482,12 @@ _STOPWORDS = {"der", "die", "das", "und", "the", "a", "an", "von", "fuer", "für
               "mit", "im", "in", "of", "for", "to", "ai", "rem"}
 _DONE_STATUSES = {"erledigt", "done", "closed", "abgeschlossen", "fertig", "geschlossen"}
 _OBSOLETE_STATUSES = {"obsolet", "obsolete", "veraltet", "deprecated", "überholt", "ueberholt"}
+# Zweite Achse neben extra.status: viele Tasks werden nur im Beschreibungstext
+# abgeschlossen ("ERLEDIGT 2026-09-01: ..."), ohne dass jemand den Status setzt.
+# Ohne diese Regel bleiben sie fuer immer offen — der Zaehler waechst dann monoton.
+_DONE_BODY = re.compile(
+    r"^\s*(?:ERLEDIGT|GELÖST|GELOEST|GEGENSTANDSLOS|ABGESCHLOSSEN|FERTIG|DONE"
+    r"|OBSOLET|ÜBERHOLT|UEBERHOLT|VERWORFEN)\b", re.I)
 # Verderbliche Fakten: was hier matcht, kann sich in der realen Infrastruktur geaendert haben.
 _PERISHABLE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b|\bfd[0-9a-f]{2}:|"
                          r"\b[a-z][\w.-]*:\d{2,5}\b|\bports?\s*\d{2,5}|"
@@ -3807,10 +3813,13 @@ def _cleanup_candidates() -> dict:
         status = str(e["extra"].get("status", "")).lower()
         if status in _OBSOLETE_STATUSES:
             auto_archive.append({"name": e["name"], "reason": f"status={status}"})
-        elif e["type"] == "Task" and status in _DONE_STATUSES:
+        elif e["type"] == "Task" and (status in _DONE_STATUSES
+                                      or (not status and _DONE_BODY.match(e["descr"]))):
             age = _age_days(e["updated_at"], now)
             if age is not None and age >= CLEANUP_TASK_RETENTION_DAYS:
-                auto_archive.append({"name": e["name"], "reason": f"erledigt seit {age}d"})
+                grund = f"status={status}" if status else "Beschreibung beginnt mit Erledigt-Marker"
+                auto_archive.append({"name": e["name"],
+                                     "reason": f"erledigt seit {age}d ({grund})"})
 
     archived_names = {a["name"] for a in auto_archive}
     by_type: dict = {}
