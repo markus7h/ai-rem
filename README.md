@@ -142,6 +142,26 @@ vectors — no manual migration, and it works in both directions.
 > (periodically + on shutdown) so opening the database never triggers an expensive
 > recovery.
 
+### Upgrade from v0.8.x (Kuzu)
+
+The file formats are not compatible — LadybugDB refuses a Kuzu `kg.db`. `scripts/migrate.py`
+ships inside the image and moves the graph through a JSON dump, which also sheds the
+accumulated Kuzu bloat. Embeddings are not part of the dump; the new instance recomputes
+them on import.
+
+```bash
+docker run --rm --entrypoint cat magic3arkus/ai-rem:latest /app/scripts/migrate.py > migrate.py
+export AI_REM_API_TOKEN=$(ai-rem token)
+
+python3 migrate.py export --url http://localhost:3456 --out dump.json   # old instance still running
+docker compose down && mv /path/to/volume/kg.db /path/to/volume/kg.db.kuzu-old
+docker compose up -d                                                    # new image
+python3 migrate.py import --url http://localhost:3456 --in dump.json
+```
+
+Keep `kg.db.kuzu-old` until `/api/status` shows the expected entity count — that file is
+the only way back.
+
 ### Database size: why kg.db stays small
 
 Up to v0.8.32 ai-rem ran on Kuzu, which **never returned space** when a property was
