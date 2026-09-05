@@ -34,6 +34,9 @@ German).
 
 ## [0.9.0] – 2026-09-05
 
+> Never tagged: these changes reached Docker Hub with v0.9.1. The link above
+> therefore compares against the merge commit, not against a tag.
+
 ### Changed
 - **The graph database is now [LadybugDB](https://github.com/LadybugDB/ladybug) 0.20.2
   instead of Kuzu 0.11.3.** Kuzu was archived on 2025-10-10 and v0.11.3 is its last
@@ -58,10 +61,18 @@ German).
   consequence of the Kuzu defect; measured against LadybugDB, 256 MB carries the same
   1024-dimensional vectors.
 
+### Added
+- **`scripts/migrate.py`** ships inside the image and carries the graph from a v0.8.x
+  instance to a v0.9.0 one: `export` writes a verified JSON dump, `import` waits for the
+  new container's `/health`, replays the dump and checks the entity count afterwards.
+  Stdlib only, so it runs on any host with Python 3.10+ and in the slim image.
+
 ### Migration
-The file format is not compatible — LadybugDB refuses a Kuzu `kg.db`. Export from the
-running 0.8.x instance via `/api/export`, then import the JSON into the new container
-(`/api/import`). That also sheds the accumulated Kuzu bloat.
+The file format is not compatible — LadybugDB refuses a Kuzu `kg.db`. Pull the script out
+of the image (`docker run --rm --entrypoint cat magic3arkus/ai-rem:latest /app/scripts/migrate.py`), dump
+the running 0.8.x instance, move the old `kg.db` aside, start the new image and import the
+dump. That also sheds the accumulated Kuzu bloat. Embeddings are not part of the dump —
+the new instance recomputes them.
 
 ## [0.8.32] – 2026-09-04
 
@@ -387,8 +398,8 @@ running 0.8.x instance via `/api/export`, then import the JSON into the new cont
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
 [Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.1...HEAD
-[0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.9.0...v0.9.1
-[0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.0
+[0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.1
+[0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...26efcb9
 [0.8.32]: https://github.com/markus7h/ai-rem/compare/v0.8.31...v0.8.32
 [0.8.31]: https://github.com/markus7h/ai-rem/compare/v0.8.30...v0.8.31
 [0.8.30]: https://github.com/markus7h/ai-rem/compare/v0.8.29...v0.8.30

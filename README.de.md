@@ -140,6 +140,26 @@ Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechn
 > hält die WAL klein (periodisch + beim Shutdown), damit das Öffnen der Datenbank nie
 > eine teure Recovery auslöst.
 
+### Upgrade von v0.8.x (Kuzu)
+
+Die Dateiformate sind nicht kompatibel — LadybugDB weist eine Kuzu-`kg.db` ab.
+`scripts/migrate.py` liegt im Image und zieht den Graphen über einen JSON-Dump um, der
+nebenbei den angesammelten Kuzu-Ballast abwirft. Embeddings stecken nicht im Dump; die
+neue Instanz rechnet sie beim Import neu.
+
+```bash
+docker run --rm --entrypoint cat magic3arkus/ai-rem:latest /app/scripts/migrate.py > migrate.py
+export AI_REM_API_TOKEN=$(ai-rem token)
+
+python3 migrate.py export --url http://localhost:3456 --out dump.json   # alte Instanz läuft noch
+docker compose down && mv /pfad/zum/volume/kg.db /pfad/zum/volume/kg.db.kuzu-alt
+docker compose up -d                                                    # neues Image
+python3 migrate.py import --url http://localhost:3456 --in dump.json
+```
+
+`kg.db.kuzu-alt` erst löschen, wenn `/api/status` die erwartete Zahl an Entities zeigt —
+diese Datei ist der einzige Rückweg.
+
 ### Datenbankgröße: warum kg.db klein bleibt
 
 Bis v0.8.32 lief ai-rem auf Kuzu, das beim Überschreiben von Properties **keinen Speicher

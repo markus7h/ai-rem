@@ -51,6 +51,20 @@ authenticate with `Authorization: Bearer <token>`; the browser Web UI uses a der
 HttpOnly cookie set at `/login`.
 ([Auth model](https://github.com/markus7h/ai-rem/blob/main/docs/authentication.md))
 
+### Upgrading from v0.8.x (Kuzu)
+
+v0.9.0 replaced the archived Kuzu with [LadybugDB](https://github.com/LadybugDB/ladybug);
+the file formats are not compatible. `scripts/migrate.py` ships inside the image and moves
+the graph through a JSON dump:
+
+```bash
+docker run --rm --entrypoint cat magic3arkus/ai-rem:latest /app/scripts/migrate.py > migrate.py
+export AI_REM_API_TOKEN=$(ai-rem token)
+python3 migrate.py export --url http://localhost:3456 --out dump.json   # old instance still running
+docker compose down && mv /path/to/volume/kg.db /path/to/volume/kg.db.kuzu-old && docker compose up -d
+python3 migrate.py import --url http://localhost:3456 --in dump.json
+```
+
 ### 2. Client (each machine) — say this to Claude Code
 
 ```
