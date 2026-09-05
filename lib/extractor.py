@@ -68,6 +68,8 @@ context="work" nur: berufliche Beratung/Kunden
 
 NICHT speichern: Code-Pfade, git-log, Funktionsnamen, Rezepte, Smalltalk, triviale sofort-behobene Fehler.
 
+Task NUR fuer Arbeit, die nach der Session offen bleibt. KEIN Task fuer Schritte, die in der Session erledigt wurden ("PR #262", "task_556", "T1: …", "Phase 0", "Deploy beobachten"). Erledigtes gehoert als Decision/Solution gespeichert, nicht als Task. Task-Beschreibung, die einen Abschluss meldet, mit "ERLEDIGT" beginnen.
+
 DEDUP: Name aus Liste unten? Exakt verwenden. Sonst neu.
 
 JSON sofort."""
@@ -249,11 +251,35 @@ def call_llm(transcript: str, model: str, system_prompt: str) -> dict:
         ) from e
 
 
+# Arbeitsschritte einer Session, die das Modell gern als Task ausgibt: "PR #262",
+# "task_556", "T1: CLI-Strings auf Englisch", "Implementierer A0", "status".
+# Sie sind mit der Session erledigt, aber niemand schliesst sie je — 97 solcher
+# Karteileichen standen im Backlog. Nur Tasks werden gefiltert; ein Project oder
+# Decision mit demselben Namen bleibt erlaubt.
+_STEP_TASK_NAME = re.compile(
+    r"^(?:"
+    r"(?:PR|MR|Review|Issue|Ticket)[\s#-]*(?:PR[\s#-]*)?\d+"  # PR #262, Review PR 329, PR-287
+    r"|#\d+"                                            # #607
+    r"|task[_ -]?\d+"                                   # task_556
+    r"|T\d+[:.]"                                        # T1: CLI-Strings…
+    r"|Phase \d+"                                       # Phase 0 - Rollenwrapper
+    r"|Implementierer [A-Z]\d*"                         # Implementierer A0
+    r"|status\s*$"                                      # nackt; "Statusbericht" bleibt
+    r")", re.I)
+
+
+def is_step_task(name: str, typ: str) -> bool:
+    """True, wenn der Eintrag ein Arbeitsschritt statt einer eigenstaendigen Aufgabe ist."""
+    return typ.strip().lower() == "task" and bool(_STEP_TASK_NAME.match(name.strip()))
+
+
 def upsert_entity(client: MCPClient, ent: dict) -> str:
     name = ent.get("name", "").strip()
     typ = ent.get("type", "").strip()
     if not name or not typ:
         return f"skip (incomplete): {ent}"
+    if is_step_task(name, typ):
+        return f"[skip]   Arbeitsschritt, kein Task: {name}"
     args = {
         "name": name,
         "type": typ,

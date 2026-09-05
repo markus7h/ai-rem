@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.9.0](https://github.com/markus7h/ai-rem/releases/tag/v0.9.0)**.
+> This documentation describes **[v0.9.1](https://github.com/markus7h/ai-rem/releases/tag/v0.9.1)**.
 > Release notes are kept in [CHANGELOG.md](CHANGELOG.md) and published to the [GitHub Releases](https://github.com/markus7h/ai-rem/releases) and the Docker Hub description on every tag; notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
@@ -69,7 +69,7 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 Four Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
 
 - **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via llama-server, with an md-fallback + catch-up when llama-server is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. The setup installs the CLI to `~/.local/share/ai-rem/bin/ai-rem` and points `AI_REM_CLI` at it, so the hook does not depend on where the repo was cloned.
-- **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue. Plus a **staleness check** that flags entries with perishable infrastructure facts (IPs, ports, services, devices) for a reality check — never automatically.
+- **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue. Finished tasks are archived after the retention window whether they were closed via `extra.status` or only in the description text ("ERLEDIGT: …"). Plus a **staleness check** that flags entries with perishable infrastructure facts (IPs, ports, services, devices) for a reality check — never automatically.
 - **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
 - **Vault secret reminder** — a `PostToolUse` hook scans Bash output for auth/credential failures and injects a reminder to pull the matching secret from the vault via mykeyvault instead of asking the user for a token or password, failing silently so it never blocks a command.
 
