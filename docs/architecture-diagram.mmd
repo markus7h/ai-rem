@@ -15,7 +15,7 @@ flowchart TB
     CADDY["Caddy - Reverse-Proxy<br/>TLS internal, *.lan"]
     subgraph AIREM_C["Container: ai-rem :3456"]
       AIREM["FastMCP-Server<br/>/mcp · /ui · /api · /health"]
-      KUZU[("Kuzu Graph-DB<br/>/data/kg.db + /backups")]
+      LADYBUG[("LadybugDB<br/>/data/kg.db + /backups")]
     end
     subgraph KV["mykeyvault-Verbund"]
       KVMCP["mykeyvault-mcp :3458<br/>(MCP http)"]
@@ -44,7 +44,7 @@ flowchart TB
   CLI --> CADDY
 
   %% ai-rem Abhaengigkeiten
-  AIREM --> KUZU
+  AIREM --> LADYBUG
   AIREM -- "Extraktion + Nightly-Cleanup" --> OLLAMA
 
   %% Secrets-Fluss

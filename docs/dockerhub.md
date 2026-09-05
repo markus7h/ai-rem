@@ -27,7 +27,7 @@ grows — working out to **~0.7 million tokens/month saved** at ~4.3 sessions/da
 savings growing as the graph grows.
 ([Methodology](https://github.com/markus7h/ai-rem/blob/main/docs/token-savings.md))
 
-**Built on:** [FastMCP](https://gofastmcp.com) (HTTP MCP server) + [Kuzu](https://kuzudb.com)
+**Built on:** [FastMCP](https://gofastmcp.com) (HTTP MCP server) + [LadybugDB](https://github.com/LadybugDB/ladybug)
 (embedded graph DB — no separate DB container). Data persists in `/data`, backups in `/backups`.
 
 ---
@@ -89,7 +89,7 @@ Set in the Compose `.env`:
 | `KG_PUBLIC_URL` | — | Public URL of the server |
 | `PORT` | `3456` | TCP port |
 | `HOST` | `::` | Bind address. The socket is dual-stack (`IPV6_V6ONLY=0`), so the container is reachable over IPv6 *and* the published IPv4 port. `0.0.0.0` for IPv4 only |
-| `KUZU_DB_PATH` | `/data/kg.db` | Database path |
+| `LADYBUG_DB_PATH` | `/data/kg.db` | Database path |
 | `BACKUP_DIR` | `/backups` | Backup files |
 | `MAX_BACKUPS` | `10` | Backups to keep |
 | `AI_REM_OLLAMA_URL` | `http://myai:11436` | llama-server (OpenAI-compatible) for nightly cleanup / extraction |
@@ -97,10 +97,10 @@ Set in the Compose `.env`:
 | `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |
 | `EMBED_THRESHOLD` | `0.45` / `0.50` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |
 | `EMBED_MAX_CHARS` | `2000` | Input is truncated to this length before embedding. fastembed truncates silently at the model limit; llama.cpp rejects oversized input with HTTP 500 instead |
-| `KUZU_BUFFER_POOL_SIZE_MB` | `256` | Kuzu buffer pool. **Raise to 768 when using `EMBED_URL`** — 1024-dim vectors make the backfill's WAL checkpoint fail at 256 MB, and the affected vectors are then lost on restart (the failure is retried once and logged as `ERROR`; `embed_pending` in `/api/status` shows what is missing) |
+| `LADYBUG_BUFFER_POOL_SIZE_MB` | `256` | Buffer pool in MiB. `0` sizes it to ~80 % of **host** RAM, ignoring the container `mem_limit`. 256 MiB is plenty for this database, including 1024-dim vectors from an external backend |
 | `EMBED_ENABLED` | `1` | `0` disables semantic search entirely (lexical only) |
-| `KG_REBUILD_MB` | `2048` | If kg.db exceeds this at startup, the server compacts it (dump → fresh DB → import). Kuzu never reclaims space on property overwrites and has no `VACUUM`, so a repeatedly rerun embedding backfill inflates the file indefinitely |
-| `EMBED_BACKFILL_PORTION` | `300` | Vectors written per Kuzu session. Every checkpoint rewrites the whole column in Kuzu 0.11.3, so the file grows with the number of checkpoints and a checkpoint that no longer fits the buffer pool discards what earlier ones persisted — 1342 vectors with a checkpoint per 32-chunk grew the file to 771 MB and left 0 behind, one portion per session left all 1342 at 151 MB. Raise only together with `KUZU_BUFFER_POOL_SIZE_MB` |
+| `KG_REBUILD_MB` | `2048` | If kg.db exceeds this at startup, the server compacts it (dump → fresh DB → import) — there is no `VACUUM`. A guard from the Kuzu era, kept as a safety net |
+| `EMBED_BACKFILL_PORTION` | `300` | Vectors written per database session. A Kuzu-era workaround for checkpoints that silently discarded writes; on LadybugDB the same pattern keeps all 1342 vectors in a 40 MB file. Kept for now because it also caps the memory peak during a restore |
 | `KG_MAX_MB` | `4096` | Above this size the embedding backfill stops writing altogether — vectors are derived data and must not fill the disk |
 | `KG_MIN_FREE_MB` | `1024` | Free disk space the backfill requires before it writes |
 

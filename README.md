@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.8.32](https://github.com/markus7h/ai-rem/releases/tag/v0.8.32)**.
+> This documentation describes **[v0.9.0](https://github.com/markus7h/ai-rem/releases/tag/v0.9.0)**.
 > Release notes are kept in [CHANGELOG.md](CHANGELOG.md) and published to the [GitHub Releases](https://github.com/markus7h/ai-rem/releases) and the Docker Hub description on every tag; notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
@@ -16,7 +16,7 @@ Docker Hub: `docker pull magic3arkus/ai-rem`
 
 Technically:
 - **[FastMCP](https://gofastmcp.com)** — Python MCP server framework, HTTP transport (Streamable HTTP)
-- **[Kuzu](https://kuzudb.com)** — embedded graph database (no separate DB container needed)
+- **[LadybugDB](https://github.com/LadybugDB/ladybug)** — embedded graph database (no separate DB container needed)
 - Data is stored persistently in `./data/kg.db` (configurable via `KG_DATA_PATH`)
 - Backups are saved to `./backups/` (configurable via `KG_BACKUP_PATH`)
 
@@ -95,16 +95,16 @@ AI_REM_API_TOKEN=...                     # REQUIRED — API token (fail-closed, 
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Public URL of the server
 PORT=3456                                # TCP port (default: 3456)
 HOST=::                                  # Bind address (default: ::) — dual-stack socket, so IPv6 and the published IPv4 port both work; 0.0.0.0 for IPv4 only
-KUZU_DB_PATH=/data/kg.db                 # Path to the database
+LADYBUG_DB_PATH=/data/kg.db                 # Path to the database
 BACKUP_DIR=/backups                      # Path for backup files
 MAX_BACKUPS=10                           # Maximum number of backups to keep
 AI_REM_BACKUP_KEY=...                     # Optional — encrypt backups (AES-256-GCM); empty = plaintext
-KUZU_POOL_SIZE=4                         # Connection pool size
+LADYBUG_POOL_SIZE=4                         # Connection pool size
 DISCOVER_ROUTINES_LIMIT=10               # Pinned routines injected per prompt via /discover (curated by sort_order)
-KUZU_BUFFER_POOL_SIZE_MB=256             # Kuzu buffer pool in MiB (0 = default: 80% of host RAM)
-KUZU_WAL_CHECKPOINT_MB=2                  # self-checkpoint the WAL above this size (0/empty = off)
-KG_REBUILD_MB=2048                        # compact kg.db on the next start above this size (Kuzu has no VACUUM)
-EMBED_BACKFILL_PORTION=300                # vectors per Kuzu session; more checkpoints per session lose writes
+LADYBUG_BUFFER_POOL_SIZE_MB=256           # buffer pool in MiB (0 = default: 80% of host RAM)
+LADYBUG_WAL_CHECKPOINT_MB=2               # self-checkpoint the WAL above this size (0/empty = off)
+KG_REBUILD_MB=2048                        # compact kg.db on the next start above this size (there is no VACUUM)
+EMBED_BACKFILL_PORTION=300                # vectors written per database session
 KG_MAX_MB=4096                            # above this the embedding backfill stops writing entirely
 KG_MIN_FREE_MB=1024                       # free disk space the backfill requires before it writes
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
@@ -135,87 +135,56 @@ Switching backends changes the vector dimension (384 ↔ 1024), which makes the 
 vectors meaningless. The server detects that on the next backfill and recomputes **all**
 vectors — no manual migration, and it works in both directions.
 
-> **Raise `KUZU_BUFFER_POOL_SIZE_MB` when switching to an external backend** (e.g. 768,
-> and `MEM_LIMIT` to 1536m). The 1024-dimensional vectors put more write pressure on the
-> backfill than the 256 MB default can take: the WAL checkpoint fails with `buffer pool is
-> full` and the affected vectors never reach the database. A failed checkpoint is retried
-> once, and a backfill that still could not persist everything logs an `ERROR` instead of
-> reporting success — watch for `WAL-Checkpoint fehlgeschlagen` in the log and for
-> `embed_pending` in `/api/status`, which stays above zero across restarts in that case.
+> **Note (memory):** Without `LADYBUG_BUFFER_POOL_SIZE_MB` the database sizes its buffer
+> pool to ~80 % of **host** RAM and ignores the container `mem_limit`. Normal operation on
+> this DB needs only ~32 MB, so 256 MiB is plenty — including with 1024-dimensional
+> vectors from an external backend. `LADYBUG_WAL_CHECKPOINT_MB` keeps the WAL small
+> (periodically + on shutdown) so opening the database never triggers an expensive
+> recovery.
 
-> **Note (memory):** Without `KUZU_BUFFER_POOL_SIZE_MB`, kuzu sizes its buffer pool to
-> ~80 % of **host** RAM and ignores the container `mem_limit`. Normal operation on this
-> DB needs only ~32 MB, so 256 MiB is plenty. `KUZU_WAL_CHECKPOINT_MB` keeps the WAL
-> small (periodically + on shutdown) — a bloated WAL would trigger an expensive recovery
-> on open (several GB → OOM).
+### Database size: why kg.db stays small
 
-### Database size: why kg.db grows, and how it stays small
+Up to v0.8.32 ai-rem ran on Kuzu, which **never returned space** when a property was
+overwritten: a checkpoint rewrote the affected column and left the old version in the
+file, with no `VACUUM` to reclaim it. The embedding backfill hit that hardest, and a
+crash loop turned it into a disaster — on 2026-09-03 kg.db went from ~680 MB to 27 GB
+across 264 restarts and filled the partition, taking neighbouring containers with it.
 
-Kuzu **never returns space** when a property is overwritten — a checkpoint rewrites the
-affected column and leaves the old version sitting in the file. There is no `VACUUM`. The
-embedding backfill hits this hardest: every run writes whole vector columns, which with
-`bge-m3` (1024 dimensions) is ~680 MB for 1300 entities. As long as it runs rarely, that
-goes unnoticed.
+[LadybugDB](https://github.com/LadybugDB/ladybug), the maintained fork ai-rem moved to in
+v0.9.0, does not behave that way. Same measurement, 1342 vectors at 1024 dimensions:
 
-The dangerous part is crash plus restart: after a crash the un-checkpointed vectors are
-gone, the next start rewrites **all** of them, and the file grows by another column. With
-`restart: unless-stopped` that becomes an endless loop — on 2026-09-03 kg.db went from
-~680 MB to 27 GB across 264 restarts and filled the partition, taking the neighbouring
-containers down with it. Three guards prevent that:
+| | Kuzu 0.11.3 | LadybugDB 0.20.2 |
+|---|---|---|
+| vectors surviving | **0 / 1342** (`buffer pool is full`) | **1342 / 1342** |
+| file size | 771 MB | **40 MB** |
+
+Overwriting the same property repeatedly no longer grows the file either. The guards
+built for the Kuzu era stay in place for now — they simply never trigger:
 
 - **`restart: on-failure:5`** (in `docker-compose.yml`): a crash loop ends after five
   attempts instead of running unnoticed for days.
-- **`KG_MAX_MB` / `KG_MIN_FREE_MB`**: the backfill stops writing entirely once the DB is
-  too large or the disk too full. Vectors are derived data — search keeps working with
-  whatever is stored, lexically if need be.
+- **`KG_MAX_MB` / `KG_MIN_FREE_MB`**: the backfill stops writing once the DB is too large
+  or the disk too full. Vectors are derived data — search keeps working with whatever is
+  stored, lexically if need be.
 - **`KG_REBUILD_MB`**: if kg.db exceeds this at startup, the server compacts it itself
-  (dump → fresh DB → import, the equivalent of the missing `VACUUM`). The dump is written
-  to `BACKUP_DIR` as a regular backup first; if that fails, the old DB is left untouched.
+  (dump → fresh DB → import). The dump is written to `BACKUP_DIR` as a regular backup
+  first; if that fails, the old DB is left untouched.
 
-The current size is exposed as `db_mb` in `/api/status`, along with both thresholds. A
-file Kuzu has already corrupted shows up as `count()` still working while any column
-access segfaults (container exit 139) — at that point only a restore from the last backup
-helps.
+The current size is exposed as `db_mb` in `/api/status`, along with both thresholds.
 
-### Why the embedding backfill runs one portion per session
+### Why the embedding backfill writes in portions
 
-Every `CHECKPOINT` rewrites the whole column in Kuzu 0.11.3. The file therefore grows
-with the **number of checkpoints** rather than with the data — and once it outgrows the
-buffer pool, the next checkpoint fails and discards what earlier ones had already
-persisted. Measured on a fresh database (1342 vectors, 1024 dimensions):
+Under Kuzu every `CHECKPOINT` rewrote the whole column, so the file grew with the
+**number of checkpoints** rather than with the data — and once it outgrew the buffer
+pool, the next checkpoint failed and discarded what earlier ones had persisted, silently:
+the run logged "backfill finished (1251)" while `embed_pending` stayed at 1210. Writing
+`EMBED_BACKFILL_PORTION` vectors per database session was the workaround.
 
-| how the backfill writes | vectors surviving | file size |
-|---|---|---|
-| checkpoint after every 32-vector chunk | 0 / 1342 | 3 MB → 771 MB |
-| 300-vector portions, all in one session | 0 / 1342 (gone at the 4th checkpoint) | — |
-| 300-vector portions, fresh session per portion | **1342 / 1342** | 3 MB → **151 MB** |
-
-Kuzu was archived on 2025-10-10 with v0.11.3 as its last release, so this will not be
-fixed upstream — the workaround below is permanent.
-
-Nothing in the log says so — the run reports "backfill finished (1251)" while
-`embed_pending` stays at 1210. Dropping the intermediate checkpoints entirely is not an
-option either: the dirty pages then blow the buffer pool after ~500 writes.
-
-So the backfill writes `EMBED_BACKFILL_PORTION` vectors, then rebinds the Kuzu session
-(`db.close()` checkpoints on its own — exactly one per session). That rebinding tolerates
-no concurrent access, which is why the startup backfill now runs **before** uvicorn
-starts: a restore costs about a minute of startup time (`start_period` in the healthcheck
-covers it), and the graph is fully searchable afterwards. At runtime — nightly reconcile,
-after an import — a single portion per run is written and the next run continues with the
-rest. After each portion one entity is sampled: if its vector is gone, the run stops with
-an `ERROR` instead of recomputing 40 portions the same checkpoint would throw away again.
-
-When `AI_REM_BACKUP_KEY` is set, backups are written encrypted with AES-256-GCM
-(`backup_<ts>.json.enc`) and downloads return the encrypted blob, so the data
-never leaves the server in clear text. Restore auto-detects encrypted and
-plaintext backups. The key is kept in [mykeyvault](https://github.com/markus7h/mykeyvault)
-(`ai-rem-backup-key`) and pulled in by `deploy.sh`. **Losing the passphrase makes
-encrypted backups unrecoverable.**
-
-Client onboarding can additionally be customised via a `setup-config.json` → **[Personal configuration](docs/configuration.md)**.
-
----
+On LadybugDB the same write pattern keeps all 1342 vectors in a 40 MB file, with the
+default 256 MB buffer pool. The portioning is therefore no longer load-bearing; it is
+kept for now because it also caps peak memory during a restore, and because the
+verification after each portion (one entity is sampled — if its vector is gone the run
+stops with an `ERROR`) is cheap insurance. A later release will simplify this path.
 
 ## Authentication
 

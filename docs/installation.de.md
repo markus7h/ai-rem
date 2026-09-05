@@ -33,7 +33,7 @@ Das Skript erledigt automatisch:
 
 ```
 ai-rem/
-├── server.py                   # MCP-Server (FastMCP + Kuzu + Web UI + Backup + Cleanup
+├── server.py                   # MCP-Server (FastMCP + LadybugDB + Web UI + Backup + Cleanup
 │                               #   + eingebettete setup.py/bash/PS1-Scripts und Hooks)
 ├── bin/ai-rem                  # CLI (status/search/ingest/catchup, reine stdlib, kein venv)
 ├── lib/                        # Extraktor (+ md-Fallback/Catch-up), Heuristik, mcp_client
@@ -43,7 +43,7 @@ ai-rem/
 │                               #   release-history.md (archivierte Notes ≤ v0.1.5)
 ├── deploy.sh                   # Deploy auf den Heimserver (scp + Remote-Build + Recreate)
 ├── .github/workflows/          # Docker-Hub-Publish bei v*-Tags
-├── requirements.txt            # fastmcp, kuzu, numpy, cryptography
+├── requirements.txt            # fastmcp, ladybug, numpy, cryptography
 ├── requirements-embed.txt      # fastembed — nur im vollen Image, nicht in :slim
 ├── Dockerfile
 ├── docker-compose.yml

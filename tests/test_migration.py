@@ -25,16 +25,16 @@ def _scenario() -> None:
     tmp = tempfile.mkdtemp(prefix="ai-rem-migr-")
     db_path = os.path.join(tmp, "kg.db")
     backup_dir = os.path.join(tmp, "backups")
-    os.environ["KUZU_DB_PATH"] = db_path
+    os.environ["LADYBUG_DB_PATH"] = db_path
     os.environ["BACKUP_DIR"] = backup_dir
     os.environ["EMBED_ENABLED"] = "0"
     os.environ.setdefault("AI_REM_API_TOKEN", "test-token")
     sys.path.insert(0, ROOT)
 
     # Alt-Schema-Fixture bauen, BEVOR server importiert wird.
-    import kuzu
-    fdb = kuzu.Database(db_path)
-    fconn = kuzu.Connection(fdb)
+    import ladybug
+    fdb = ladybug.Database(db_path)
+    fconn = ladybug.Connection(fdb)
     fconn.execute(
         """CREATE NODE TABLE Entity(
                id STRING PRIMARY KEY, name STRING, type STRING, descr STRING,

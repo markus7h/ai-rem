@@ -1,6 +1,6 @@
 """
 Knowledge Graph Memory MCP Server
-Langzeit-Gedächtnis für Claude via Kuzu embedded graph database.
+Langzeit-Gedächtnis für Claude via LadybugDB embedded graph database.
 """
 
 import asyncio
@@ -24,7 +24,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional
 
-import kuzu
+import ladybug
 from fastmcp import FastMCP
 
 from lib.backup_crypto import (
@@ -72,8 +72,15 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "0.8.32"
-DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
+VERSION = "0.9.0"
+# LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
+# .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
+# archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
+def _env(name: str, default: str) -> str:
+    return os.getenv(f"LADYBUG_{name}", os.getenv(f"KUZU_{name}", default))
+
+
+DB_PATH = _env("DB_PATH", "/data/kg.db")
 
 # Wie viele Preferences (pinned zuerst, dann sort_order/updated_at) memory_get_context
 # höchstens in den Session-Kontext lädt. In der /prefs-Web-UI als Schnittlinie sichtbar.
@@ -82,17 +89,17 @@ DB_PATH = os.getenv("KUZU_DB_PATH", "/data/kg.db")
 CONTEXT_PREF_LIMIT = int(os.getenv("CONTEXT_PREF_LIMIT", "15"))
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
 MAX_BACKUPS = int(os.getenv("MAX_BACKUPS", "10"))
-KUZU_POOL_SIZE = max(1, int(os.getenv("KUZU_POOL_SIZE", "4")))
-# ponytail: Buffer-Pool explizit deckeln — sonst nimmt kuzu 80% des HOST-RAMs
+LADYBUG_POOL_SIZE = max(1, int(_env("POOL_SIZE", "4")))
+# ponytail: Buffer-Pool explizit deckeln — sonst nimmt ladybug 80% des HOST-RAMs
 # (nicht des cgroup/mem_limit) als Ziel. Der Normalbetrieb braucht bei dieser
 # kleinen DB nur ~32 MB; 256 MiB sind üppig (auch WAL-Recovery bis ~6 MB getestet).
-# 0 = kuzu-Default (80% Host-RAM).
-KUZU_BUFFER_POOL_SIZE_MB = int(os.getenv("KUZU_BUFFER_POOL_SIZE_MB", "256"))
-# Kuzu checkpointet die WAL nicht zuverlässig, solange Pool-Connections offen sind.
+# 0 = ladybug-Default (80% Host-RAM).
+LADYBUG_BUFFER_POOL_SIZE_MB = int(_env("BUFFER_POOL_SIZE_MB", "256"))
+# Die WAL wird nicht zuverlässig gecheckpointet, solange Pool-Connections offen sind.
 # Eine aufgestaute WAL löst beim NÄCHSTEN Öffnen eine absurd teure Recovery aus
 # (6.9 MB WAL → ~2.4 GB Buffer-Peak → OOM). Darum checkpointen wir selbst, sobald
 # die WAL diese Schwelle überschreitet (Scheduler, 60s-Takt) + einmal beim Shutdown.
-KUZU_WAL_CHECKPOINT_MB = float(os.getenv("KUZU_WAL_CHECKPOINT_MB", "2"))
+LADYBUG_WAL_CHECKPOINT_MB = float(_env("WAL_CHECKPOINT_MB", "2"))
 
 # Kuzu gibt beim Überschreiben von Properties keinen Speicher zurück: ein Checkpoint
 # schreibt die betroffene Column neu und lässt die alte Version in der Datei liegen.
@@ -382,23 +389,23 @@ Pointer + `@`-Includes stehen lassen. Projekt-CLAUDE.md → knapper Verweis auf 
 Project-Entity. Danach greift der Guard-Hook sauber (kein Wissen mehr in den Dateien).
 """.replace("__KG_URL__", _KG_URL)
 
-db = kuzu.Database(
+db = ladybug.Database(
     DB_PATH,
-    buffer_pool_size=KUZU_BUFFER_POOL_SIZE_MB * 1024 * 1024 if KUZU_BUFFER_POOL_SIZE_MB else 0,
+    buffer_pool_size=LADYBUG_BUFFER_POOL_SIZE_MB * 1024 * 1024 if LADYBUG_BUFFER_POOL_SIZE_MB else 0,
 )
 
-# Kuzu Connection objects are not thread-safe, but a Database can host many.
+# Connection objects are not thread-safe, but a Database can host many.
 # A small pool lets independent requests run truly concurrently — under the
 # previous single-conn + global lock, every request serialized on the same lock,
 # blocking the event loop for the duration of each query.
-_pool: queue.Queue = queue.Queue(maxsize=KUZU_POOL_SIZE)
-for _ in range(KUZU_POOL_SIZE):
-    _pool.put(kuzu.Connection(db))
+_pool: queue.Queue = queue.Queue(maxsize=LADYBUG_POOL_SIZE)
+for _ in range(LADYBUG_POOL_SIZE):
+    _pool.put(ladybug.Connection(db))
 
 
 
 # ─── Datenbank: Verbindungspool, Schema, Migration ──────────────────────────
-def db_exec(query: str, params: dict | None = None) -> kuzu.QueryResult:
+def db_exec(query: str, params: dict | None = None) -> ladybug.QueryResult:
     c = _pool.get()
     try:
         return c.execute(query, params or {})
@@ -406,7 +413,7 @@ def db_exec(query: str, params: dict | None = None) -> kuzu.QueryResult:
         _pool.put(c)
 
 
-async def db_exec_async(query: str, params: dict | None = None) -> kuzu.QueryResult:
+async def db_exec_async(query: str, params: dict | None = None) -> ladybug.QueryResult:
     """Run db_exec off the event loop. Use from `async def` route handlers."""
     return await asyncio.to_thread(db_exec, query, params)
 
@@ -420,7 +427,7 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _rows(result: kuzu.QueryResult) -> list[list]:
+def _rows(result: ladybug.QueryResult) -> list[list]:
     rows = []
     while result.has_next():
         rows.append(result.get_next())
@@ -909,7 +916,7 @@ _shutdown = threading.Event()
 
 def _checkpoint_wal(force: bool = False) -> bool:
     """WAL in die DB mergen, damit sie nicht aufstaut. `force` checkpointet
-    unabhängig von der Größe (Shutdown); sonst nur ab KUZU_WAL_CHECKPOINT_MB.
+    unabhängig von der Größe (Shutdown); sonst nur ab LADYBUG_WAL_CHECKPOINT_MB.
     Rückgabe: True = gemerged oder nichts zu tun, False = fehlgeschlagen.
 
     Ein Fehlschlag ist meist transient ("buffer pool is full" unter Backfill-Last):
@@ -926,7 +933,7 @@ def _checkpoint_wal(force: bool = False) -> bool:
         if not force:
             return True
         mb = 0.0
-    if not force and mb < KUZU_WAL_CHECKPOINT_MB:
+    if not force and mb < LADYBUG_WAL_CHECKPOINT_MB:
         return True
     for versuch in (1, 2):
         try:
@@ -1084,7 +1091,7 @@ async def logo_route(request: Request) -> Response:
 async def health_route(request: Request) -> PlainTextResponse:
     # Public (kein Token) — vom Docker-Healthcheck und Reachability-Probes genutzt.
     # Readiness statt nur Liveness: billiger DB-Ping über den Pool. Liefert die
-    # Starlette-App zwar 200, der Kuzu-Pool ist aber wedged, würde der Container
+    # Starlette-App zwar 200, der Connection-Pool ist aber wedged, würde der Container
     # sonst fälschlich als healthy gelten und die Restart-Policy nicht greifen.
     try:
         await asyncio.wait_for(db_exec_async("MATCH () RETURN 1 LIMIT 1"), timeout=2.0)
@@ -2590,16 +2597,16 @@ def _embed_backfill(alle: bool = False) -> None:
             elif not _checkpoint_wal(force=True):
                 log.error("Embedding-Backfill nach %d/%d abgebrochen: WAL-Checkpoint "
                           "fehlgeschlagen, Buffer-Pool zu klein "
-                          "(KUZU_BUFFER_POOL_SIZE_MB=%d). Der nächste Lauf macht am "
-                          "Rest weiter.", done, len(rows), KUZU_BUFFER_POOL_SIZE_MB)
+                          "(LADYBUG_BUFFER_POOL_SIZE_MB=%d). Der nächste Lauf macht am "
+                          "Rest weiter.", done, len(rows), LADYBUG_BUFFER_POOL_SIZE_MB)
                 break
             # Kuzu meldet den Checkpoint als erfolgreich und verwirft die Writes
             # trotzdem — nur Nachsehen deckt das auf.
             if not _hat_vektor(portion[0][0]):
                 log.error("Embedding-Backfill nach %d/%d abgebrochen: der Checkpoint hat "
-                          "die gerade geschriebene Portion verworfen (Kuzu %s). Der "
+                          "die gerade geschriebene Portion verworfen (LadybugDB %s). Der "
                           "nächste Start holt den Rest in frischen Sessions nach.",
-                          done, len(rows), kuzu.__version__)
+                          done, len(rows), ladybug.__version__)
                 break
             done += len(portion)
             if len(rows) > EMBED_BACKFILL_PORTION:
@@ -3856,7 +3863,7 @@ def _graph_invariants() -> list[str]:
     Leere Liste = sauber. Prüft genau das, was real brechen und Backups/Lookups
     still sabotieren kann: ungültiges extra-JSON (bricht _dump_graph), nicht-kanonische
     Flag-Spalten, kaputtes embedding, und id-vs-_id(name)-Drift.
-    Dangling-Rels sind in Kuzu durch `FROM Entity TO Entity` strukturell ausgeschlossen
+    Dangling-Rels sind durch `FROM Entity TO Entity` strukturell ausgeschlossen
     — daher bewusst nicht geprüft.
     ponytail: Voll-Scan über alle Entities; erst sampeln, falls der nightly-Lauf das je spürt."""
     violations: list[str] = []
@@ -4006,25 +4013,25 @@ def _cleanup_scheduler_loop() -> None:
 threading.Thread(target=_cleanup_scheduler_loop, daemon=True, name="cleanup-scheduler").start()
 
 def _reopen_db() -> None:
-    """`db` und `_pool` neu an kg.db binden — eine frische Kuzu-Session.
+    """`db` und `_pool` neu an kg.db binden — eine frische DB-Session.
 
     NUR beim Start aufrufen: läuft uvicorn schon, halten andere Threads
     Connections aus dem alten Pool, und `db.close()` zieht sie ihnen weg.
     """
     global db, _pool
     # Erst die Connections wegwerfen, dann die Database: solange eine Connection
-    # lebt, gibt Kuzu den Buffer-Pool nicht frei, und die nächste Session läuft
+    # lebt, wird der Buffer-Pool nicht frei, und die nächste Session läuft
     # in "buffer pool is full", obwohl sie frisch ist.
     while not _pool.empty():
         _pool.get_nowait()
     db.close()
-    db = kuzu.Database(
+    db = ladybug.Database(
         DB_PATH,
-        buffer_pool_size=KUZU_BUFFER_POOL_SIZE_MB * 1024 * 1024 if KUZU_BUFFER_POOL_SIZE_MB else 0,
+        buffer_pool_size=LADYBUG_BUFFER_POOL_SIZE_MB * 1024 * 1024 if LADYBUG_BUFFER_POOL_SIZE_MB else 0,
     )
-    _pool = queue.Queue(maxsize=KUZU_POOL_SIZE)
-    for _ in range(KUZU_POOL_SIZE):
-        _pool.put(kuzu.Connection(db))
+    _pool = queue.Queue(maxsize=LADYBUG_POOL_SIZE)
+    for _ in range(LADYBUG_POOL_SIZE):
+        _pool.put(ladybug.Connection(db))
 
 
 def _rebuild_db() -> None:

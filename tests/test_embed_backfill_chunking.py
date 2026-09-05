@@ -38,7 +38,7 @@ PORTION = 16
 
 def _server(prefix: str):
     tmp = tempfile.mkdtemp(prefix=prefix)
-    os.environ["KUZU_DB_PATH"] = os.path.join(tmp, "kg.db")
+    os.environ["LADYBUG_DB_PATH"] = os.path.join(tmp, "kg.db")
     os.environ["BACKUP_DIR"] = os.path.join(tmp, "backups")
     os.environ["EMBED_ENABLED"] = "0"      # Aufbau ohne Vektoren + ohne Modell
     os.environ["EMBED_BACKFILL_CHUNK"] = str(CHUNK)

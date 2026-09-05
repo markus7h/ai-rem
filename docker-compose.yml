@@ -11,7 +11,7 @@ services:
         # adressieren kann (Host-ID = Port, nur zur Lesbarkeit).
         ipv6_address: fd00:24:9:68:19::3456
     # on-failure (nicht unless-stopped): ein Crash-Loop muss enden. Am 03.09.2026
-    # segfaultete kuzu im 60s-WAL-Checkpoint, `unless-stopped` startete den Container
+    # segfaultete Kuzu im 60s-WAL-Checkpoint, `unless-stopped` startete den Container
     # 264× neu, und jeder Start schrieb per Embedding-Backfill alle Vektoren erneut in
     # eine DB, die Speicher nie zurückgibt — kg.db wuchs auf 27 GB und füllte die
     # Partition samt Nachbar-Containern. Nach 5 Fehlversuchen bleibt er jetzt unten
@@ -32,7 +32,7 @@ services:
       # IPv4-Port erreichbar (server.py setzt IPV6_V6ONLY=0).
       - "HOST=::"
       - PORT=${PORT:-3456}
-      - KUZU_DB_PATH=/data/kg.db
+      - LADYBUG_DB_PATH=/data/kg.db
       - KG_PUBLIC_URL=${KG_PUBLIC_URL:-http://localhost:${PORT:-3456}}
       # llama-server für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
       # Default zeigt auf qwen3-14B auf myai; pro Deployment via .env überschreibbar.
@@ -44,13 +44,13 @@ services:
       # Anzahl gepinnter Routinen, die /discover je Prompt injiziert (Slots,
       # kuratiert über pinned + sort_order in den Preferences)
       - DISCOVER_ROUTINES_LIMIT=${DISCOVER_ROUTINES_LIMIT:-10}
-      - KUZU_POOL_SIZE=${KUZU_POOL_SIZE:-4}
-      # Kuzu Buffer-Pool in MiB. Ohne dieses Limit zielt kuzu auf 80% des HOST-RAMs
+      - LADYBUG_POOL_SIZE=${LADYBUG_POOL_SIZE:-4}
+      # Buffer-Pool in MiB. Ohne dieses Limit zielt LadybugDB auf 80% des HOST-RAMs
       # (ignoriert mem_limit). Normalbetrieb braucht bei dieser DB nur ~32 MB → 256 üppig.
-      - KUZU_BUFFER_POOL_SIZE_MB=${KUZU_BUFFER_POOL_SIZE_MB:-256}
+      - LADYBUG_BUFFER_POOL_SIZE_MB=${LADYBUG_BUFFER_POOL_SIZE_MB:-256}
       # WAL selbst mergen, sobald sie diese Größe überschreitet (+ beim Shutdown).
       # Verhindert eine aufgestaute WAL, die beim Öffnen teure Recovery (→ OOM) auslöst.
-      - KUZU_WAL_CHECKPOINT_MB=${KUZU_WAL_CHECKPOINT_MB:-2}
+      - LADYBUG_WAL_CHECKPOINT_MB=${LADYBUG_WAL_CHECKPOINT_MB:-2}
       # Pflicht (fail-closed): ohne Token startet der Server nicht. Quelle:
       # mykeyvault (Item ai-rem-api-token), via deploy.sh in die .env geschrieben.
       - AI_REM_API_TOKEN=${AI_REM_API_TOKEN:?AI_REM_API_TOKEN nicht gesetzt — siehe deploy.sh / .env}
@@ -83,8 +83,8 @@ services:
       # Cosine-Schwelle der semantischen Treffer. Leer = passender Default je
       # Backend (0.45 in-process, 0.50 fuer bge-m3).
       - EMBED_THRESHOLD=${EMBED_THRESHOLD:-}
-    # Betrieb ~700 MiB (Embedding-Modell ~575 + kuzu ~32 + Python). WAL wird klein
-    # gehalten (KUZU_WAL_CHECKPOINT_MB), daher kein 2.4-GiB-Recovery-Peak mehr.
+    # Betrieb ~700 MiB (Embedding-Modell ~575 + DB ~32 + Python). WAL wird klein
+    # gehalten (LADYBUG_WAL_CHECKPOINT_MB), daher kein 2.4-GiB-Recovery-Peak mehr.
     # Mit EMBED_URL + :latest-slim faellt das Modell weg → 512m reichen.
     mem_limit: ${MEM_LIMIT:-1536m}
     healthcheck:

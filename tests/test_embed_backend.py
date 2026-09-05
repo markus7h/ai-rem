@@ -23,7 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _boot():
     """Server mit frischer Temp-DB importieren, Embeddings zunaechst aus."""
     tmp = tempfile.mkdtemp(prefix="ai-rem-embed-")
-    os.environ["KUZU_DB_PATH"] = os.path.join(tmp, "kg.db")
+    os.environ["LADYBUG_DB_PATH"] = os.path.join(tmp, "kg.db")
     os.environ["BACKUP_DIR"] = os.path.join(tmp, "backups")
     os.environ["EMBED_ENABLED"] = "0"
     os.environ.setdefault("AI_REM_API_TOKEN", "test-token")
@@ -124,7 +124,7 @@ def test_backend_ausfall_ist_fail_soft():
 
 def _load_embed_funcs(**konstanten):
     """Nur die Embedding-Funktionen aus server.py in einen eigenen Namespace holen —
-    ohne kuzu/fastmcp zu importieren, damit diese Tests ohne DB und ohne Netz laufen."""
+    ohne ladybug/fastmcp zu importieren, damit diese Tests ohne DB und ohne Netz laufen."""
     src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
     ns = {"json": json, "EMBED_URL": "http://embed.test/v1/embeddings",
           "EMBED_HTTP_MODEL": "bge-m3", "EMBED_HTTP_TIMEOUT": 5,

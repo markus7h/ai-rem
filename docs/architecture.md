@@ -2,7 +2,7 @@
 
 Drei zusammengehörige MCP-Systeme für den Claude-Code-Betrieb im LAN:
 
-- **ai-rem** — persistentes Langzeit-Gedächtnis (Knowledge Graph) als FastMCP-Server mit eingebetteter Kuzu-DB.
+- **ai-rem** — persistentes Langzeit-Gedächtnis (Knowledge Graph) als FastMCP-Server mit eingebetteter LadybugDB.
 - **mykeyvault** — Secrets-Verbund: Vaultwarden als Store, `vault-api` als Token-authentifiziertes REST-Gateway, `mykeyvault-mcp` als MCP-Frontend.
 - **tools-registry** — lokaler MCP-Server, der Scripts als Tools registriert und sie live von einem zentralen HTTP-`tools-registry` bezieht.
 
@@ -26,7 +26,7 @@ flowchart TB
     CADDY["Caddy - Reverse-Proxy<br/>TLS internal, *.lan"]
     subgraph AIREM_C["Container: ai-rem :3456"]
       AIREM["FastMCP-Server<br/>/mcp · /ui · /api · /health"]
-      KUZU[("Kuzu Graph-DB<br/>/data/kg.db + /backups")]
+      LADYBUG[("LadybugDB<br/>/data/kg.db + /backups")]
     end
     subgraph KV["mykeyvault-Verbund"]
       KVMCP["mykeyvault-mcp :3458<br/>(MCP http)"]
@@ -55,7 +55,7 @@ flowchart TB
   CLI --> CADDY
 
   %% ai-rem Abhaengigkeiten
-  AIREM --> KUZU
+  AIREM --> LADYBUG
   AIREM -- "Extraktion + Nightly-Cleanup" --> OLLAMA
 
   %% Secrets-Fluss
@@ -86,8 +86,8 @@ ruff noch ein Test je gesehen hat. Als Dateien werden sie normal geprüft.
 
 | Komponente | Host | Port | Protokoll / Zugang | Zweck |
 |---|---|---|---|---|
-| ai-rem | mystorage | 3456 | HTTP-MCP via `https://airem.lan/mcp` (Caddy), Bearer | Knowledge-Graph-Gedächtnis (FastMCP + Kuzu), Web-UI, Backup/Cleanup |
-| Kuzu Graph-DB | mystorage | — | eingebettet in ai-rem | Entities/Relations (`/data/kg.db`), Backups (`/backups`) |
+| ai-rem | mystorage | 3456 | HTTP-MCP via `https://airem.lan/mcp` (Caddy), Bearer | Knowledge-Graph-Gedächtnis (FastMCP + LadybugDB), Web-UI, Backup/Cleanup |
+| LadybugDB | mystorage | — | eingebettet in ai-rem | Entities/Relations (`/data/kg.db`), Backups (`/backups`) |
 | mykeyvault-mcp | mystorage | 3458 | HTTP-MCP via `https://mykeyvault.lan/mcp` (Caddy, pfadbasiert), Bearer | MCP-Frontend für die Vault-Tools (kein Secret-Leak in den Kontext) |
 | vault-api | mystorage | 8223→8000 | REST via `https://mykeyvault.lan` (Caddy, pfadbasiert: `/secret/*`, `/items*`, `/item/*`, `/ssh-key/*`, `/ssh-keys`, `/health`), Bearer | Token-Gateway um die Bitwarden-CLI; hält `bw serve` (`:8087`) entsperrt |
 | Vaultwarden | mystorage | 8222→80 | `https://mykeyvault.lan` (Caddy, alle übrigen Pfade) | Eigentlicher Secrets-Store |
