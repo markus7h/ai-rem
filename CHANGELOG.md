@@ -34,6 +34,9 @@ German).
 
 ## [0.9.0] – 2026-09-05
 
+> Never tagged: these changes reached Docker Hub with v0.9.1. The link above
+> therefore compares against the merge commit, not against a tag.
+
 ### Changed
 - **The graph database is now [LadybugDB](https://github.com/LadybugDB/ladybug) 0.20.2
   instead of Kuzu 0.11.3.** Kuzu was archived on 2025-10-10 and v0.11.3 is its last
@@ -395,8 +398,8 @@ the new instance recomputes them.
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
 [Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.1...HEAD
-[0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.9.0...v0.9.1
-[0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.0
+[0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.1
+[0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...26efcb9
 [0.8.32]: https://github.com/markus7h/ai-rem/compare/v0.8.31...v0.8.32
 [0.8.31]: https://github.com/markus7h/ai-rem/compare/v0.8.30...v0.8.31
 [0.8.30]: https://github.com/markus7h/ai-rem/compare/v0.8.29...v0.8.30
