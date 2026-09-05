@@ -1,6 +1,6 @@
 """Tests für memory_set_project_context (Merge) und memory_project_context (Voll-Abruf).
 
-Importiert server.py gegen eine temporäre Kuzu-DB (KUZU_DB_PATH) mit deaktiviertem
+Importiert server.py gegen eine temporäre Kuzu-DB (LADYBUG_DB_PATH) mit deaktiviertem
 Embedding (EMBED_ENABLED=0), damit kein Modell geladen und keine /data-DB berührt wird.
 """
 import os
@@ -14,7 +14,7 @@ sys.path.insert(0, ROOT)
 
 # Muss VOR dem server-Import stehen — DB + Embedding werden beim Import initialisiert.
 _TMPDIR = tempfile.mkdtemp(prefix="ai-rem-test-")
-os.environ["KUZU_DB_PATH"] = os.path.join(_TMPDIR, "kg.db")
+os.environ["LADYBUG_DB_PATH"] = os.path.join(_TMPDIR, "kg.db")
 os.environ["EMBED_ENABLED"] = "0"
 os.environ.setdefault("AI_REM_API_TOKEN", "test-token")
 

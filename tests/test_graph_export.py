@@ -17,14 +17,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMPDIR = tempfile.mkdtemp(prefix="ai-rem-graph-")
-os.environ["KUZU_DB_PATH"] = os.path.join(_TMPDIR, "kg.db")
+os.environ["LADYBUG_DB_PATH"] = os.path.join(_TMPDIR, "kg.db")
 os.environ["EMBED_ENABLED"] = "0"
 os.environ.setdefault("AI_REM_API_TOKEN", "test-token")
 
 import server  # noqa: E402
 
 # Die Suite teilt EINE globale Kuzu-DB über alle Testdateien (erster server-Import
-# gewinnt KUZU_DB_PATH). Unsere archivierte GArchived-Entity würde sonst in den
+# gewinnt LADYBUG_DB_PATH). Unsere archivierte GArchived-Entity würde sonst in den
 # später laufenden Purge-Test hineinlecken → hier deterministisch wieder aufräumen.
 _CREATED = ["GFields", "GWork", "GPriv", "GGlobal", "GActive", "GArchived",
             "GPerson", "GTask", "GTool"]

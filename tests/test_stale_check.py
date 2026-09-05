@@ -14,7 +14,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _scenario() -> None:
     tmp = tempfile.mkdtemp(prefix="ai-rem-stale-")
-    os.environ["KUZU_DB_PATH"] = os.path.join(tmp, "kg.db")
+    os.environ["LADYBUG_DB_PATH"] = os.path.join(tmp, "kg.db")
     os.environ["BACKUP_DIR"] = os.path.join(tmp, "backups")
     os.environ["EMBED_ENABLED"] = "0"
     os.environ.setdefault("AI_REM_API_TOKEN", "test-token")

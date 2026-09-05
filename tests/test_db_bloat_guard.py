@@ -26,7 +26,7 @@ ENTITIES = 6
 
 def _server(prefix: str):
     tmp = tempfile.mkdtemp(prefix=prefix)
-    os.environ["KUZU_DB_PATH"] = os.path.join(tmp, "kg.db")
+    os.environ["LADYBUG_DB_PATH"] = os.path.join(tmp, "kg.db")
     os.environ["BACKUP_DIR"] = os.path.join(tmp, "backups")
     os.environ["EMBED_ENABLED"] = "0"
     os.environ.setdefault("AI_REM_API_TOKEN", "test-token")

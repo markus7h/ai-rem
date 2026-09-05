@@ -33,7 +33,7 @@ The script automatically handles:
 
 ```
 ai-rem/
-├── server.py                   # MCP server (FastMCP + Kuzu + web UI + backup + cleanup
+├── server.py                   # MCP server (FastMCP + LadybugDB + web UI + backup + cleanup
 │                               #   + embedded setup.py/bash/PS1 scripts and hooks)
 ├── bin/ai-rem                  # CLI (status/search/ingest/catchup, pure stdlib, no venv)
 ├── lib/                        # extractor (+ md-fallback/catchup), heuristic, mcp_client
@@ -43,7 +43,7 @@ ai-rem/
 │                               #   release-history.md (archived notes ≤ v0.1.5)
 ├── deploy.sh                   # Deploy to the home server (scp + remote build + recreate)
 ├── .github/workflows/          # Docker Hub publish on v* tags
-├── requirements.txt            # fastmcp, kuzu, numpy, cryptography
+├── requirements.txt            # fastmcp, ladybug, numpy, cryptography
 ├── requirements-embed.txt      # fastembed — only installed in the full image, not in :slim
 ├── Dockerfile
 ├── docker-compose.yml

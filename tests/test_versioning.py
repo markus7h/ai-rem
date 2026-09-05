@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 _TMPDIR = tempfile.mkdtemp(prefix="ai-rem-ver-")
-os.environ["KUZU_DB_PATH"] = os.path.join(_TMPDIR, "kg.db")
+os.environ["LADYBUG_DB_PATH"] = os.path.join(_TMPDIR, "kg.db")
 os.environ["EMBED_ENABLED"] = "0"
 os.environ.setdefault("AI_REM_API_TOKEN", "test-token")
 

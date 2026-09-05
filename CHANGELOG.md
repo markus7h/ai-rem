@@ -13,6 +13,37 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [0.9.0] – 2026-09-05
+
+### Changed
+- **The graph database is now [LadybugDB](https://github.com/LadybugDB/ladybug) 0.20.2
+  instead of Kuzu 0.11.3.** Kuzu was archived on 2025-10-10 and v0.11.3 is its last
+  release; LadybugDB is the maintained community fork with the same Python API — all 86
+  queries in `server.py` are unchanged. The switch was made because of the defect behind
+  the two outages of the 0.8.2x line: in Kuzu every checkpoint rewrote the whole column,
+  so the file grew with the *number* of checkpoints and a checkpoint that outgrew the
+  buffer pool discarded what earlier ones had persisted. The same reproduction — 1342
+  entities with 1024-dimensional vectors, a checkpoint per chunk of 32, buffer pool 256 MB:
+
+  | | Kuzu 0.11.3 | LadybugDB 0.20.2 |
+  |---|---|---|
+  | vectors surviving | **0 / 1342** (`buffer pool is full`) | **1342 / 1342** |
+  | file size | 771 MB | **40 MB** |
+
+  The workarounds from 0.8.29–0.8.32 (portioned backfill, size guard, startup rebuild)
+  stay in place for now — they simply never trigger. A later release will simplify that path.
+- **`KUZU_*` environment variables are now `LADYBUG_*`** (`LADYBUG_DB_PATH`,
+  `LADYBUG_POOL_SIZE`, `LADYBUG_BUFFER_POOL_SIZE_MB`, `LADYBUG_WAL_CHECKPOINT_MB`). The
+  old names keep working as a fallback, so existing `.env` files need no change.
+- **The advice to raise the buffer pool to 768 MB for `EMBED_URL` is gone.** It was a
+  consequence of the Kuzu defect; measured against LadybugDB, 256 MB carries the same
+  1024-dimensional vectors.
+
+### Migration
+The file format is not compatible — LadybugDB refuses a Kuzu `kg.db`. Export from the
+running 0.8.x instance via `/api/export`, then import the JSON into the new container
+(`/api/import`). That also sheds the accumulated Kuzu bloat.
+
 ## [0.8.32] – 2026-09-04
 
 ### Changed
@@ -336,7 +367,8 @@ German).
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.8.32...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.0
 [0.8.32]: https://github.com/markus7h/ai-rem/compare/v0.8.31...v0.8.32
 [0.8.31]: https://github.com/markus7h/ai-rem/compare/v0.8.30...v0.8.31
 [0.8.30]: https://github.com/markus7h/ai-rem/compare/v0.8.29...v0.8.30
