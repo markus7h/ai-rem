@@ -13,6 +13,16 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [0.9.2] – 2026-09-06
+
+### Added
+- **`scripts/migrate.py` now ships inside the image** and carries the graph from a v0.8.x
+  instance to a v0.9.x one (#125): `export` writes a verified JSON dump, `import` waits for
+  the new container's `/health`, replays the dump and checks the entity count afterwards.
+  Stdlib only, so it runs on any host with Python 3.10+ and in the slim image. It was
+  merged after v0.9.1 was tagged, so `magic3arkus/ai-rem:latest` carries it from this
+  release onwards — the extraction command in the 0.9.0 migration note needs v0.9.2 or newer.
+
 ## [0.9.1] – 2026-09-05
 
 ### Changed
@@ -60,12 +70,6 @@ German).
 - **The advice to raise the buffer pool to 768 MB for `EMBED_URL` is gone.** It was a
   consequence of the Kuzu defect; measured against LadybugDB, 256 MB carries the same
   1024-dimensional vectors.
-
-### Added
-- **`scripts/migrate.py`** ships inside the image and carries the graph from a v0.8.x
-  instance to a v0.9.0 one: `export` writes a verified JSON dump, `import` waits for the
-  new container's `/health`, replays the dump and checks the entity count afterwards.
-  Stdlib only, so it runs on any host with Python 3.10+ and in the slim image.
 
 ### Migration
 The file format is not compatible — LadybugDB refuses a Kuzu `kg.db`. Pull the script out
@@ -397,7 +401,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/markus7h/ai-rem/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.1
 [0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...26efcb9
 [0.8.32]: https://github.com/markus7h/ai-rem/compare/v0.8.31...v0.8.32
