@@ -11,6 +11,12 @@ Available from any machine, independent of where you work.
 docker pull magic3arkus/ai-rem
 ```
 
+> **v1.0.0 replaces the archived Kuzu with [LadybugDB](https://github.com/LadybugDB/ladybug).**
+> The database file formats are **not** compatible — upgrading from v0.8.x runs through
+> `scripts/migrate.py`, which ships inside the image
+> ([how to](https://github.com/markus7h/ai-rem#upgrade-from-v08x-kuzu)). Fresh installs are
+> unaffected.
+
 - **Source & full docs:** https://github.com/markus7h/ai-rem
 - **Supported tags:** `latest`, `vX.Y.Z` — full image, embeddings run in-process, no external service needed.
   `latest-slim`, `vX.Y.Z-slim` — same code without the bundled embedding model (~250 MB smaller, 413 → 162 MB); needs `EMBED_URL` pointing at an OpenAI-compatible `/v1/embeddings` endpoint, otherwise search stays purely lexical. One pair per release — see [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
@@ -51,7 +57,20 @@ authenticate with `Authorization: Bearer <token>`; the browser Web UI uses a der
 HttpOnly cookie set at `/login`.
 ([Auth model](https://github.com/markus7h/ai-rem/blob/main/docs/authentication.md))
 
-### Upgrading from v0.8.x (Kuzu)
+### 2. Client (each machine) — say this to Claude Code
+
+```
+Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
+```
+
+On native Windows (PowerShell, no WSL): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
+The idempotent setup registers the MCP server, deploys the hooks, writes a minimal
+`CLAUDE.md` pointer and installs the slash commands.
+([Setup details](https://github.com/markus7h/ai-rem/blob/main/docs/installation.md))
+
+---
+
+## Upgrading from v0.8.x (Kuzu)
 
 v0.9.0 replaced the archived Kuzu with [LadybugDB](https://github.com/LadybugDB/ladybug);
 the file formats are not compatible. `scripts/migrate.py` ships inside the image and moves
@@ -64,17 +83,6 @@ python3 migrate.py export --url http://localhost:3456 --out dump.json   # old in
 docker compose down && mv /path/to/volume/kg.db /path/to/volume/kg.db.kuzu-old && docker compose up -d
 python3 migrate.py import --url http://localhost:3456 --in dump.json
 ```
-
-### 2. Client (each machine) — say this to Claude Code
-
-```
-Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
-```
-
-On native Windows (PowerShell, no WSL): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
-The idempotent setup registers the MCP server, deploys the hooks, writes a minimal
-`CLAUDE.md` pointer and installs the slash commands.
-([Setup details](https://github.com/markus7h/ai-rem/blob/main/docs/installation.md))
 
 ---
 
