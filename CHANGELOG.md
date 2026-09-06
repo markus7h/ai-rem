@@ -13,6 +13,46 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.0.0] – 2026-09-06
+
+The database underneath ai-rem is no longer [Kuzu](https://github.com/kuzudb/kuzu) but
+[LadybugDB](https://github.com/LadybugDB/ladybug). Kuzu was archived on 2025-10-10 with
+v0.11.3 as its last release; LadybugDB is the maintained community fork with the same
+Python API. The swap itself landed in v0.9.0 and has been running in production since —
+this release makes it the headline it deserves, because **upgrading is not automatic**.
+
+### Breaking
+- **The database file formats are not compatible.** LadybugDB refuses a Kuzu `kg.db` with
+  `The file is not a valid Lbug database file!`, so an existing installation cannot simply
+  pull the new image. Move the graph with `scripts/migrate.py` (ships inside the image):
+  dump the running v0.8.x instance, move the old `kg.db` aside, start v1.0.0, import the
+  dump. The full sequence is in the README under "Upgrade from v0.8.x (Kuzu)".
+  A fresh install needs none of this.
+- **`KUZU_*` environment variables are now `LADYBUG_*`.** The old names still work as a
+  fallback, so an existing `.env` keeps running — but they are no longer documented.
+
+### Why it was worth a major release
+Kuzu rewrote the entire column on every checkpoint: the file grew with the *number* of
+checkpoints, and a checkpoint that outgrew the buffer pool discarded what earlier ones had
+persisted. That defect caused two outages, one of which filled the disk (kg.db grew from
+~680 MB to 27 GB across 264 restarts on 2026-09-03) and took neighbouring containers with
+it. The same reproduction — 1342 entities with 1024-dimensional vectors, a checkpoint per
+chunk of 32, buffer pool 256 MB:
+
+| | Kuzu 0.11.3 | LadybugDB 0.20.2 |
+|---|---|---|
+| vectors surviving | **0 / 1342** (`buffer pool is full`) | **1342 / 1342** |
+| file size | 771 MB | **40 MB** |
+
+The first real migration confirms it: 1498 entities and 1601 relations moved over, all
+1498 vectors recomputed without a single failed checkpoint, and `kg.db` went from
+**1290 MB to 50 MB**.
+
+### Note
+The guards built for the Kuzu era — portioned embedding backfill, `KG_REBUILD_MB`,
+`KG_MAX_MB`, the startup rebuild — are still in place and still never trigger. Removing
+them is a separate change, deliberately not bundled into this release.
+
 ## [0.9.2] – 2026-09-06
 
 ### Added
@@ -401,7 +441,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/markus7h/ai-rem/compare/v0.9.2...v1.0.0
 [0.9.2]: https://github.com/markus7h/ai-rem/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.1
 [0.9.0]: https://github.com/markus7h/ai-rem/compare/v0.8.32...26efcb9

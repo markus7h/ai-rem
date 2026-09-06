@@ -1,6 +1,11 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v0.9.2](https://github.com/markus7h/ai-rem/releases/tag/v0.9.2)**.
+> This documentation describes **[v1.0.0](https://github.com/markus7h/ai-rem/releases/tag/v1.0.0)**.
+> **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
+> [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
+> compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
+> [Upgrade from v0.8.x (Kuzu)](#upgrade-from-v08x-kuzu). Fresh installs are unaffected.
+
 > Release notes are kept in [CHANGELOG.md](CHANGELOG.md) and published to the [GitHub Releases](https://github.com/markus7h/ai-rem/releases) and the Docker Hub description on every tag; notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
 **ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
