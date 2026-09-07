@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.0.0](https://github.com/markus7h/ai-rem/releases/tag/v1.0.0)**.
+> This documentation describes **[v1.1.0](https://github.com/markus7h/ai-rem/releases/tag/v1.1.0)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -58,7 +58,8 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 | URL | Function |
 |---|---|
 | `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`); also OKF bundle import; header shows the server version |
-| `/browse` | Interactive content browser: search and filter by type, toggle archived, expand an entry for description, extra and relations; imported entries are badged |
+| `/browse` | Interactive content browser: search and filter by type, toggle archived, expand an entry for description, extra and relations; imported entries are badged; the list loads 20 entries at a time |
+| `/tasks` | Task list: status and project per row, "open only" filter (default on), toggle archived, search across name, description and project; archive a task in place — it leaves the session context but stays in the DB. Paginated in steps of 20. |
 | `/graph` | Node-link visualization (vis-network): nodes colored by type, edges labeled by relation; filter by context (work / private / global) and toggle entity types via the legend; physics and archived toggles; "connected only" pins the clicked node plus its neighbors up to an adjustable distance (1, 2 … n; single-click shows info, double-click re-anchors) |
 | `/prefs` | Preferences manager: pin, context, sort order, delete; archived preferences are dimmed, badged and listed below a separator (they never load into session context). |
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log; plus archive purge (permanently delete archived entries, optionally keeping the last *X* days) |

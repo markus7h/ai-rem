@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Tasks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333;--pin:#808080}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px;position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:1}
+input[type=text]{background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px;flex:1;min-width:180px}
+.muted{color:var(--muted);font-size:12px}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(0,0,0,.02)}
+tr.arch td{opacity:.55}
+.name{font-size:13px;font-weight:500;cursor:pointer}
+.name:hover{color:var(--ah)}
+.descr{font-size:11px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.full-descr{display:none;font-size:12px;color:var(--muted);white-space:pre-wrap;word-break:break-word;margin-top:6px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;line-height:1.5}
+.tag{font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:1px 7px;border-radius:4px;border:1px solid var(--accent);color:var(--accent);white-space:nowrap}
+.tag.done{border-color:var(--pin);color:var(--pin)}
+.tag.ctx{border-color:var(--border);color:var(--muted)}
+.date{font-size:11px;color:var(--muted);white-space:nowrap}
+.arch-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.arch-btn:hover{border-color:var(--err);color:var(--err)}
+.more{display:block;width:100%;margin-top:14px;background:var(--card);border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:9px;font-size:13px;font-weight:500;cursor:pointer}
+.more:hover{border-color:var(--accent)}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.hd img{display:block}
+.hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hd nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1;padding-bottom:3px;border-bottom:2px solid transparent}
+.hd nav a:hover{color:var(--text)}
+.hd nav a.on{color:var(--accent);border-bottom-color:var(--accent)}
+</style>
+</head>
+<body>
+<header class="hd">
+<a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
+<nav>
+<a href="/browse">Browse</a>
+<a href="/tasks" class="on">Tasks</a>
+<a href="/graph">Graph</a>
+<a href="/prefs">Preferences</a>
+<a href="/cleanup">Cleanup</a>
+<a href="/logs">Logs</a>
+<a href="/install">Install</a>
+<a href="/logout">Logout</a>
+</nav>
+</header>
+<h1>Tasks</h1>
+<p class="sub" id="cnt">lädt…</p>
+<div class="bar">
+  <input type="text" id="q" placeholder="Suche in Name, Beschreibung &amp; Projekt…" oninput="reset()">
+  <label class="muted"><input type="checkbox" id="open" checked onchange="reset()"> nur offene</label>
+  <label class="muted"><input type="checkbox" id="arch" onchange="load()"> archivierte zeigen</label>
+</div>
+<table><thead><tr><th>Status</th><th>Projekt</th><th>Task</th><th>Geändert</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+<button class="more" id="more" style="display:none" onclick="showMore()">Weitere 20 laden</button>
+<div class="toast" id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+const PAGE=20;
+let TASKS=[], shown=PAGE;
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+
+async function load(){
+  const inc=$('arch').checked?'?include_archived=1':'';
+  TASKS=await (await fetch('/api/tasks'+inc)).json();
+  reset();
+}
+
+function filtered(){
+  const q=$('q').value.toLowerCase(), onlyOpen=$('open').checked;
+  return TASKS.filter(t=>{
+    if(onlyOpen && t.done)return false;
+    if(q && !((t.name||'').toLowerCase().includes(q)
+           || (t.descr||'').toLowerCase().includes(q)
+           || t.projects.join(' ').toLowerCase().includes(q)))return false;
+    return true;
+  });
+}
+
+// ponytail: Pagination rein client-seitig — /api/tasks liefert ohnehin alles.
+function reset(){shown=PAGE;render();}
+function showMore(){shown+=PAGE;render();}
+
+function render(){
+  const list=filtered(), page=list.slice(0,shown);
+  $('cnt').textContent=`${page.length} von ${list.length} gefiltert · ${TASKS.length} geladen`;
+  $('more').style.display=shown<list.length?'block':'none';
+  $('rows').innerHTML=page.map((t,i)=>`
+    <tr class="${t.archived?'arch':''}">
+      <td><span class="tag ${t.done?'done':''}">${esc(t.status)}</span></td>
+      <td class="muted">${t.projects.length?esc(t.projects.join(', ')):'—'}</td>
+      <td>
+        <div class="name" onclick="toggleDescr(${i})">${esc(t.name)}${t.archived?' <span class="tag ctx">archiviert</span>':''}${t.context?` <span class="tag ctx">${esc(t.context)}</span>`:''}</div>
+        <div class="descr">${esc(t.descr)||'—'}</div>
+        <div class="full-descr" id="fd${i}">${esc(t.descr)||'—'}</div>
+      </td>
+      <td class="date">${t.updated_at?t.updated_at.slice(0,10):'—'}</td>
+      <td>${t.archived?'':`<button class="arch-btn" onclick="archive(${i})">Archivieren</button>`}</td>
+    </tr>`).join('')||'<tr><td colspan="5" class="muted">nichts gefunden</td></tr>';
+}
+
+function toggleDescr(i){
+  const el=$('fd'+i);
+  el.style.display=el.style.display==='block'?'none':'block';
+}
+
+async function archive(i){
+  const t=filtered().slice(0,shown)[i];
+  if(!confirm('Archivieren: '+t.name+'?\n\nDer Task verschwindet aus dem Session-Kontext, bleibt aber in der DB.'))return;
+  const r=await fetch('/api/tool',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:'memory_archive',arguments:{name:t.name}})});
+  if(!r.ok){toast('Fehler: '+await r.text(),'err');return;}
+  toast('🗄 Archiviert: '+t.name,'ok');
+  load();
+}
+
+function toast(msg,type){
+  const el=$('toast');
+  el.textContent=msg;el.className='toast show '+type;
+  setTimeout(()=>el.className='toast',3000);
+}
+
+load();
+</script>
+</body>
+</html>

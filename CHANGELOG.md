@@ -13,6 +13,24 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.1.0] – 2026-09-07
+
+### Added
+- **`/tasks` web UI** — a task list next to `/browse`: status and project per row,
+  "open only" filter (on by default), toggle for archived tasks, and search across name,
+  description and project. Each open task has an **Archive** button that runs
+  `memory_archive` through the existing `/api/tool` dispatch — the task leaves the session
+  context but stays in the database and remains reachable via `include_archived`.
+  Backed by the new `GET /api/tasks` route (`include_archived=1` optional), which reads
+  `_task_rows_full()`: like the counter query behind `memory_get_context`, but with the
+  done flag, archive state and the project relations of every task, open or closed.
+
+### Changed
+- **`/browse` paginates.** The list rendered every filtered entry at once, which at ~1500
+  entities meant a very long page. It now shows 20 at a time with a "load more" button;
+  changing search, type filter or the archived toggle starts over at 20. Same behaviour
+  on `/tasks`. Purely client-side — `/export` still delivers the whole graph in one go.
+
 ## [1.0.0] – 2026-09-06
 
 The database underneath ai-rem is no longer [Kuzu](https://github.com/kuzudb/kuzu) but
@@ -441,7 +459,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/markus7h/ai-rem/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/markus7h/ai-rem/compare/v0.9.2...v1.0.0
 [0.9.2]: https://github.com/markus7h/ai-rem/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/markus7h/ai-rem/compare/v0.8.32...v0.9.1
