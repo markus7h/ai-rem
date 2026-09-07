@@ -72,7 +72,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -1236,6 +1236,21 @@ async def api_preferences_delete(request: Request) -> JSONResponse:
 async def prefs_route(request: Request) -> Response:
     html = _PREFS_HTML.replace("__CTX_LIMIT__", str(CONTEXT_PREF_LIMIT))
     return Response(content=html, media_type="text/html")
+
+
+_TASKS_HTML = _pkg_text("templates/tasks.html")
+
+
+@mcp.custom_route("/api/tasks", methods=["GET"])
+async def api_tasks(request: Request) -> JSONResponse:
+    include_archived = request.query_params.get("include_archived") == "1"
+    tasks = await asyncio.to_thread(_task_rows_full, "", include_archived)
+    return JSONResponse(tasks)
+
+
+@mcp.custom_route("/tasks", methods=["GET"])
+async def tasks_route(request: Request) -> Response:
+    return Response(content=_TASKS_HTML, media_type="text/html")
 
 
 _CLEANUP_HTML = _pkg_text("templates/cleanup.html")
@@ -2852,6 +2867,51 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
         if status.lower() in _DONE_STATUSES:  # weiter unten definiert, lazy aufgeloest
             continue
         out.append((name, descr or "", status, proj))
+    return out
+
+
+def _task_rows_full(context: str, include_archived: bool) -> list[dict]:
+    """Alle Tasks (offen und erledigt) fuer die /tasks-UI.
+
+    Wie _open_task_rows, aber ohne Status-Filter und mit archived/updated_at.
+    Mehrere Project-Relationen werden zu einer Liste zusammengefasst statt den
+    Task zu duplizieren.
+    """
+    ctx_param: dict = {"ctx": context} if context else {}
+    rows = _rows(
+        db_exec(
+            f"""MATCH (t:Entity {{type: 'Task'}})
+               {_ctx_clause('t', context, where=True)}
+               {_archived_clause('t', include_archived, where=not context)}
+               OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
+               RETURN t.name, t.descr, t.extra, p.name, t.context, t.archived, t.updated_at
+               ORDER BY t.updated_at DESC""",
+            ctx_param,
+        )
+    )
+    out: list[dict] = []
+    by_name: dict[str, dict] = {}
+    for name, descr, extra_s, proj, ctx, arch, updated in rows:
+        item = by_name.get(name)
+        if item is None:
+            try:
+                status = (json.loads(extra_s or "{}").get("status") or "offen")
+            except json.JSONDecodeError:
+                status = "offen"
+            item = {
+                "name": name,
+                "descr": descr or "",
+                "status": status,
+                "done": status.lower() in _DONE_STATUSES,
+                "projects": [],
+                "context": ctx or "",
+                "archived": arch == "true",
+                "updated_at": updated or "",
+            }
+            by_name[name] = item
+            out.append(item)
+        if proj and proj not in item["projects"]:
+            item["projects"].append(proj)
     return out
 
 

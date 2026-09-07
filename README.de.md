@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.0.0](https://github.com/markus7h/ai-rem/releases/tag/v1.0.0)**.
+> Diese Dokumentation bezieht sich auf **[v1.1.0](https://github.com/markus7h/ai-rem/releases/tag/v1.1.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -57,7 +57,8 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 | URL | Funktion |
 |---|---|
 | `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore (Export v2 erhält `pinned`/`sort_order`/`archived`); zusätzlich OKF-Bundle-Import; Kopfzeile zeigt die Server-Version |
-| `/browse` | Interaktiver Inhalts-Browser: Suche und Typ-Filter, archivierte ein-/ausblenden, Eintrag aufklappen für Beschreibung, Extra und Relationen; importierte Einträge sind gebadged |
+| `/browse` | Interaktiver Inhalts-Browser: Suche und Typ-Filter, archivierte ein-/ausblenden, Eintrag aufklappen für Beschreibung, Extra und Relationen; importierte Einträge sind gebadged; die Liste lädt 20 Einträge auf einmal |
+| `/tasks` | Task-Liste: Status und Projekt pro Zeile, Filter „nur offene" (default an), archivierte ein-/ausblenden, Suche über Name, Beschreibung und Projekt; Task direkt archivieren — er verlässt den Session-Kontext, bleibt aber in der DB. Seitenweise in 20er-Schritten. |
 | `/graph` | Node-Link-Visualisierung (vis-network): Knoten nach Typ eingefärbt, Kanten mit Relationsnamen; Filter nach Kontext (work / privat / global) und Typ-Toggle über die Legende; Physik- und Archiv-Toggle; „nur Verbundene" fixiert den angeklickten Knoten samt Nachbarn bis zur einstellbaren Distanz (1, 2 … n; Einfachklick zeigt Info, Doppelklick setzt den Anker um) |
 | `/prefs` | Preferences-Manager: pin, Context, Reihenfolge, löschen; archivierte Preferences sind gedimmt, gebadged und stehen unter einer Trennzeile (laden nie in den Session-Kontext). |
 | `/cleanup` | Nightly-Cleanup: Konfiguration, manueller Lauf, Pending-Reviews, Lauf-Log; plus Archiv-Purge (archivierte Einträge endgültig löschen, optional die letzten *X* Tage behalten) |

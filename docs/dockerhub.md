@@ -91,7 +91,7 @@ python3 migrate.py import --url http://localhost:3456 --in dump.json
 - **Knowledge-graph memory** — typed entities (`Project · Task · Decision · Preference · …`) and relations; hybrid lexical + semantic search. ([Tool reference](https://github.com/markus7h/ai-rem/blob/main/docs/mcp-tools.md))
 - **Lazy-loaded context** — only the relevant subgraph is loaded per session; cost stays flat as the graph grows.
 - **Cross-machine** — one server, available from every client; no per-repo `CLAUDE.md` ballast.
-- **Web UI** — `/ui` backups (manual/scheduled/restore), `/browse` interactive content browser, `/graph` node-link visualization, `/prefs` preferences manager, `/cleanup` maintenance + archive purge, `/install` onboarding.
+- **Web UI** — `/ui` backups (manual/scheduled/restore), `/browse` interactive content browser, `/tasks` task list with archive action, `/graph` node-link visualization, `/prefs` preferences manager, `/cleanup` maintenance + archive purge, `/install` onboarding.
 - **OKF interop** — export/import the whole graph as an [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/) v0.1 bundle (`/export/okf`, `/api/import/okf`); imported entries are indexed for semantic search.
 - **Auto-Memory** — a session-end hook extracts structured entities/relations from each transcript via llama-server (with an offline md-fallback + catch-up).
 - **Nightly cleanup** — non-destructive dedup/archive (never deletes; preferences & pinned untouched), ambiguous cases go to a review queue.

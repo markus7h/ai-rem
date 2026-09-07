@@ -31,6 +31,8 @@ input[type=text]{flex:1;min-width:180px}
 .det h4{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:10px 0 4px}
 .det pre{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;overflow:auto;white-space:pre-wrap}
 .rel{font-size:13px;padding:2px 0}.rel .r{color:var(--muted);font-family:monospace;font-size:12px}
+.more{display:block;width:100%;margin-top:14px;background:var(--card);border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:9px;font-size:13px;font-weight:500;cursor:pointer}
+.more:hover{border-color:var(--accent)}
 .hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
 .hd img{display:block}
 .hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
@@ -44,6 +46,7 @@ input[type=text]{flex:1;min-width:180px}
 <a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
 <nav>
 <a href="/browse" class="on">Browse</a>
+<a href="/tasks">Tasks</a>
 <a href="/graph">Graph</a>
 <a href="/prefs">Preferences</a>
 <a href="/cleanup">Cleanup</a>
@@ -55,14 +58,16 @@ input[type=text]{flex:1;min-width:180px}
 <h1>Browse</h1>
 <p class="sub"><span id="cnt">lädt…</span> &nbsp;·&nbsp; <a href="/export/okf">OKF-Bundle ↓</a></p>
 <div class="bar">
-  <input type="text" id="q" placeholder="Suche in Name &amp; Beschreibung…" oninput="render()">
-  <select id="t" onchange="render()"><option value="">alle Typen</option></select>
-  <label class="muted"><input type="checkbox" id="arch" onchange="render()"> archivierte zeigen</label>
+  <input type="text" id="q" placeholder="Suche in Name &amp; Beschreibung…" oninput="reset()">
+  <select id="t" onchange="reset()"><option value="">alle Typen</option></select>
+  <label class="muted"><input type="checkbox" id="arch" onchange="reset()"> archivierte zeigen</label>
 </div>
 <div id="list"></div>
+<button class="more" id="more" style="display:none" onclick="showMore()">Weitere 20 laden</button>
 <script>
 const $=id=>document.getElementById(id);
 let ENT=[], NAME={}, OUT={}, INC={};
+const PAGE=20; let shown=PAGE;
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 async function init(){
   const g=await (await fetch('/export')).json();
@@ -75,6 +80,9 @@ async function init(){
   $('t').innerHTML='<option value="">alle Typen</option>'+types.map(t=>`<option>${esc(t)}</option>`).join('');
   render();
 }
+// ponytail: Pagination rein client-seitig — /export liefert ohnehin alles.
+function reset(){shown=PAGE;render();}
+function showMore(){shown+=PAGE;render();}
 function render(){
   const q=$('q').value.toLowerCase(), tf=$('t').value, showArch=$('arch').checked;
   const list=ENT.filter(e=>{
@@ -83,8 +91,10 @@ function render(){
     if(q && !((e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q)))return false;
     return true;
   }).sort((a,b)=>(b.updated_at||'').localeCompare(a.updated_at||''));
-  $('cnt').textContent=`${list.length} / ${ENT.length} Einträge`;
-  $('list').innerHTML=list.map(e=>{
+  const page=list.slice(0,shown);
+  $('cnt').textContent=`${page.length} von ${list.length} gefiltert / ${ENT.length} Einträge`;
+  $('more').style.display=shown<list.length?'block':'none';
+  $('list').innerHTML=page.map(e=>{
     const arch=e.archived==='true';
     const rels=(OUT[e.id]||[]).map(([r,n])=>`<div class="rel"><span class="r">→ ${esc(r)}</span> ${esc(n)}</div>`).join('')
              +(INC[e.id]||[]).map(([r,n])=>`<div class="rel"><span class="r">← ${esc(r)}</span> ${esc(n)}</div>`).join('');
