@@ -128,11 +128,38 @@ def _load_embed_funcs(**konstanten):
     src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
     ns = {"json": json, "EMBED_URL": "http://embed.test/v1/embeddings",
           "EMBED_HTTP_MODEL": "bge-m3", "EMBED_HTTP_TIMEOUT": 5,
-          "EMBED_MAX_CHARS": 2000, **konstanten}
+          "EMBED_MAX_CHARS": 2000, "EMBED_API_KEY": "", **konstanten}
     for name in ("_embed_http", "_embed_texts"):
         start = src.index(f"def {name}(")
         exec(compile(src[start:src.index("\ndef ", start + 1)], "server.py", "exec"), ns)
     return ns
+
+
+def test_embed_http_setzt_bearer_nur_mit_key():
+    """Zeigt EMBED_URL auf einen Router mit Auth, muss der Key mit — ohne Key darf
+    aber auch kein leerer Authorization-Header rausgehen (manche Proxys lehnen ab)."""
+    gesehen = []
+
+    class _Resp:
+        def read(self):
+            return json.dumps({"data": [{"index": 0, "embedding": [0.1]}]}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    import urllib.request
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = lambda req, *a, **k: (gesehen.append(req.headers), _Resp())[1]
+    try:
+        _load_embed_funcs()["_embed_http"](["x"])
+        assert "Authorization" not in gesehen[-1]
+        _load_embed_funcs(EMBED_API_KEY="k-123")["_embed_http"](["x"])  # pragma: allowlist secret
+        assert gesehen[-1]["Authorization"] == "Bearer k-123"
+    finally:
+        urllib.request.urlopen = orig
 
 
 def test_embed_http_sortiert_nach_index():

@@ -46,8 +46,9 @@ AI_REM_TIMEOUT = 5
 # AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ❌" im SessionStart-Report.
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_LLAMA_URL",
-    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://myai:11436")),
+    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://mystorage.lan:11437")),
 )
+AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
 
 
 def _header_token():
@@ -473,8 +474,12 @@ def _cli_cmd(cli, *args):
 def check_ollama_and_catchup():
     """llama-server-Reachability; wenn erreichbar, Catch-up der md-Fallback-Queue im
     Hintergrund anstoßen (non-blocking). Nur bei Ausfall sichtbar melden."""
+    # /v1/models statt /health: am LiteLLM-Router feuert /health echte Testcalls
+    # gegen alle Modelle inkl. Kimi. Dieser Check laeuft bei JEDEM SessionStart.
+    hdr = {"Authorization": f"Bearer {AI_REM_LLM_API_KEY}"} if AI_REM_LLM_API_KEY else {}
     try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/health", timeout=2) as r:
+        req = urllib.request.Request(AI_REM_OLLAMA_URL + "/v1/models", headers=hdr)
+        with urllib.request.urlopen(req, timeout=2) as r:
             up = getattr(r, "status", 200) == 200
     except Exception:
         up = False

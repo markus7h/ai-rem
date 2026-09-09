@@ -496,7 +496,7 @@ def write_settings_template(setup_cfg, mcp_endpoint):
         'smb': setup_cfg.get('smb', {}),
         'mcp_stdio_servers': setup_cfg.get('mcp_stdio_servers', {}),
         'tools_scripts_dir': setup_cfg.get('tools_scripts_dir', ''),
-        'ollama_url': setup_cfg.get('ollama_url', 'http://myai:11436'),
+        'ollama_url': setup_cfg.get('ollama_url', 'http://mystorage.lan:11437'),
         'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto',
                     # Plan Mode + Auto Mode: Bash laeuft im Plan Mode ueber den
                     # Auto-Mode-Klassifizierer statt ueber Einzel-Prompts.
@@ -706,6 +706,11 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
         env.setdefault('AI_REM_ENDPOINT', mcp_endpoint)
     if setup_cfg.get('ollama_url'):
         env.setdefault('AI_REM_LLAMA_URL', setup_cfg['ollama_url'])
+    # Zeigt ollama_url auf einen Router (LiteLLM), braucht der Hook dessen Key —
+    # sonst antwortet /v1/models mit 401, der Check meldet "llm ❌" und die
+    # Extraktion faellt still auf die Markdown-Notiz zurueck.
+    if setup_cfg.get('llm_api_key'):
+        env.setdefault('AI_REM_LLM_API_KEY', setup_cfg['llm_api_key'])
 
     def usable_cli(p):
         # X_OK ist auf Windows bedeutungslos; dort ruft der Hook die CLI eh via python auf.
