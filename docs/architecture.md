@@ -19,7 +19,7 @@ flowchart TB
   end
 
   subgraph UBU["myubuntu - 192.168.2.11"]
-    OLLAMA["llama-server (paperless-llama) :11434<br/>mistral-small3.2:24b"]
+    OLLAMA["LiteLLM-Router :11437<br/>qwen (myai/myubuntu) + Kimi-Fallback"]
   end
 
   subgraph STORAGE["mystorage - 192.168.2.15 (Docker)"]
@@ -93,7 +93,7 @@ ruff noch ein Test je gesehen hat. Als Dateien werden sie normal geprüft.
 | Vaultwarden | mystorage | 8222→80 | `https://mykeyvault.lan` (Caddy, alle übrigen Pfade) | Eigentlicher Secrets-Store |
 | tools-registry | mystorage | 3457 | reines HTTP (LAN-only, keine Auth) | Verteilt die Scripts (`/registry`, `/registry/file`) |
 | tools-registry | Mac (lokal) | — | MCP stdio (Node-Prozess) | Registriert Scripts als Tools; pollt den Registry alle 5 s |
-| llama-server | myubuntu | 11434 | HTTP (OpenAI-kompatibel) | Transcript-Extraktion + Nightly-Cleanup-Urteile für ai-rem (Container `paperless-llama`, geteilt mit paperless-ai) |
+| LiteLLM-Router | mystorage | 11437 | HTTP (OpenAI-kompatibel) | Transcript-Extraktion + Nightly-Cleanup-Urteile für ai-rem. Routet auf die GPU-Hosts myai/myubuntu und fällt auf Kimi zurück, wenn beide schlafen (Container `llm-gateway`, geteilt mit doc-graph/case-assist/paperless-ai) |
 | Caddy | mystorage | — | Reverse-Proxy, `tls internal` | Terminiert TLS für alle `*.lan`-Endpunkte |
 
 **Auth:** ai-rem und mykeyvault-mcp teilen sich denselben Bearer-Token (`ai-rem-api-token`, als `MCP_AUTH_TOKEN`); `vault-api` verwendet ihn als `VAULT_API_TOKEN`. Der Token stammt aus Vaultwarden und wird über `vault-api` an die Clients verteilt; ai-rem frischt ihn pro Session im Hintergrund auf.

@@ -13,6 +13,34 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.2.0] – 2026-09-09
+
+### Changed
+- **LLM calls go through a router instead of a single GPU host.** `AI_REM_OLLAMA_URL` /
+  `AI_REM_LLAMA_URL` now default to `http://mystorage:11437` (LiteLLM) instead of
+  `http://myai:11436`, and the model defaults (`AI_REM_LLM_MODEL`, `CLEANUP_LLM_MODEL`)
+  to the model group `qwen` instead of the long-gone `mistral-small3.2:24b`. That GPU host
+  sleeps 23:00–06:00 — exactly when the nightly cleanup and most session-end extractions
+  run — so both silently degraded (review queue / markdown fallback). The router covers
+  the same window with a cloud fallback. Pointing the variables straight at a llama-server
+  still works.
+- **Reachability probes hit `/v1/models`, not `/health`** (`server.py`, `lib/extractor.py`,
+  `hooks/system-check.py`). On the router `/health` is the *admin* endpoint: every call
+  fires real test requests against every configured model, paid cloud model included — on
+  every SessionStart and every cleanup run.
+
+### Added
+- `AI_REM_LLM_API_KEY` and `EMBED_API_KEY` — bearer tokens for the LLM and embedding
+  endpoints. Empty means no `Authorization` header at all, so direct llama-server setups
+  are unaffected. `deploy.sh` pulls the LLM key from mykeyvault (item `litellm ai-rem key`)
+  into the remote `.env`; `scripts/setup.py` writes the setup-config field `llm_api_key`
+  into `~/.claude/settings.json` → `env` for the workstation hooks. Use a virtual key with
+  a budget, never a master key — that file exists on every workstation.
+
+### Fixed
+- `deploy.sh` resolved the vault coordinates twice in two copies of the same 30-line
+  inline Python. One `vault_secret()` helper now, plus a `put_env()` for the `.env` writes.
+
 ## [1.1.0] – 2026-09-07
 
 ### Added
@@ -459,7 +487,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/markus7h/ai-rem/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/markus7h/ai-rem/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/markus7h/ai-rem/compare/v0.9.2...v1.0.0
 [0.9.2]: https://github.com/markus7h/ai-rem/compare/v0.9.1...v0.9.2

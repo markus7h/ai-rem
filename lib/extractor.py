@@ -45,12 +45,20 @@ MAX_CHARS_PER_MSG = 4000
 # Modell wechselt.
 MAX_TOTAL_CHARS = 45_000
 MIN_TRANSCRIPT_CHARS = 500
-# llama-server (OpenAI-kompatibel). AI_REM_OLLAMA_URL bleibt als Alt-Name gültig,
+# LLM-Endpoint (OpenAI-kompatibel). AI_REM_OLLAMA_URL bleibt als Alt-Name gültig,
 # damit bestehende .env weiter funktionieren; /v1 wird in den Calls angehängt.
+#
+# Default ist der LiteLLM-Router auf mystorage. Dieser Hook läuft auf jeder
+# Workstation, und myai schläft 23:00-06:00 — direkt adressiert fiel die
+# Extraktion nachts stumm auf die Markdown-Notiz zurück. Der Router hat für
+# genau den Fall den Kimi-Fallback.
 LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL",
-                           os.environ.get("AI_REM_OLLAMA_URL", "http://myai:11436"))
-# llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
-LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "mistral-small3.2:24b").strip()
+                           os.environ.get("AI_REM_OLLAMA_URL", "http://mystorage:11437"))
+# Der Router verlangt einen Key. Leer = kein Authorization-Header, dann geht es
+# weiter direkt gegen einen llama-server ohne --api-key.
+LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
+# Modellgruppe am Router (zwei GPU-Deployments + Kimi-Fallback), nicht ein Host.
+LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "qwen").strip()
 # Ein 45k-Transcript braucht auf dem 24b-Q4 real ~5 min. Der Hook laeuft detached,
 # die Wartezeit stoert also niemanden — lieber grosszuegig als abgeschnitten.
 LLM_TIMEOUT_S = 900
@@ -195,10 +203,23 @@ def _build_system_prompt(known_names: List[str]) -> str:
     )
 
 
+def _llm_headers() -> dict:
+    h = {"Content-Type": "application/json"}
+    if LLM_API_KEY:
+        h["Authorization"] = f"Bearer {LLM_API_KEY}"
+    return h
+
+
 def _llama_up() -> bool:
-    """Quick reachability probe so we can fall back to md before a slow timeout."""
+    """Quick reachability probe so we can fall back to md before a slow timeout.
+
+    /v1/models statt /health: am LiteLLM-Router ist /health der Admin-Endpoint,
+    der bei jedem Aufruf echte Testcalls gegen alle Modelle feuert — Kimi und
+    damit bezahlten OpenRouter-Traffic eingeschlossen. Bei jedem Session-Ende.
+    """
     try:
-        with urllib.request.urlopen(f"{LLAMA_URL}/health", timeout=3) as r:
+        req = urllib.request.Request(f"{LLAMA_URL}/v1/models", headers=_llm_headers())
+        with urllib.request.urlopen(req, timeout=3) as r:
             return getattr(r, "status", 200) == 200
     except Exception:
         return False
@@ -222,7 +243,7 @@ def call_llm(transcript: str, model: str, system_prompt: str) -> dict:
     req = urllib.request.Request(
         f"{LLAMA_URL}/v1/chat/completions",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=_llm_headers(),
         method="POST",
     )
     try:

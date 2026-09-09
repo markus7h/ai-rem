@@ -19,7 +19,7 @@ Vault). Alle vier werden vom Client-Setup-Skript deployt.
 
 Das eingebaute Markdown-Auto-Memory von Claude Code wird durch einen Transcript-Extraktor ersetzt, der **strukturierte Entities und Relations** in ai-rem schreibt.
 
-**Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → llama-server (`mistral-small3.2:24b` auf `AI_REM_OLLAMA_URL`, OpenAI-kompatibel `/v1/chat/completions`, default `http://myai:11436`) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
+**Ablauf:** `PreCompact`/`SessionEnd`-Hook → `ai-rem ingest --transcript <pfad>` → LLM (Modell `qwen` auf `AI_REM_LLAMA_URL`, OpenAI-kompatibel `/v1/chat/completions`, default `http://mystorage:11437` = LiteLLM-Router) extrahiert JSON → Bulk-Upsert via MCP → Log nach `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, reine stdlib — kein venv nötig, läuft auf jedem `python3 ≥3.8` unter Windows/Linux/macOS):
 
@@ -28,7 +28,7 @@ ai-rem status
 ai-rem search "auto-memory"
 ai-rem show "<name>"   # vollständige, ungekürzte description + extra + relations (via /export)
 ai-rem list --type Decision
-ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2:24b]
+ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen]
 ```
 
 **Anti-Rekursion:** Transcripts unter 500 Zeichen werden übersprungen, `/tmp/ai-rem-ingest.lock` verhindert verschachtelte Läufe.
@@ -47,7 +47,9 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model mistral-small3.2
 
 **Konfigurations-Env:**
 - `AI_REM_ENDPOINT` — MCP-URL (default `http://localhost:3456/mcp`)
-- `AI_REM_LLAMA_URL` (Alt-Name: `AI_REM_OLLAMA_URL`) — llama-server-Basis-URL; das Setup schreibt sie aus `ollama_url` der setup-config nach `~/.claude/settings.json` → `env`, weil die CLI (anders als der Hook) das `settings-template.json` nicht liest (OpenAI-kompatibel, `/v1` wird intern angehängt; Env hat Vorrang, dabei `AI_REM_LLAMA_URL` vor `AI_REM_OLLAMA_URL`; sonst `ollama_url` aus setup-config / settings-template; default `http://myai:11436`); Modell ist fix via `AI_REM_LLM_MODEL` (default `mistral-small3.2:24b`), da llama-server genau ein Modell hostet
+- `AI_REM_LLAMA_URL` (Alt-Name: `AI_REM_OLLAMA_URL`) — LLM-Basis-URL; das Setup schreibt sie aus `ollama_url` der setup-config nach `~/.claude/settings.json` → `env`, weil die CLI (anders als der Hook) das `settings-template.json` nicht liest (OpenAI-kompatibel, `/v1` wird intern angehängt; Env hat Vorrang, dabei `AI_REM_LLAMA_URL` vor `AI_REM_OLLAMA_URL`; sonst `ollama_url` aus setup-config / settings-template; default `http://mystorage:11437` = LiteLLM-Router, der schlafende GPU-Hosts per Kimi-Fallback abfängt); Modell via `AI_REM_LLM_MODEL` (default `qwen` = Modellgruppe am Router)
+- `AI_REM_LLM_API_KEY` — Bearer-Token für den Router. Leer = kein `Authorization`-Header (direkter llama-server ohne `--api-key`). Bitte einen Virtual Key mit Budget, **nicht** den Master-Key: der ist zugleich das Admin-UI-Passwort und diese Datei liegt auf jeder Workstation. Das Setup schreibt ihn aus `llm_api_key` der setup-config nach `~/.claude/settings.json` → `env`.
+- Erreichbarkeits-Probe geht auf `/v1/models`, nicht `/health`: am LiteLLM-Router ist `/health` der Admin-Endpoint und feuert bei jedem Aufruf echte Testcalls gegen *alle* Modelle inklusive Kimi — bei jedem SessionStart bezahlter Traffic
 - `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`). Das Setup trägt hier `~/.local/share/ai-rem/bin/ai-rem` ein, die lokal installierte Kopie. Zeigt der Wert stattdessen in einen Clone auf einem Netzlaufwerk, bricht der Hook bei jedem Session-Ende still mit `ai-rem CLI not found` ab, sobald der Mount hängt — dann `/setup` erneut laufen lassen. Gehört in den `env`-Block von `~/.claude/settings.json`, damit Hooks ihn erben.
 
 ---
@@ -69,7 +71,7 @@ Das Prüf-Alter ist bewusst **nicht** `updated_at`: jedes `memory_add` setzt das
 - `CLEANUP_VERIFY_AFTER_DAYS` — Prüf-Alter, ab dem ein Eintrag vorgeschlagen wird (Default `90`)
 - `CLEANUP_VERIFY_MAX_PER_RUN` — Kandidaten pro Nacht, ältester zuerst (Default `5`; hält Queue und LLM-Last klein)
 
-> **llama-server-Erreichbarkeit:** Der nächtliche Judge braucht einen erreichbaren llama-server unter `AI_REM_OLLAMA_URL`; das beurteilende Modell ist fix via `CLEANUP_LLM_MODEL` (default `mistral-small3.2:24b`). In der mitgelieferten `docker-compose.yml` ist der Default `http://myai:11436` (pro Deployment via `.env` überschreibbar). Ist es nicht gesetzt/erreichbar, läuft der Cleanup trotzdem, schiebt aber jedes mehrdeutige Paar in die Review-Queue statt es automatisch zu beurteilen (`ollama_used=false` im Lauf-Log).
+> **LLM-Erreichbarkeit:** Der nächtliche Judge braucht einen erreichbaren Endpoint unter `AI_REM_OLLAMA_URL`; das beurteilende Modell kommt aus `CLEANUP_LLM_MODEL` (default `qwen`). In der mitgelieferten `docker-compose.yml` ist der Default `http://mystorage:11437` (pro Deployment via `.env` überschreibbar). Ist es nicht gesetzt/erreichbar, läuft der Cleanup trotzdem, schiebt aber jedes mehrdeutige Paar in die Review-Queue statt es automatisch zu beurteilen (`ollama_used=false` im Lauf-Log).
 >
 > **Cleanup-Stunde und Schlafzeitplan:** Der Lauf zieht am Ende auch die fehlenden Embedding-Vektoren nach (`EMBED_URL`). Liegen llama-server oder Embedding-Dienst auf einem Host, der nachts schläft, muss die Cleanup-Stunde **hinter** dessen Aufwachzeit liegen — sonst laufen beide ins Leere: der Judge stumm (`ollama_used=false`), der Backfill mit `No route to host`, und `embed_pending` in `/api/status` bleibt stehen, weil der Nightly-Lauf neben dem Container-Start der einzige Backfill-Trigger ist.
 

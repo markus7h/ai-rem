@@ -72,7 +72,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -2234,6 +2234,10 @@ EMBED_ENABLED = os.getenv("EMBED_ENABLED", "1") != "0"
 # Leer = in-process fastembed. Gesetzt (volle URL inkl. Pfad, z.B.
 # http://myai:11435/v1/embeddings) = externer Dienst, fastembed wird nie geladen.
 EMBED_URL = os.getenv("EMBED_URL", "")
+# Wie AI_REM_LLM_API_KEY, nur fuer den Embedding-Endpoint: zeigt EMBED_URL auf den
+# Router, ist der Key Pflicht; zeigt sie direkt auf einen llama-server, bleibt sie
+# leer und es geht kein Authorization-Header raus.
+EMBED_API_KEY = os.getenv("EMBED_API_KEY", "").strip()
 EMBED_HTTP_MODEL = os.getenv("EMBED_HTTP_MODEL", "bge-m3")
 EMBED_HTTP_TIMEOUT = float(os.getenv("EMBED_HTTP_TIMEOUT", "30"))
 # Laengenbremse vor dem Embedden. fastembed kappt zu lange Texte still bei der
@@ -2313,10 +2317,13 @@ def _embed_http(texts: list[str]) -> list:
     """
     import urllib.error
     import urllib.request
+    headers = {"Content-Type": "application/json"}
+    if EMBED_API_KEY:
+        headers["Authorization"] = f"Bearer {EMBED_API_KEY}"
     req = urllib.request.Request(
         EMBED_URL,
         data=json.dumps({"input": texts, "model": EMBED_HTTP_MODEL}).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=EMBED_HTTP_TIMEOUT) as r:
             data = json.loads(r.read().decode())["data"]
@@ -3519,15 +3526,28 @@ async def api_tool(request: Request) -> JSONResponse:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-# llama-server-Basis-URL (OpenAI-kompatibel) config-aware: Env > setup-config
+# LLM-Basis-URL (OpenAI-kompatibel) config-aware: Env > setup-config
 # 'ollama_url' > Default. Var-Name bleibt AI_REM_OLLAMA_URL für Env-Rückwärts-
 # kompatibilität; /v1 wird in den Calls angehängt.
+#
+# Default ist der LiteLLM-Router auf mystorage, nicht mehr myai direkt. Der
+# direkte Weg fiel mit myais Nachtruhe (23:00-06:00) einfach aus; über den Router
+# greift stattdessen dessen Fallback auf Kimi, und der Verbrauch taucht in der
+# Admin-UI auf. Die alten Ports 11435/11436 bleiben offen — wer zurück will,
+# setzt die Env-Variable.
 AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://myai:11436")
+    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://mystorage:11437")
 )
-# llama-server hostet genau EIN Modell — fester Name (Auto-Pick via /api/ps entfällt).
+# Der Router verlangt einen Key (public_routes ist bei LiteLLM Enterprise-only).
+# Leer lassen, wenn direkt gegen einen llama-server ohne --api-key gefahren wird:
+# dann geht gar kein Authorization-Header raus.
+AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
+# Modellname, den der Router kennt. "qwen" ist die Modellgruppe (zwei Deployments
+# + Kimi-Fallback), nicht ein einzelner Host. Der alte Default
+# "mistral-small3.2:24b" existiert seit 2026-08 nirgends mehr und quittierte am
+# Router mit HTTP 400 "Invalid model name".
 CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
-                          os.getenv("CLEANUP_OLLAMA_MODEL", "mistral-small3.2:24b")).strip()
+                          os.getenv("CLEANUP_OLLAMA_MODEL", "qwen")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "30"))
 # Veraltungs-Check: ab wann ein Infra-Eintrag erneut gegen die Realitaet geprueft gehoert.
@@ -3726,10 +3746,26 @@ def _write_cleanup_log(obj: dict) -> str:
     return os.path.basename(path)
 
 
+def _llm_headers() -> dict:
+    """Header fuer jeden LLM-Call. Frisches dict pro Aufruf, damit urllib es nicht
+    zwischen Requests teilt."""
+    h = {"Content-Type": "application/json"}
+    if AI_REM_LLM_API_KEY:
+        h["Authorization"] = f"Bearer {AI_REM_LLM_API_KEY}"
+    return h
+
+
 def _ollama_up() -> bool:
+    # /v1/models statt /health: am LiteLLM-Router ist /health der ADMIN-Endpoint
+    # und feuert bei jedem Aufruf einen echten Testcall gegen JEDES konfigurierte
+    # Modell — Kimi eingeschlossen. Ein Health-Probe pro Cleanup-Lauf waere damit
+    # bezahlter OpenRouter-Traffic. /v1/models kostet nichts und beantwortet die
+    # einzige Frage, die hier zaehlt: antwortet der Endpoint und nimmt er den Key.
     import urllib.request
     try:
-        with urllib.request.urlopen(AI_REM_OLLAMA_URL + "/health", timeout=3) as r:
+        req = urllib.request.Request(
+            AI_REM_OLLAMA_URL + "/v1/models", headers=_llm_headers())
+        with urllib.request.urlopen(req, timeout=3) as r:
             return getattr(r, "status", 200) == 200
     except Exception:
         return False
@@ -3748,7 +3784,7 @@ def _ollama_chat(system: str, user: str, *, as_json: bool, timeout: int = 60) ->
     try:
         req = urllib.request.Request(
             AI_REM_OLLAMA_URL + "/v1/chat/completions", data=body,
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers=_llm_headers(), method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             env = json.loads(resp.read().decode())
         content = (env.get("choices", [{}])[0]

@@ -114,7 +114,10 @@ Set in the Compose `.env`:
 | `LADYBUG_DB_PATH` | `/data/kg.db` | Database path |
 | `BACKUP_DIR` | `/backups` | Backup files |
 | `MAX_BACKUPS` | `10` | Backups to keep |
-| `AI_REM_OLLAMA_URL` | `http://myai:11436` | llama-server (OpenAI-compatible) for nightly cleanup / extraction |
+| `AI_REM_OLLAMA_URL` | `http://mystorage:11437` | LLM endpoint (OpenAI-compatible) for nightly cleanup / extraction. Defaults to the LiteLLM router rather than a GPU host directly, so a sleeping backend falls back instead of failing |
+| `AI_REM_LLM_API_KEY` | — | Bearer token for that endpoint. Empty = no `Authorization` header |
+| `CLEANUP_LLM_MODEL` | `qwen` | Model name sent to `AI_REM_OLLAMA_URL` |
+| `EMBED_API_KEY` | — | Bearer token for `EMBED_URL`. Empty = no `Authorization` header |
 | `EMBED_URL` | — | Embedding backend. Empty = in-process (fastembed/MiniLM, bundled in `latest`). Set to an OpenAI-compatible `/v1/embeddings` URL to use an external service — required for `-slim` images. Switching backends re-computes all vectors on the next start; if the endpoint is down, entries are stored without a vector and the backfill catches up later |
 | `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |
 | `EMBED_THRESHOLD` | `0.45` / `0.50` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |

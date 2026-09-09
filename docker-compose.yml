@@ -34,11 +34,15 @@ services:
       - PORT=${PORT:-3456}
       - LADYBUG_DB_PATH=/data/kg.db
       - KG_PUBLIC_URL=${KG_PUBLIC_URL:-http://localhost:${PORT:-3456}}
-      # llama-server für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
-      # Default zeigt auf qwen3-14B auf myai; pro Deployment via .env überschreibbar.
-      # (Vorher myubuntu:11434 — dort ist llm-mistral seit 2026-08-04 dauerhaft gestoppt.)
+      # LLM für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
+      # Default ist der LiteLLM-Router auf mystorage, nicht mehr myai direkt: der
+      # Cleanup läuft nachts, myai schläft 23:00-06:00, und der Router hat dafür
+      # den Kimi-Fallback. Pro Deployment via .env überschreibbar.
       # Ohne Erreichbarkeit läuft der Cleanup weiter, schiebt aber unklare Fälle nur in die Review-Queue.
-      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://myai:11436}
+      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://mystorage:11437}
+      # Key für den Router (Virtual Key, nicht der Master-Key). Leer = kein
+      # Authorization-Header, für einen llama-server ohne --api-key.
+      - AI_REM_LLM_API_KEY=${AI_REM_LLM_API_KEY:-}
       - BACKUP_DIR=/backups
       - MAX_BACKUPS=${MAX_BACKUPS:-10}
       # Anzahl gepinnter Routinen, die /discover je Prompt injiziert (Slots,
