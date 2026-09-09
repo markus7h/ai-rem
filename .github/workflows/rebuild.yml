@@ -1,0 +1,66 @@
+name: Weekly Rebuild
+
+# Ohne Rebuild altert :latest mit jedem neuen Debian-CVE weiter, auch wenn sich am
+# Code nichts aendert. Dieser Job baut den neuesten Release-Tag woechentlich neu
+# gegen das aktuelle Basis-Image (inkl. apt-get upgrade aus dem Dockerfile).
+#
+# Bewusst NICHT in docker-publish.yml: der taggt, pruned alte Tags und legt GitHub-
+# Releases an — nichts davon soll ein Cron-Job tun. Und bewusst nur latest/latest-slim:
+# hinter einem Versions-Tag darf sich der Inhalt nicht still aendern.
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'   # montags 04:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # fuer git describe
+
+      - name: Neuesten Release-Tag auschecken
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG=$(git describe --tags --abbrev=0 --match 'v*')
+          git checkout --detach "$TAG"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Rebuild von ${TAG}"
+
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # no-cache: mit Layer-Cache kaeme genau das alte Basis-Image zurueck, das wir
+      # hier loswerden wollen.
+      - name: Build and push (latest)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          no-cache: true
+          tags: magic3arkus/ai-rem:latest
+
+      - name: Build and push (latest-slim)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          no-cache: true
+          build-args: EMBED_BACKEND=external
+          tags: magic3arkus/ai-rem:latest-slim
+
+      - name: Zusammenfassung
+        run: echo "✅ latest + latest-slim aus ${{ steps.tag.outputs.tag }} neu gebaut." >> $GITHUB_STEP_SUMMARY

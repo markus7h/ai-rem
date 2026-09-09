@@ -41,6 +41,23 @@ German).
 - `deploy.sh` resolved the vault coordinates twice in two copies of the same 30-line
   inline Python. One `vault_secret()` helper now, plus a `put_env()` for the `.env` writes.
 
+### Security
+- **~460 fewer CVEs in the image.** The Dockerfile installed `gcc`, which no build ever
+  used — every dependency (`ladybug`, `numpy`, `cryptography`, `pyyaml`, `fastembed`)
+  ships manylinux wheels for amd64 and arm64. Its layer dragged in binutils & friends and
+  accounted for 456 of the 629 OS CVEs a Trivy scan reported on `:latest` and
+  `:latest-slim`. The install step is now a plain `apt-get update && apt-get upgrade`.
+- **`pip` is removed after the install** (`python -m ensurepip` brings it back if needed).
+  Nothing installs packages at runtime, and `pip` was the only Python component with open
+  CVEs — 6 of them, all with a fix available.
+- **Weekly rebuild** (`.github/workflows/rebuild.yml`, Mondays 04:00 UTC + manual
+  dispatch): rebuilds the newest release tag against the current base image and pushes
+  `latest` / `latest-slim` only — version tags keep their content.
+- **CI blocks fixable CRITICAL/HIGH findings.** The `image-smoke` job now runs Trivy with
+  `ignore-unfixed`, so the Debian base CVEs without an upstream patch (currently 3
+  CRITICAL and 51 HIGH in `perl-base` / `util-linux`) don't block PRs, while anything
+  repairable we pull in does.
+
 ## [1.1.0] – 2026-09-07
 
 ### Added

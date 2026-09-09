@@ -117,6 +117,19 @@ jobs:
           AI_REM_ENDPOINT=http://localhost:3456/mcp AI_REM_TOKEN=ci-smoke \
             ./cli-smoke/bin/ai-rem status
 
+      - name: Trivy — fixbare CRITICAL/HIGH blocken
+        # ignore-unfixed ist der Punkt: die Debian-Basis schleppt dauerhaft CVEs
+        # ohne Patch mit (aktuell 3 CRITICAL + 51 HIGH in perl-base/util-linux),
+        # die kein PR aufloesen kann. Das Gate schlaegt an, sobald wir wieder
+        # etwas ins Image ziehen, das sich reparieren LAESST.
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: ai-rem:ci
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
       - name: Cleanup
         if: always()
         run: docker rm -f ai-rem-ci || true

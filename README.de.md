@@ -89,6 +89,11 @@ Vier Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph be
 - Netzwerkzugang zu `<SERVER_IP>:<PORT>`
 - Optional (nur für den tools-Begleit-MCP): git, Node.js ≥ 18 inkl. npm
 
+Das Image enthält weder einen Compiler noch `pip` — jede Abhängigkeit kommt als fertiges
+Wheel, zur Laufzeit wird nichts nachinstalliert. Das entfernt rund 460 CVEs, die der
+Toolchain-Layer mitschleppte. Falls doch mal `pip` im Container gebraucht wird:
+`python -m ensurepip`.
+
 ---
 
 ## Konfiguration
