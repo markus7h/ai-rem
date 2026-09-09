@@ -35,14 +35,22 @@ services:
       - LADYBUG_DB_PATH=/data/kg.db
       - KG_PUBLIC_URL=${KG_PUBLIC_URL:-http://localhost:${PORT:-3456}}
       # LLM für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
+      # ".lan" ist Absicht: laeuft dieser Container auf mystorage selbst, loest der
+      # blanke Name "mystorage" ueber die /etc/hosts des Hosts auf 127.0.1.1 auf —
+      # also auf den Container selbst, Ergebnis "Connection refused". Der
+      # .lan-Name kommt aus dem DNS und zeigt auf die echte Adresse.
       # Default ist der LiteLLM-Router auf mystorage, nicht mehr myai direkt: der
       # Cleanup läuft nachts, myai schläft 23:00-06:00, und der Router hat dafür
       # den Kimi-Fallback. Pro Deployment via .env überschreibbar.
       # Ohne Erreichbarkeit läuft der Cleanup weiter, schiebt aber unklare Fälle nur in die Review-Queue.
-      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://mystorage:11437}
+      - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://mystorage.lan:11437}
       # Key für den Router (Virtual Key, nicht der Master-Key). Leer = kein
       # Authorization-Header, für einen llama-server ohne --api-key.
       - AI_REM_LLM_API_KEY=${AI_REM_LLM_API_KEY:-}
+      # Modellname, den der Endpoint kennt. Am Router eine Modellgruppe; ein
+      # llama-server hostet ohnehin genau ein Modell und ignoriert den Namen.
+      # Ohne diese Zeile blieb eine CLEANUP_LLM_MODEL-Angabe in der .env wirkungslos.
+      - CLEANUP_LLM_MODEL=${CLEANUP_LLM_MODEL:-qwen}
       - BACKUP_DIR=/backups
       - MAX_BACKUPS=${MAX_BACKUPS:-10}
       # Anzahl gepinnter Routinen, die /discover je Prompt injiziert (Slots,
@@ -73,6 +81,9 @@ services:
       # ist neben dem Container-Start der einzige Backfill-Trigger, und er bricht bei
       # unerreichbarem Dienst komplett ab (kein Chunk geschrieben, embed_pending bleibt stehen).
       - EMBED_URL=${EMBED_URL:-}
+      # Bearer-Token fuer EMBED_URL — noetig, wenn dort ein Router mit Auth steht.
+      # Leer = kein Authorization-Header (direkter llama-server ohne --api-key).
+      - EMBED_API_KEY=${EMBED_API_KEY:-}
       - EMBED_HTTP_MODEL=${EMBED_HTTP_MODEL:-bge-m3}
       # Laengenbremse: llama.cpp lehnt zu lange Eingaben mit HTTP 500 ab, statt sie
       # wie fastembed still zu kappen — das riss sonst ganze Backfill-Chunks mit.

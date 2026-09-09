@@ -19,7 +19,7 @@ deployed by the client setup script.
 
 The built-in Claude Code auto-memory (markdown file) is replaced by a transcript extractor that writes **structured entities and relations** into ai-rem.
 
-**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → LLM (model `qwen` on `AI_REM_LLAMA_URL`, OpenAI-compatible `/v1/chat/completions`, default `http://mystorage:11437` = LiteLLM router) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
+**Flow:** `PreCompact` / `SessionEnd` hook → `ai-rem ingest --transcript <path>` → LLM (model `qwen` on `AI_REM_LLAMA_URL`, OpenAI-compatible `/v1/chat/completions`, default `http://mystorage.lan:11437` = LiteLLM router) extracts JSON → bulk-upsert via MCP → log to `~/.claude/auto-memory/<timestamp>.json`.
 
 **CLI** (`bin/ai-rem`, pure stdlib — no venv needed, runs on any `python3 ≥3.8` on Windows/Linux/macOS):
 
@@ -47,7 +47,7 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen]
 
 **Configuration env:**
 - `AI_REM_ENDPOINT` — MCP URL (default `http://localhost:3456/mcp`)
-- `AI_REM_LLAMA_URL` (alt name: `AI_REM_OLLAMA_URL`) — LLM base URL; setup writes it from the setup-config `ollama_url` into `~/.claude/settings.json` → `env`, because the CLI (unlike the hook) does not read `settings-template.json` (OpenAI-compatible, `/v1` appended internally; env wins, `AI_REM_LLAMA_URL` taking precedence; otherwise `ollama_url` from setup-config / settings-template; default `http://mystorage:11437` = LiteLLM router, which covers sleeping GPU hosts with a Kimi fallback); model via `AI_REM_LLM_MODEL` (default `qwen` = model group on the router)
+- `AI_REM_LLAMA_URL` (alt name: `AI_REM_OLLAMA_URL`) — LLM base URL; setup writes it from the setup-config `ollama_url` into `~/.claude/settings.json` → `env`, because the CLI (unlike the hook) does not read `settings-template.json` (OpenAI-compatible, `/v1` appended internally; env wins, `AI_REM_LLAMA_URL` taking precedence; otherwise `ollama_url` from setup-config / settings-template; default `http://mystorage.lan:11437` = LiteLLM router, which covers sleeping GPU hosts with a Kimi fallback); model via `AI_REM_LLM_MODEL` (default `qwen` = model group on the router)
 - `AI_REM_LLM_API_KEY` — bearer token for the router. Empty = no `Authorization` header (direct llama-server without `--api-key`). Use a virtual key with a budget, **not** the master key: it doubles as the admin UI password and this file lives on every workstation. Setup writes it from the setup-config `llm_api_key` into `~/.claude/settings.json` → `env`.
 - The reachability probe hits `/v1/models`, not `/health`: on the LiteLLM router `/health` is the admin endpoint and fires real test calls against *every* model including Kimi — paid traffic on every SessionStart
 - `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`). The setup points this at `~/.local/share/ai-rem/bin/ai-rem`, the locally installed copy. If it points into a clone on a network share instead, the hook aborts silently with `ai-rem CLI not found` on every session end as soon as the mount stalls — rerun `/setup` in that case. Put it in the `env` block of `~/.claude/settings.json` so hooks inherit it.
@@ -71,7 +71,7 @@ The verification age deliberately is **not** `updated_at`: every `memory_add` re
 - `CLEANUP_VERIFY_AFTER_DAYS` — verification age at which an entry is proposed (default `90`)
 - `CLEANUP_VERIFY_MAX_PER_RUN` — candidates per night, oldest first (default `5`; keeps queue and LLM load small)
 
-> **LLM reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable endpoint; the judged model comes from `CLEANUP_LLM_MODEL` (default `qwen`). In the bundled `docker-compose.yml` it defaults to `http://mystorage:11437` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
+> **LLM reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable endpoint; the judged model comes from `CLEANUP_LLM_MODEL` (default `qwen`). In the bundled `docker-compose.yml` it defaults to `http://mystorage.lan:11437` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
 >
 > **Cleanup hour vs. host sleep schedule:** the run also backfills missing embedding vectors at the end (`EMBED_URL`). If the llama-server or the embedding service lives on a host that sleeps at night, the cleanup hour must be set **after** its wake time — otherwise both go nowhere: the judge stays silent (`ollama_used=false`), the backfill fails with `No route to host`, and `embed_pending` in `/api/status` stops going down, because the nightly run is the only backfill trigger besides container start.
 

@@ -496,7 +496,7 @@ def write_settings_template(setup_cfg, mcp_endpoint):
         'smb': setup_cfg.get('smb', {}),
         'mcp_stdio_servers': setup_cfg.get('mcp_stdio_servers', {}),
         'tools_scripts_dir': setup_cfg.get('tools_scripts_dir', ''),
-        'ollama_url': setup_cfg.get('ollama_url', 'http://mystorage:11437'),
+        'ollama_url': setup_cfg.get('ollama_url', 'http://mystorage.lan:11437'),
         'general': {'model': 'opus', 'autoMemoryEnabled': False, 'theme': 'auto',
                     # Plan Mode + Auto Mode: Bash laeuft im Plan Mode ueber den
                     # Auto-Mode-Klassifizierer statt ueber Einzel-Prompts.

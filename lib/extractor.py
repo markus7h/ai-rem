@@ -53,7 +53,7 @@ MIN_TRANSCRIPT_CHARS = 500
 # Extraktion nachts stumm auf die Markdown-Notiz zurück. Der Router hat für
 # genau den Fall den Kimi-Fallback.
 LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL",
-                           os.environ.get("AI_REM_OLLAMA_URL", "http://mystorage:11437"))
+                           os.environ.get("AI_REM_OLLAMA_URL", "http://mystorage.lan:11437"))
 # Der Router verlangt einen Key. Leer = kein Authorization-Header, dann geht es
 # weiter direkt gegen einen llama-server ohne --api-key.
 LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()

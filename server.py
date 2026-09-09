@@ -3536,7 +3536,7 @@ async def api_tool(request: Request) -> JSONResponse:
 # Admin-UI auf. Die alten Ports 11435/11436 bleiben offen — wer zurück will,
 # setzt die Env-Variable.
 AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://mystorage:11437")
+    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://mystorage.lan:11437")
 )
 # Der Router verlangt einen Key (public_routes ist bei LiteLLM Enterprise-only).
 # Leer lassen, wenn direkt gegen einen llama-server ohne --api-key gefahren wird:

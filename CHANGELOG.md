@@ -17,7 +17,7 @@ German).
 
 ### Changed
 - **LLM calls go through a router instead of a single GPU host.** `AI_REM_OLLAMA_URL` /
-  `AI_REM_LLAMA_URL` now default to `http://mystorage:11437` (LiteLLM) instead of
+  `AI_REM_LLAMA_URL` now default to `http://mystorage.lan:11437` (LiteLLM) instead of
   `http://myai:11436`, and the model defaults (`AI_REM_LLM_MODEL`, `CLEANUP_LLM_MODEL`)
   to the model group `qwen` instead of the long-gone `mistral-small3.2:24b`. That GPU host
   sleeps 23:00–06:00 — exactly when the nightly cleanup and most session-end extractions

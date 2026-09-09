@@ -114,7 +114,7 @@ Set in the Compose `.env`:
 | `LADYBUG_DB_PATH` | `/data/kg.db` | Database path |
 | `BACKUP_DIR` | `/backups` | Backup files |
 | `MAX_BACKUPS` | `10` | Backups to keep |
-| `AI_REM_OLLAMA_URL` | `http://mystorage:11437` | LLM endpoint (OpenAI-compatible) for nightly cleanup / extraction. Defaults to the LiteLLM router rather than a GPU host directly, so a sleeping backend falls back instead of failing |
+| `AI_REM_OLLAMA_URL` | `http://mystorage.lan:11437` | LLM endpoint (OpenAI-compatible) for nightly cleanup / extraction. Defaults to the LiteLLM router rather than a GPU host directly, so a sleeping backend falls back instead of failing |
 | `AI_REM_LLM_API_KEY` | — | Bearer token for that endpoint. Empty = no `Authorization` header |
 | `CLEANUP_LLM_MODEL` | `qwen` | Model name sent to `AI_REM_OLLAMA_URL` |
 | `EMBED_API_KEY` | — | Bearer token for `EMBED_URL`. Empty = no `Authorization` header |

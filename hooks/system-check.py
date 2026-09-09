@@ -46,7 +46,7 @@ AI_REM_TIMEOUT = 5
 # AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ❌" im SessionStart-Report.
 AI_REM_OLLAMA_URL = os.environ.get(
     "AI_REM_LLAMA_URL",
-    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://mystorage:11437")),
+    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://mystorage.lan:11437")),
 )
 AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
 

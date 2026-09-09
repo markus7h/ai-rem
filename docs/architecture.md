@@ -6,7 +6,7 @@ Drei zusammengehörige MCP-Systeme für den Claude-Code-Betrieb im LAN:
 - **mykeyvault** — Secrets-Verbund: Vaultwarden als Store, `vault-api` als Token-authentifiziertes REST-Gateway, `mykeyvault-mcp` als MCP-Frontend.
 - **tools-registry** — lokaler MCP-Server, der Scripts als Tools registriert und sie live von einem zentralen HTTP-`tools-registry` bezieht.
 
-Sie spielen so zusammen: Alle HTTP-MCP-Kanäle laufen über **Caddy** (TLS internal, `*.lan`) auf **mystorage**; authentifiziert wird mit **einem gemeinsamen Bearer-Token** (`ai-rem-api-token`), das ursprünglich aus Vaultwarden stammt und über `vault-api` verteilt wird. **llama-server** läuft separat auf **myubuntu** (GPU, Container `paperless-llama`, geteilt mit paperless-ai) und liefert ai-rem die Transcript-Extraktion und die nächtlichen Cleanup-Urteile. **tools-registry** läuft als stdio-Prozess lokal auf dem Mac und synchronisiert seine Scripts per HTTP vom `tools-registry`.
+Sie spielen so zusammen: Alle HTTP-MCP-Kanäle laufen über **Caddy** (TLS internal, `*.lan`) auf **mystorage**; authentifiziert wird mit **einem gemeinsamen Bearer-Token** (`ai-rem-api-token`), das ursprünglich aus Vaultwarden stammt und über `vault-api` verteilt wird. Die LLM-Aufrufe (Transcript-Extraktion, nächtliche Cleanup-Urteile, Embeddings) gehen an den **LiteLLM-Router** auf mystorage, der auf die GPU-Hosts myai/myubuntu verteilt und auf Kimi zurückfällt, wenn beide schlafen. **tools-registry** läuft als stdio-Prozess lokal auf dem Mac und synchronisiert seine Scripts per HTTP vom `tools-registry`.
 
 ```mermaid
 flowchart TB
