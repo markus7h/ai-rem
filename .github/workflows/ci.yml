@@ -122,7 +122,7 @@ jobs:
         # ohne Patch mit (aktuell 3 CRITICAL + 51 HIGH in perl-base/util-linux),
         # die kein PR aufloesen kann. Das Gate schlaegt an, sobald wir wieder
         # etwas ins Image ziehen, das sich reparieren LAESST.
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ai-rem:ci
           scanners: vuln
