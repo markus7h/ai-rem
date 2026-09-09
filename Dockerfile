@@ -2,9 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-    && rm -rf /var/lib/apt/lists/*
+# ponytail: kein gcc — alle Deps liefern manylinux-Wheels (amd64 + arm64), der
+# Compiler lief beim Build nie an. Sein Layer schleppte aber binutils & Co. mit:
+# 456 der 629 CVEs im Image kamen allein daher. Kommt mal eine Dependency ohne
+# Wheel, Multi-Stage bauen (Builder mit gcc, nur site-packages ins finale Image).
+# apt-get upgrade ist die Stelle, an der der woechentliche Rebuild
+# (.github/workflows/rebuild.yml) Debian-Patches einsammelt.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-embed.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
@@ -25,6 +29,11 @@ RUN if [ "$EMBED_BACKEND" = "local" ]; then \
     else \
         echo "EMBED_BACKEND=${EMBED_BACKEND} — fastembed und Modell werden ausgelassen"; \
     fi
+
+# ponytail: pip fliegt raus statt hinterherzupinnen — zur Laufzeit installiert
+# niemand etwas nach, und pip war die einzige Python-Komponente mit offenen CVEs
+# (6 Stueck). Wer im Container doch pip braucht: python -m ensurepip.
+RUN pip uninstall -y pip
 
 COPY server.py .
 COPY setup-config*.json ./

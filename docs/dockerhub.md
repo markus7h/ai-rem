@@ -96,6 +96,7 @@ python3 migrate.py import --url http://localhost:3456 --in dump.json
 - **Auto-Memory** — a session-end hook extracts structured entities/relations from each transcript via llama-server (with an offline md-fallback + catch-up).
 - **Nightly cleanup** — non-destructive dedup/archive (never deletes; preferences & pinned untouched), ambiguous cases go to a review queue.
 - **Plan saving** — finalized plans become open `Task`s, a central cross-machine to-do list.
+- **Slim attack surface** — no compiler and no `pip` in the image (wheels only, nothing installed at runtime); rebuilt weekly against the current base image.
 
 ([Hooks & automation](https://github.com/markus7h/ai-rem/blob/main/docs/hooks-and-automation.md))
 

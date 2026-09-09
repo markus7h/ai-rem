@@ -90,6 +90,10 @@ Four Claude Code hooks — all deployed by the client setup — keep the graph f
 - Network access to `<SERVER_IP>:<PORT>`
 - Optional (only for the `tools` companion MCP): git, Node.js ≥ 18 incl. npm
 
+The image ships without a compiler and without `pip` — every dependency installs from a
+prebuilt wheel, and nothing is installed at runtime. That removes ~460 CVEs the toolchain
+layer used to drag in. If you ever need `pip` inside the container: `python -m ensurepip`.
+
 ---
 
 ## Configuration
