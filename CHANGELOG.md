@@ -542,7 +542,7 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.2...HEAD
 [1.2.2]: https://github.com/markus7h/ai-rem/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/markus7h/ai-rem/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/markus7h/ai-rem/compare/v1.1.0...v1.2.0
