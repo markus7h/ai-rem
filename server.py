@@ -72,7 +72,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -197,7 +197,9 @@ def _pkg_text(rel: str) -> str:
     der Start sofort statt erst beim ersten Request.
     """
     with open(os.path.join(_PKG_DIR, *rel.split("/")), encoding="utf-8") as f:
-        return f.read()
+        # ponytail: eine zentrale Ersetzung statt einer pro Render-Route. Nur die
+        # HTML-Templates tragen den Platzhalter, Hooks und Setup nicht.
+        return f.read().replace("__VERSION__", VERSION)
 
 
 SYSTEM_CHECK_PY = _pkg_text("hooks/system-check.py")
@@ -1475,7 +1477,7 @@ async def logout_route(request: Request) -> Response:
 
 @mcp.custom_route("/ui", methods=["GET"])
 async def ui_route(request: Request) -> Response:
-    return Response(content=_UI_HTML.replace("__VERSION__", VERSION), media_type="text/html")
+    return Response(content=_UI_HTML, media_type="text/html")
 
 
 @mcp.custom_route("/install", methods=["GET"])

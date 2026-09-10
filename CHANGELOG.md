@@ -13,6 +13,21 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.2.2] – 2026-09-10
+
+### Changed
+- **Every Web UI page shows the running server version.** It used to sit only in the
+  dashboard subtitle, so on `/browse`, `/tasks`, `/graph`, `/prefs`, `/cleanup`, `/logs`
+  and `/install` there was no way to tell which build was answering — the question
+  "did the client pick up the latest hooks?" needed a shell and a diff instead of a
+  glance at the browser. The version now sits at the right end of the shared header
+  navigation on all eight pages and is gone from the dashboard subtitle (it would
+  otherwise appear twice there).
+- **`_pkg_text()` substitutes `__VERSION__` while loading a template**, instead of each
+  render route doing its own `.replace()`. One place to change, and a new page picks the
+  version up by writing the placeholder. Hooks and setup scripts carry no such
+  placeholder, so the substitution only ever touches HTML.
+
 ## [1.2.1] – 2026-09-10
 
 ### Fixed

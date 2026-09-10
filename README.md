@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.2.1](https://github.com/markus7h/ai-rem/releases/tag/v1.2.1)**.
+> This documentation describes **[v1.2.2](https://github.com/markus7h/ai-rem/releases/tag/v1.2.2)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -57,7 +57,7 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 
 | URL | Function |
 |---|---|
-| `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`); also OKF bundle import; header shows the server version |
+| `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`); also OKF bundle import |
 | `/browse` | Interactive content browser: search and filter by type, toggle archived, expand an entry for description, extra and relations; imported entries are badged; the list loads 20 entries at a time |
 | `/tasks` | Task list: status and project per row, "open only" filter (default on), toggle archived, search across name, description and project; archive a task in place — it leaves the session context but stays in the DB. Paginated in steps of 20. |
 | `/graph` | Node-link visualization (vis-network): nodes colored by type, edges labeled by relation; filter by context (work / private / global) and toggle entity types via the legend; physics and archived toggles; "connected only" pins the clicked node plus its neighbors up to an adjustable distance (1, 2 … n; single-click shows info, double-click re-anchors) |
@@ -65,6 +65,8 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 | `/cleanup` | Nightly cleanup: config, manual run, pending reviews, run log; plus archive purge (permanently delete archived entries, optionally keeping the last *X* days) |
 | `/logs` | Server log without shell access: level filter, substring search, optional 5s auto-refresh, download as text. Fed by an in-memory ring buffer (last `AI_REM_LOG_RING`, default 500 lines) — so it only covers the time since the last container restart. Bearer tokens are redacted. |
 | `/install` | Client setup commands per platform (bash / PowerShell) with copy buttons, incl. step-by-step SSH key guide — public, for onboarding new machines |
+
+Every page shows the running server version at the right end of the navigation.
 
 **Interop (OKF).** ai-rem speaks the [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/) v0.1: `/export/okf` downloads the whole graph as a Markdown+YAML bundle (ZIP), `/api/import/okf` reads one back in. Own exports carry `source: ai-rem` so a round-trip stays untagged, while foreign entries are marked `imported` and indexed for semantic search on import.
 
