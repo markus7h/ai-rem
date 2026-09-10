@@ -211,7 +211,7 @@ def main():
         if proc.returncode != 0:
             _log_error(
                 f"{hook_event} session={session_id} rc={proc.returncode} "
-                f"stderr={proc.stderr.strip()[:500]}"
+                f"stderr={proc.stderr.strip()[:2000]}"
             )
             return
     except subprocess.TimeoutExpired:

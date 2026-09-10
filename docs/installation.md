@@ -29,6 +29,8 @@ The script automatically handles:
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`. The script is idempotent — running it multiple times on the same machine is safe.
 
+**Always run it through the server URL, not from a clone.** `scripts/setup.py` carries `KG_URL` as a placeholder that `server.py` substitutes when serving the file. Started straight out of a checkout the placeholder survives, and step 1 registers a literal `__KG_URL__/mcp` in `~/.claude.json` — the MCP server then never connects (`INVALID_CONFIG: 'url' is not a valid URL`). The script now refuses to run in that state (exit 2). To test it from a clone anyway, set `KG_URL` in the environment.
+
 ## Files
 
 ```

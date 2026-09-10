@@ -16,7 +16,7 @@ import tempfile
 import urllib.error
 import urllib.request
 
-KG_URL = '__KG_URL__'
+KG_URL = os.environ.get('KG_URL') or '__KG_URL__'
 HOME = os.path.expanduser('~')
 _CC = os.environ.get('CLAUDE_CONFIG_DIR', '').strip()
 # ponytail: nimmt bei Doppelpunkt-Liste (mehrere Config-Dirs) das erste; reicht fuer den Normalfall
@@ -875,6 +875,15 @@ def create_entities(setup_cfg, ai_rem_token):
 
 def main():
     print('=== ai-rem Setup (%s) ===' % PLATFORM)
+    # ponytail: KG_URL wird erst beim Ausliefern ersetzt (server.py). Aus einem
+    # lokalen Checkout gestartet bliebe der Platzhalter stehen und landete als
+    # kaputte MCP-URL in ~/.claude.json. Lieber hier abbrechen als still falsch
+    # konfigurieren. Lokal testen: KG_URL per Env ueberschreiben.
+    if KG_URL.startswith('__'):
+        sys.stderr.write(
+            'ai-rem: KG_URL ist ein nicht ersetzter Platzhalter (%s).\n'
+            'Setup ueber den Server starten: bash <(curl -s <kg-url>/setup)\n' % KG_URL)
+        sys.exit(2)
     claude = find_claude()
     register_mcp(claude)
 

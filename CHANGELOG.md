@@ -13,6 +13,29 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.2.1] – 2026-09-10
+
+### Fixed
+- **`Auto-Memory ❌ gestört` no longer sticks after a single transient failure**
+  (`hooks/system-check.py`). The check compared mtimes only: one error newer than
+  `last-run.json` raised the alarm and kept it up until some session happened to end
+  successfully. Two failed ingests during a container rebuild were enough to leave the
+  warning standing for a day with nothing actually broken — the third false alarm of this
+  kind. `_auto_memory_fault()` now counts the timestamped `errors.log` lines written after
+  the last success (new `_errors_since()` helper) and only reports from the second one on.
+  Traceback continuation lines carry no timestamp and are not counted.
+- **`scripts/setup.py` refuses to run with an unsubstituted `KG_URL`.** The placeholder is
+  replaced by `server.py` when the file is served; started from a local checkout it survived
+  and `claude mcp add` registered a literal `__KG_URL__/mcp` in `~/.claude.json`, so the MCP
+  server never connected (`INVALID_CONFIG: 'url' is not a valid URL`). The hook did not
+  notice because it uses `$AI_REM_ENDPOINT`. Now exits 2 with a pointer to the server URL;
+  set `KG_URL` in the environment to run it from a clone anyway.
+
+### Changed
+- **Failed ingests log 2000 instead of 500 characters of stderr** (`hooks/auto-memory.py`).
+  The cut fell exactly where the traceback names the error, which made the failures above
+  undiagnosable after the fact.
+
 ## [1.2.0] – 2026-09-09
 
 ### Changed
@@ -504,7 +527,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/markus7h/ai-rem/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/markus7h/ai-rem/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/markus7h/ai-rem/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/markus7h/ai-rem/compare/v0.9.2...v1.0.0
