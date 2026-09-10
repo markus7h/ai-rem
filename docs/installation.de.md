@@ -29,6 +29,8 @@ Das Skript erledigt automatisch:
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`. Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
 
+**Immer über die Server-URL starten, nie aus einem Clone.** `scripts/setup.py` trägt `KG_URL` als Platzhalter, den `server.py` beim Ausliefern ersetzt. Direkt aus einem Checkout gestartet bleibt der Platzhalter stehen, und Schritt 1 registriert wörtlich `__KG_URL__/mcp` in `~/.claude.json` — der MCP-Server verbindet sich dann nie (`INVALID_CONFIG: 'url' is not a valid URL`). Das Skript bricht in diesem Zustand jetzt ab (Exit 2). Zum Testen aus einem Clone `KG_URL` in der Umgebung setzen.
+
 ## Dateien
 
 ```

@@ -495,6 +495,24 @@ def check_ollama_and_catchup():
             pass
 
 
+def _errors_since(lines, since_ts):
+    """Zaehlt errors.log-Zeilen, die nach since_ts geschrieben wurden.
+
+    Format je Zeile: "2026-09-09T23:21:45\tmeldung". Fortsetzungszeilen eines
+    Tracebacks haben keinen Zeitstempel und zaehlen darum nicht mit.
+    """
+    n = 0
+    for line in lines:
+        stamp = line.split("\t", 1)[0].strip()
+        try:
+            ts = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            continue
+        if ts > since_ts:
+            n += 1
+    return n
+
+
 def _auto_memory_fault(base):
     """Erkennt, ob das Auto-Memory gestoert ist. Leerer String = alles gut.
 
@@ -512,11 +530,15 @@ def _auto_memory_fault(base):
     try:
         last_err = os.path.getmtime(err_path)
         with open(err_path, encoding="utf-8", errors="replace") as f:
-            tail = f.readlines()[-1].strip()
+            lines = f.readlines()
+        tail = lines[-1].strip()
     except (OSError, IndexError):
-        last_err, tail = 0, ""
+        last_err, tail, lines = 0, "", []
 
-    if last_err > last_ok:
+    # ponytail: ein einzelner Fehlschlag ist meist transient (Router-Neustart,
+    # Container-Rebuild) und der naechste Ingest raeumt ihn weg. Nur nach dem
+    # zweiten Fehler ohne Erfolg dazwischen ist wirklich etwas kaputt.
+    if last_err > last_ok and _errors_since(lines, last_ok) > 1:
         hint = ""
         if "CLI not found" in tail:
             hint = " → $AI_REM_CLI im env-Block von ~/.claude/settings.json setzen."
