@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.2.2](https://github.com/markus7h/ai-rem/releases/tag/v1.2.2)**.
+> Diese Dokumentation bezieht sich auf **[v1.2.3](https://github.com/markus7h/ai-rem/releases/tag/v1.2.3)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -125,6 +125,7 @@ EMBED_HTTP_MODEL=bge-m3                  # Modellname, der an EMBED_URL geschick
 EMBED_THRESHOLD=                         # Cosine-Schwelle; leer = Default je Backend (0.45 in-process, 0.50 extern)
 EMBED_MAX_CHARS=2000                     # Text vor dem Embedden kappen (llama.cpp lehnt zu lange Eingaben ab, statt zu kürzen)
 AI_REM_TAG=latest                        # latest (Modell im Image) oder latest-slim (~250 MB kleiner, braucht EMBED_URL)
+EMBED_BACKEND=local                      # Nur beim lokalen Bauen: muss zu AI_REM_TAG passen (local = :latest, external = :latest-slim)
 MEM_LIMIT=1536m                          # Speicherlimit des Containers; ohne Modell genügen 512m
 ```
 

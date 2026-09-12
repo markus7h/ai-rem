@@ -3,7 +3,16 @@ services:
     # :latest bringt das in-process Embedding-Modell mit (laeuft ohne externen
     # Dienst). :latest-slim ist ~250 MB kleiner und setzt EMBED_URL voraus.
     image: magic3arkus/ai-rem:${AI_REM_TAG:-latest}
-    build: .
+    build:
+      context: .
+      args:
+        # Muss zum Tag darueber passen. `compose up --build` ueberschreibt das gezogene
+        # Image mit dem lokalen Build und behaelt dessen Tag-Namen — ohne dieses arg griff
+        # der Dockerfile-Default (local), und jedes Deploy taggte die volle Variante als
+        # latest-slim: 382 MB fastembed + Modell im Image, die bei gesetztem EMBED_URL nie
+        # jemand benutzt. Faellt nicht auf, weil es funktional nichts kaputt macht.
+        # deploy.sh leitet den Wert aus AI_REM_TAG ab, damit beide nicht auseinanderlaufen.
+        EMBED_BACKEND: ${EMBED_BACKEND:-local}
     container_name: ai-rem
     networks:
       default:
