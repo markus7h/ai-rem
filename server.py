@@ -1475,6 +1475,19 @@ async def logout_route(request: Request) -> Response:
     return resp
 
 
+@mcp.custom_route("/", methods=["GET"])
+async def root_route(request: Request) -> Response:
+    """/ auf das Dashboard schicken.
+
+    Das Logo in der Navigation verlinkt auf "/" (seit #109 auf allen Seiten), und
+    "https://airem.lan" ist der natuerliche Einstieg im Browser — beides lief ins
+    Leere, weil das Dashboard nur unter /ui haengt und es nie eine Root-Route gab.
+    Von einer Unterseite kam man damit per Logo nicht mehr zurueck aufs Dashboard,
+    wo Backup und Restore sitzen. Hinter der Auth, wie /ui: ohne Session weiterhin 401.
+    """
+    return RedirectResponse("/ui", status_code=302)
+
+
 @mcp.custom_route("/ui", methods=["GET"])
 async def ui_route(request: Request) -> Response:
     return Response(content=_UI_HTML, media_type="text/html")
@@ -1511,7 +1524,7 @@ async def api_status(request: Request) -> JSONResponse:
                          # Macht den Kuzu-Bloat sichtbar, bevor er die Platte füllt:
                          # steigt db_mb über KG_REBUILD_MB, kompaktiert der nächste
                          # Start; über KG_MAX_MB schreibt der Backfill nicht mehr.
-                         "db_mb": round(_db_size_mb(), 1),
+                         "db_mb": round(_db_size_mb(), 1), "db_start_mb": DB_START_MB,
                          "db_rebuild_mb": KG_REBUILD_MB, "db_max_mb": KG_MAX_MB})
 
 
@@ -4186,6 +4199,15 @@ if _db_size_mb() > KG_REBUILD_MB:
 # es gut eine Minute, dafür ist der Graph danach vollständig durchsuchbar.
 _warn_if_no_embed_backend()
 _embed_backfill(alle=True)
+
+# Groesse, mit der der Dienst ansprechbar wird — bewusst HIER gemessen und nicht
+# weiter oben: ein Rebuild hat bis hierher kompaktiert und der Backfill seine
+# Vektoren geschrieben, beides gehoert noch zum Start. Gegen db_mb im Dashboard
+# gehalten zeigt der Wert, ob die DB im *Betrieb* waechst — das Symptom, das in
+# der Kuzu-Zeit tagelang unbemerkt blieb.
+DB_START_MB = round(_db_size_mb(), 1)
+log.info("kg.db beim Start: %.1f MB (Rebuild ab %.0f, Backfill-Stopp ab %.0f)",
+         DB_START_MB, KG_REBUILD_MB, KG_MAX_MB)
 
 
 # ─── auth ─────────────────────────────────────────────────────────────────────

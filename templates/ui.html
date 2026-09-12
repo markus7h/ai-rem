@@ -65,7 +65,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <span style="color:var(--muted);font-size:12px">v__VERSION__</span>
 </nav>
 </header>
-<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations<span id="ep"></span></p>
+<p class="sub">Knowledge Graph Memory &nbsp;·&nbsp; <span id="ec">—</span> entities &nbsp;·&nbsp; <span id="rc">—</span> relations&nbsp;·&nbsp; <span id="db">—</span><span id="ep"></span></p>
 <div class="grid">
 
   <div class="card">
@@ -135,6 +135,17 @@ async function loadStatus(){
   // den WAL-Checkpoint nicht (Buffer-Pool zu klein).
   document.getElementById('ep').textContent=
     (r.embed_enabled&&r.embed_pending>0)?` · ❌ ${r.embed_pending} ohne Vektor`:'';
+  // Start-Groesse ist der Normalfall; weicht die aktuelle ab, beide zeigen — sonst
+  // sieht man dem Wert nicht an, ob die DB im Betrieb waechst.
+  const db=document.getElementById('db');
+  if(r.db_start_mb==null){db.textContent='—';}
+  else{
+    db.textContent=(r.db_mb!=null&&Math.abs(r.db_mb-r.db_start_mb)>=0.1)
+      ?`${r.db_start_mb} → ${r.db_mb} MB`:`${r.db_start_mb} MB`;
+    db.title=`kg.db beim Start: ${r.db_start_mb} MB`
+      +(r.db_mb!=null?` · jetzt: ${r.db_mb} MB`:'')
+      +` · Rebuild ab ${r.db_rebuild_mb} MB · Backfill-Stopp ab ${r.db_max_mb} MB`;
+  }
   if(r.last_backup){
     document.getElementById('lb').textContent='Last backup: '+new Date(r.last_backup).toLocaleString();
   }

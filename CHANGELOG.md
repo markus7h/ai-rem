@@ -15,6 +15,21 @@ German).
 
 ## [Unreleased]
 
+### Added
+- **The dashboard shows how large kg.db was at startup.** `/api/status` gained
+  `db_start_mb`, measured once the service is ready — after a rebuild has compacted and
+  the embedding backfill has written its vectors, both of which still belong to the
+  start. The dashboard prints that figure, and as soon as the current size drifts from
+  it, both (`40 → 41.2 MB`). A single size says nothing about whether the DB grows *while
+  running*, which is the symptom that went unnoticed for days in the Kuzu era.
+
+### Fixed
+- **`/` reaches the dashboard again instead of 404.** The logo in the navigation links to
+  `/` on every page, and `https://airem.lan` is the natural entry point in a browser, but
+  the dashboard only ever existed at `/ui` and no root route was ever defined. From any
+  subpage the logo therefore led nowhere — and with it the only route back to backup and
+  restore, which live on the dashboard. `/` now redirects to `/ui`, behind the same auth.
+
 ### Changed
 - **The container restarts with `unless-stopped` instead of `on-failure:5`.** A reboot
   stops the container gracefully, so it exits 0 — which is not a failure, so Docker never
