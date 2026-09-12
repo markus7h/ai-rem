@@ -13,6 +13,18 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Changed
+- **The container restarts with `unless-stopped` instead of `on-failure:5`.** A reboot
+  stops the container gracefully, so it exits 0 — which is not a failure, so Docker never
+  brought it back. After a host restart ai-rem was the only service still down while every
+  neighbouring container came back up, and the reverse proxy answered 502 into the void.
+  The old policy dated from the Kuzu era, when a segfault in the WAL checkpoint caused 264
+  restarts and grew kg.db to 27 GB; that trigger is gone since the move to LadybugDB,
+  while the cost of the policy had become concrete. The remaining guards from that era —
+  `KG_MAX_MB`, `KG_MIN_FREE_MB`, `KG_REBUILD_MB` and `MEM_LIMIT` — are unchanged.
+
 ## [1.2.2] – 2026-09-10
 
 ### Changed
