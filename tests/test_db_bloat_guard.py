@@ -112,6 +112,34 @@ def _scenario_rebuild() -> None:
     print("OK")
 
 
+def _scenario_start_mb() -> None:
+    """DB_START_MB friert die Groesse beim Start ein und wandert im Betrieb nicht mit.
+
+    Nur im Vergleich zu db_mb sagt der Wert etwas aus: laeuft db_mb davon, waechst
+    die DB im laufenden Betrieb — genau das Symptom, das in der Kuzu-Zeit tagelang
+    unbemerkt blieb. Wuerde db_start_mb einfach neu gemessen, waeren beide immer
+    gleich und die Anzeige wertlos.
+    """
+    import asyncio
+    import json
+
+    server = _server("ai-rem-startmb-")
+    start = server.DB_START_MB
+    assert isinstance(start, float), f"DB_START_MB nicht gesetzt: {start!r}"
+
+    # Betrieb laesst die DB wachsen — gestubbt statt echt, sonst haengt der Test
+    # daran, ob ein paar Entities die Datei messbar groesser machen.
+    server._db_size_mb = lambda: start + 100
+
+    r = json.loads(asyncio.run(server.api_status(None)).body)
+    assert r["db_start_mb"] == start, f"Start-Wert wandert mit: {r['db_start_mb']} != {start}"
+    assert r["db_mb"] == round(start + 100, 1), f"db_mb folgt nicht der Realitaet: {r['db_mb']}"
+    assert r["db_rebuild_mb"] == server.KG_REBUILD_MB
+    assert r["db_max_mb"] == server.KG_MAX_MB
+
+    print("OK")
+
+
 def _lauf(szenario):
     r = subprocess.run(
         [sys.executable, __file__, szenario],
@@ -130,8 +158,15 @@ def test_rebuild_erhaelt_graph_und_laesst_db_benutzbar():
     _lauf("rebuild")
 
 
+def test_db_start_mb_friert_startgroesse_ein():
+    _lauf("start_mb")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "rebuild":
+    arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    if arg == "rebuild":
         _scenario_rebuild()
+    elif arg == "start_mb":
+        _scenario_start_mb()
     else:
         _scenario_guard()

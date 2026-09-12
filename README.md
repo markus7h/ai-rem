@@ -57,7 +57,8 @@ ai-rem **lazy-loads** only the relevant subgraph on demand instead of carrying e
 
 | URL | Function |
 |---|---|
-| `/ui` | Backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`); also OKF bundle import |
+| `/` | Redirects to `/ui` — the logo in the navigation links here, and it is the natural entry point in a browser |
+| `/ui` | Dashboard: entity/relation counts, kg.db size at startup, backup management: manual, schedule, download, restore (export v2 round-trips `pinned`/`sort_order`/`archived`); also OKF bundle import |
 | `/browse` | Interactive content browser: search and filter by type, toggle archived, expand an entry for description, extra and relations; imported entries are badged; the list loads 20 entries at a time |
 | `/tasks` | Task list: status and project per row, "open only" filter (default on), toggle archived, search across name, description and project; archive a task in place — it leaves the session context but stays in the DB. Paginated in steps of 20. |
 | `/graph` | Node-link visualization (vis-network): nodes colored by type, edges labeled by relation; filter by context (work / private / global) and toggle entity types via the legend; physics and archived toggles; "connected only" pins the clicked node plus its neighbors up to an adjustable distance (1, 2 … n; single-click shows info, double-click re-anchors) |
@@ -200,7 +201,11 @@ built for the Kuzu era stay in place for now — they simply never trigger:
   (dump → fresh DB → import). The dump is written to `BACKUP_DIR` as a regular backup
   first; if that fails, the old DB is left untouched.
 
-The current size is exposed as `db_mb` in `/api/status`, along with both thresholds.
+The current size is exposed as `db_mb` in `/api/status`, along with both thresholds and
+`db_start_mb` — the size the service came up with. The dashboard shows the startup size,
+and as soon as the current one drifts from it, both (`40 → 41.2 MB`): on its own a size
+tells you nothing about whether the DB is growing *while running*, which is the symptom
+that went unnoticed for days in the Kuzu era.
 
 The one guard that did *not* stay is `restart: on-failure:5`. It was dropped on
 2026-09-12 for **`restart: unless-stopped`**: a reboot stops the container gracefully

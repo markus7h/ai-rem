@@ -56,7 +56,8 @@ ai-rem **lädt bedarfsweise** nur den relevanten Subgraph, statt alles über die
 
 | URL | Funktion |
 |---|---|
-| `/ui` | Backup-Verwaltung: manuell, Schedule, Download, Restore (Export v2 erhält `pinned`/`sort_order`/`archived`); zusätzlich OKF-Bundle-Import |
+| `/` | Leitet auf `/ui` weiter — das Logo in der Navigation verlinkt hierher, und im Browser ist es der natürliche Einstieg |
+| `/ui` | Dashboard: Entity-/Relationen-Zähler, kg.db-Größe beim Start, Backup-Verwaltung: manuell, Schedule, Download, Restore (Export v2 erhält `pinned`/`sort_order`/`archived`); zusätzlich OKF-Bundle-Import |
 | `/browse` | Interaktiver Inhalts-Browser: Suche und Typ-Filter, archivierte ein-/ausblenden, Eintrag aufklappen für Beschreibung, Extra und Relationen; importierte Einträge sind gebadged; die Liste lädt 20 Einträge auf einmal |
 | `/tasks` | Task-Liste: Status und Projekt pro Zeile, Filter „nur offene" (default an), archivierte ein-/ausblenden, Suche über Name, Beschreibung und Projekt; Task direkt archivieren — er verlässt den Session-Kontext, bleibt aber in der DB. Seitenweise in 20er-Schritten. |
 | `/graph` | Node-Link-Visualisierung (vis-network): Knoten nach Typ eingefärbt, Kanten mit Relationsnamen; Filter nach Kontext (work / privat / global) und Typ-Toggle über die Legende; Physik- und Archiv-Toggle; „nur Verbundene" fixiert den angeklickten Knoten samt Nachbarn bis zur einstellbaren Distanz (1, 2 … n; Einfachklick zeigt Info, Doppelklick setzt den Anker um) |
@@ -201,7 +202,11 @@ mehr:
   selbst (Dump → frische DB → Import). Der Dump landet vorher als reguläres Backup im
   `BACKUP_DIR`; schlägt er fehl, bleibt die alte DB unangetastet.
 
-Die aktuelle Größe steht als `db_mb` in `/api/status`, zusammen mit beiden Schwellen.
+Die aktuelle Größe steht als `db_mb` in `/api/status`, zusammen mit beiden Schwellen und
+`db_start_mb` — der Größe, mit der der Dienst hochkam. Das Dashboard zeigt die
+Start-Größe, und sobald die aktuelle abweicht, beide (`40 → 41.2 MB`): eine Größe allein
+sagt nichts darüber, ob die DB im *laufenden Betrieb* wächst — genau das Symptom, das in
+der Kuzu-Zeit tagelang unbemerkt blieb.
 
 Die einzige Maßnahme, die *nicht* geblieben ist, ist `restart: on-failure:5`. Sie wich am
 12.09.2026 dem **`restart: unless-stopped`**: ein Reboot stoppt den Container geordnet
