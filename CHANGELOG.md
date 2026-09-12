@@ -13,7 +13,7 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [1.2.3] – 2026-09-12
 
 ### Added
 - **The dashboard shows how large kg.db was at startup.** `/api/status` gained
@@ -24,6 +24,16 @@ German).
   running*, which is the symptom that went unnoticed for days in the Kuzu era.
 
 ### Fixed
+- **`:latest-slim` now actually contains the slim image.** `docker-compose.yml` declares
+  both `image:` and `build:`, so `docker compose up --build` overwrites the pulled image
+  with the local build and keeps the tag name. Without a matching build arg that build
+  fell back to the Dockerfile default (`EMBED_BACKEND=local`), so every deploy baked
+  fastembed and its model into the image and published it under `latest-slim` — 382 MB
+  that a container with `EMBED_URL` set never touches. Nothing broke, which is why it
+  went unnoticed since the tag was introduced. `docker-compose.yml` now passes
+  `EMBED_BACKEND` through to the build and `deploy.sh` derives it from `AI_REM_TAG`, so
+  the two cannot drift apart. The Docker Hub images were never affected — both workflows
+  always passed the arg. Rebuilt on the server: 696 MB → 314 MB.
 - **`/` reaches the dashboard again instead of 404.** The logo in the navigation links to
   `/` on every page, and `https://airem.lan` is the natural entry point in a browser, but
   the dashboard only ever existed at `/ui` and no root route was ever defined. From any
@@ -569,7 +579,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/markus7h/ai-rem/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/markus7h/ai-rem/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/markus7h/ai-rem/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/markus7h/ai-rem/compare/v1.1.0...v1.2.0

@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.2.2](https://github.com/markus7h/ai-rem/releases/tag/v1.2.2)**.
+> This documentation describes **[v1.2.3](https://github.com/markus7h/ai-rem/releases/tag/v1.2.3)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -127,6 +127,7 @@ EMBED_HTTP_MODEL=bge-m3                   # Model name sent to EMBED_URL
 EMBED_THRESHOLD=                          # Cosine cut-off; empty = per-backend default (0.45 in-process, 0.50 external)
 EMBED_MAX_CHARS=2000                      # Truncate input before embedding (llama.cpp rejects oversized input instead of truncating)
 AI_REM_TAG=latest                         # latest (bundled embedding model) or latest-slim (~250 MB smaller, requires EMBED_URL)
+EMBED_BACKEND=local                       # Only when building locally: must match AI_REM_TAG (local = :latest, external = :latest-slim)
 MEM_LIMIT=1536m                           # Container memory limit; 512m is enough without the bundled model
 ```
 
