@@ -10,13 +10,18 @@ services:
         # Feste Adresse, damit der Reverse-Proxy den Container direkt
         # adressieren kann (Host-ID = Port, nur zur Lesbarkeit).
         ipv6_address: fd00:24:9:68:19::3456
-    # on-failure (nicht unless-stopped): ein Crash-Loop muss enden. Am 03.09.2026
-    # segfaultete Kuzu im 60s-WAL-Checkpoint, `unless-stopped` startete den Container
-    # 264× neu, und jeder Start schrieb per Embedding-Backfill alle Vektoren erneut in
-    # eine DB, die Speicher nie zurückgibt — kg.db wuchs auf 27 GB und füllte die
-    # Partition samt Nachbar-Containern. Nach 5 Fehlversuchen bleibt er jetzt unten
-    # (Docker setzt den Zähler zurück, sobald er wieder länger läuft).
-    restart: on-failure:5
+    # Warnung aus der Kuzu-Zeit, bitte stehen lassen: am 03.09.2026 segfaultete Kuzu im
+    # 60s-WAL-Checkpoint, `unless-stopped` startete den Container 264× neu, und jeder
+    # Start schrieb per Embedding-Backfill alle Vektoren erneut in eine DB, die Speicher
+    # nie zurückgibt — kg.db wuchs auf 27 GB und füllte die Partition samt
+    # Nachbar-Containern. Die Antwort darauf war `on-failure:5`.
+    #
+    # Seit dem Wechsel auf LadybugDB gibt es diesen Segfault nicht mehr, und `on-failure`
+    # hat seinen Preis gezeigt: ein Reboot stoppt den Container geordnet (Exit 0), das
+    # ist kein "failure", also blieb ai-rem am 12.09.2026 als einziger Dienst unten
+    # während alle Nachbarn hochkamen. Daher zurück auf unless-stopped.
+    # Kehrt je ein Crash-Loop wieder, greift MEM_LIMIT — dann erst wieder on-failure:5.
+    restart: unless-stopped
     ports:
       - "${PORT:-3456}:${PORT:-3456}"
     volumes:

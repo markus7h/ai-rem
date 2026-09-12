@@ -193,8 +193,6 @@ v0.9.0, does not behave that way. Same measurement, 1342 vectors at 1024 dimensi
 Overwriting the same property repeatedly no longer grows the file either. The guards
 built for the Kuzu era stay in place for now — they simply never trigger:
 
-- **`restart: on-failure:5`** (in `docker-compose.yml`): a crash loop ends after five
-  attempts instead of running unnoticed for days.
 - **`KG_MAX_MB` / `KG_MIN_FREE_MB`**: the backfill stops writing once the DB is too large
   or the disk too full. Vectors are derived data — search keeps working with whatever is
   stored, lexically if need be.
@@ -203,6 +201,11 @@ built for the Kuzu era stay in place for now — they simply never trigger:
   first; if that fails, the old DB is left untouched.
 
 The current size is exposed as `db_mb` in `/api/status`, along with both thresholds.
+
+The one guard that did *not* stay is `restart: on-failure:5`. It was dropped on
+2026-09-12 for **`restart: unless-stopped`**: a reboot stops the container gracefully
+(exit 0), which is not a failure, so the container was the only service that stayed
+down after a host restart while every neighbour came back up.
 
 ### Why the embedding backfill writes in portions
 

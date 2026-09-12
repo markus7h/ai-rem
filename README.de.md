@@ -194,8 +194,6 @@ Auch wiederholtes Überschreiben derselben Property lässt die Datei nicht mehr 
 Die Schutzmaßnahmen aus der Kuzu-Zeit bleiben vorerst bestehen — sie greifen nur nicht
 mehr:
 
-- **`restart: on-failure:5`** (in `docker-compose.yml`): ein Crash-Loop endet nach fünf
-  Versuchen, statt tagelang unbemerkt zu laufen.
 - **`KG_MAX_MB` / `KG_MIN_FREE_MB`**: der Backfill schreibt nicht mehr, sobald die DB zu
   groß oder die Platte zu voll ist. Vektoren sind abgeleitete Daten — die Suche läuft mit
   dem weiter, was gespeichert ist, notfalls lexikalisch.
@@ -204,6 +202,11 @@ mehr:
   `BACKUP_DIR`; schlägt er fehl, bleibt die alte DB unangetastet.
 
 Die aktuelle Größe steht als `db_mb` in `/api/status`, zusammen mit beiden Schwellen.
+
+Die einzige Maßnahme, die *nicht* geblieben ist, ist `restart: on-failure:5`. Sie wich am
+12.09.2026 dem **`restart: unless-stopped`**: ein Reboot stoppt den Container geordnet
+(Exit 0), das ist kein "failure" — ai-rem blieb dadurch als einziger Dienst nach einem
+Host-Neustart unten, während alle Nachbar-Container wieder hochkamen.
 
 ### Warum der Embedding-Backfill in Portionen schreibt
 
