@@ -214,6 +214,16 @@ Die einzige Maßnahme, die *nicht* geblieben ist, ist `restart: on-failure:5`. S
 (Exit 0), das ist kein "failure" — ai-rem blieb dadurch als einziger Dienst nach einem
 Host-Neustart unten, während alle Nachbar-Container wieder hochkamen.
 
+Daneben gehört **`stop_grace_period: 180s`**. Der Server merged bei SIGTERM die WAL in
+die kg.db, damit der nächste Start ohne teure Recovery öffnet — und `docker stop` (also
+jedes `compose up -d`) schickt per Default 10 Sekunden später SIGKILL. Am 13.09.2026 traf
+dieser SIGKILL mitten in den Checkpoint: `kg.db.wal.checkpoint` und die Lock-Dateien
+blieben liegen, der nächste Start scheiterte an `Checksum verification failed, the WAL
+file is corrupted` — in einer Crash-Schleife, weil `unless-stopped` es immer wieder
+versuchte. Die Reparatur besteht darin, die Reste wegzuräumen; was in der WAL stand, ist
+weg. Drei Minuten Gnadenfrist reichen für einen Checkpoint dieser Größe locker und kosten
+nichts, wenn er früher fertig ist.
+
 ### Warum der Embedding-Backfill in Portionen schreibt
 
 Unter Kuzu schrieb jeder `CHECKPOINT` die komplette Spalte neu. Die Datei wuchs also mit

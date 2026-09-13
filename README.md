@@ -213,6 +213,15 @@ The one guard that did *not* stay is `restart: on-failure:5`. It was dropped on
 (exit 0), which is not a failure, so the container was the only service that stayed
 down after a host restart while every neighbour came back up.
 
+**`stop_grace_period: 180s`** belongs next to it. On SIGTERM the server merges the WAL
+into kg.db so the next start opens without an expensive recovery — and `docker stop`
+(so every `compose up -d`) sends SIGKILL 10 seconds later by default. On 2026-09-13 that
+SIGKILL landed in the middle of the checkpoint: `kg.db.wal.checkpoint` and the lock files
+stayed behind, and the next start failed on `Checksum verification failed, the WAL file
+is corrupted` — in a crash loop, because `unless-stopped` kept retrying. Recovery is to
+move the leftovers aside; what was in the WAL is gone. Three minutes of grace are plenty
+for a checkpoint of this size and cost nothing when it finishes earlier.
+
 ### Why the embedding backfill writes in portions
 
 Under Kuzu every `CHECKPOINT` rewrote the whole column, so the file grew with the

@@ -29,6 +29,14 @@ German).
   server-owned `settings-template.json` is rewritten wholesale.
 
 ### Fixed
+- **A deploy no longer corrupts the WAL.** `docker stop` — and with it every `compose up
+  -d` — sends SIGKILL 10 seconds after SIGTERM. The SIGTERM handler merges the WAL into
+  kg.db in that window, which a ~180 MB database does not finish in ten seconds. On 13 Sep
+  the kill landed mid-checkpoint: `kg.db.wal.checkpoint` plus the lock files stayed behind
+  and the server crash-looped on `Checksum verification failed, the WAL file is corrupted`,
+  taking the whole instance down until the leftovers were moved aside — the writes in that
+  WAL were lost. `docker-compose.yml` now sets `stop_grace_period: 180s`, and
+  `tests/test_compose_stop_grace.py` keeps it there.
 - **The CI build cache no longer freezes Debian security patches.** `ci.yml` built the
   smoke image with a fixed `cache-from: type=gha`, which pinned the `apt-get update &&
   apt-get upgrade` layer — the one whose entire job is to pick up those patches. As soon
