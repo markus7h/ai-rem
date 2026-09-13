@@ -23,11 +23,36 @@ Das Skript erledigt automatisch:
 6. `~/.claude/hooks/claude-md-guard.py` — PreToolUse-Hook deployen, der (non-blocking) warnt, wenn `~/.claude/CLAUDE.md` editiert wird
 7. `~/.claude/settings.json` — Permissions, Deny-Rules und alle Hooks eintragen; alte Hooks entfernen; `autoMemoryEnabled: false`
 8. `~/.claude/CLAUDE.md` — minimalen Pointer auf ai-rem anlegen oder aktualisieren
-9. Slash-Commands installieren (`/setup-ai-rem`, `/memory-cleanup`, `/migrate-claude-md`)
+9. Slash-Commands installieren (`/setup-ai-rem`, `/memory-cleanup`, `/migrate-claude-md`, `/ai-rem-update`)
 10. Preferences & Tool-Entities direkt via MCP API im Knowledge Graph anlegen
 11. **mykeyvault** lokal als **stdio**-MCP bauen und registrieren (git clone + `npm run build` im `mcp/`-Ordner). Lokaler stdio-Betrieb schaltet die exec/file-Tools frei (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`) — Secrets landen damit **nie** im LLM-Kontext, sondern nur im lokal gestarteten Subprozess. Ohne Node/Git oder bei Build-Fehler fällt das Setup auf den HTTP-MCP zurück (nur `vault_list_items`/`vault_create_item`).
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`. Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
+
+## Bestehende Installation aktuell halten
+
+Die Schritte 3–9 liefern Dateien aus, die sich etwa bei jedem zweiten Release ändern.
+Dafür das komplette Setup erneut zu fahren ist unverhältnismäßig — es macht den
+SSH-Secret-Pull, `git clone` und die `npm`-Builds mit. Ein installierter Client nimmt
+stattdessen die CLI:
+
+```bash
+ai-rem update --check   # nur berichten, Exit 1 wenn etwas hinterherhinkt
+ai-rem update           # Dateien nachziehen, danach Claude Code neu starten
+```
+
+`GET /manifest` listet zu jeder ausgelieferten Datei einen SHA-256; die CLI hasht die
+lokalen Gegenstücke und zieht nur nach, was abweicht. Darunter läuft dasselbe
+`setup.py --update`, das die Schritte 2–9 macht und alles überspringt, was SSH, git oder
+npm braucht. Der `system-check`-SessionStart-Hook vergleicht genauso und meldet den
+Rückstand von selbst — man erfährt es also in der Regel, bevor man fragen muss.
+
+Die `settings.json` wird dabei nur ergänzt: neue Permissions und Hook-Gruppen kommen
+hinzu, entfernt wird nichts. Die `settings-template.json`, aus der sie mergt, gehört dem
+Server und **wird** vollständig neu geschrieben — eigene Änderungen gehören deshalb in
+die `settings.json`.
+
+Hooks werden nur beim Start geladen: nach einem Update Claude Code neu starten.
 
 **Immer über die Server-URL starten, nie aus einem Clone.** `scripts/setup.py` trägt `KG_URL` als Platzhalter, den `server.py` beim Ausliefern ersetzt. Direkt aus einem Checkout gestartet bleibt der Platzhalter stehen, und Schritt 1 registriert wörtlich `__KG_URL__/mcp` in `~/.claude.json` — der MCP-Server verbindet sich dann nie (`INVALID_CONFIG: 'url' is not a valid URL`). Das Skript bricht in diesem Zustand jetzt ab (Exit 2). Zum Testen aus einem Clone `KG_URL` in der Umgebung setzen.
 

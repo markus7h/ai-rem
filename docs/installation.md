@@ -23,11 +23,34 @@ The script automatically handles:
 6. `~/.claude/hooks/claude-md-guard.py` — deploy PreToolUse hook that warns (non-blocking) when `~/.claude/CLAUDE.md` is edited, so rules/knowledge go into ai-rem instead of silently accumulating in CLAUDE.md
 7. `~/.claude/settings.json` — add permissions, deny rules, SessionStart hook, PreCompact + SessionEnd hooks, PreToolUse guard hook, PostToolUse vault-secret-reminder hook; remove old hooks; set `autoMemoryEnabled: false`
 8. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
-9. Install slash commands (`/setup-ai-rem`, `/memory-cleanup`, `/migrate-claude-md`)
+9. Install slash commands (`/setup-ai-rem`, `/memory-cleanup`, `/migrate-claude-md`, `/ai-rem-update`)
 10. Create preferences & tool entities directly in the knowledge graph via MCP API
 11. **mykeyvault** — build and register locally as a **stdio** MCP (`git clone` + `npm run build` in the `mcp/` folder). Local stdio mode unlocks the exec/file tools (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`), so secrets **never** enter the LLM context — only the locally spawned subprocess. Without Node/Git or on build failure the setup falls back to the HTTP MCP (only `vault_list_items`/`vault_create_item`).
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`. The script is idempotent — running it multiple times on the same machine is safe.
+
+## Keeping an existing installation current
+
+Steps 3–9 above ship files that change with almost every other release. Re-running the
+full setup for that is out of proportion — it redoes the SSH secret pull, the `git clone`
+and the `npm` builds — so an installed client uses the CLI instead:
+
+```bash
+ai-rem update --check   # report only, exit 1 if anything is behind
+ai-rem update           # pull the new files, then restart Claude Code
+```
+
+`GET /manifest` lists a SHA-256 for every file the server ships; the CLI hashes the local
+counterparts and pulls only if they differ. Under the hood it runs the very same
+`setup.py --update`, which does steps 2–9 and skips everything that needs SSH, git or npm.
+The `system-check` SessionStart hook runs the same comparison and reports a lag on its own,
+so in practice you are told before you have to ask.
+
+`settings.json` is only ever added to — new permissions and hook groups are merged in,
+nothing is removed. The `settings-template.json` it merges from belongs to the server and
+**is** rewritten wholesale, so keep your own changes in `settings.json`.
+
+Hooks are loaded at startup only: restart Claude Code after an update.
 
 **Always run it through the server URL, not from a clone.** `scripts/setup.py` carries `KG_URL` as a placeholder that `server.py` substitutes when serving the file. Started straight out of a checkout the placeholder survives, and step 1 registers a literal `__KG_URL__/mcp` in `~/.claude.json` — the MCP server then never connects (`INVALID_CONFIG: 'url' is not a valid URL`). The script now refuses to run in that state (exit 2). To test it from a clone anyway, set `KG_URL` in the environment.
 

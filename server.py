@@ -172,6 +172,7 @@ _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  #
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
 _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/install",
                          "/setup-config", "/hooks/", "/bin/", "/lib/", "/cmd", "/login",
+                         "/manifest",
                          "/favicon.ico", "/assets/")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
@@ -390,6 +391,40 @@ Migrierte CLAUDE.md-Dateien auf den Pointer reduzieren. Pro Datei ZUERST eine
 Pointer + `@`-Includes stehen lassen. Projekt-CLAUDE.md → knapper Verweis auf das
 Project-Entity. Danach greift der Guard-Hook sauber (kein Wissen mehr in den Dateien).
 """.replace("__KG_URL__", _KG_URL)
+
+AI_REM_UPDATE_CMD_MD = """\
+# ai-rem Client aktualisieren
+
+Der Server liefert Hooks, CLI, lib und Slash-Commands aus; die lokalen Kopien
+veralten mit jedem Release, in dem sich eine davon geändert hat.
+
+1. Stand prüfen:  `ai-rem update --check`  (Exit 1, wenn etwas veraltet ist)
+2. Nachziehen:    `ai-rem update`
+3. Danach Claude Code **neu starten** — Hooks werden nur beim Start geladen.
+
+Die `settings.json` wird dabei nur ergänzt (neue Permissions und Hook-Gruppen aus
+dem Template), nie beschnitten. Das Template selbst gehört dem Server und wird
+vollständig neu geschrieben — eigene Änderungen gehören in die settings.json.
+"""
+
+# Client-Artefakte: lokaler Zielpfad → (Ausliefer-Route, Inhalt). Grundlage fuer
+# /manifest. Gehasht wird genau der String, den die Route ausgibt — Manifest und
+# Auslieferung koennen so nicht auseinanderlaufen (tests/test_client_manifest.py).
+# Pfad-Konvention fuer den Client: bin/ und lib/ liegen unter
+# ~/.local/share/ai-rem, alles andere unter CLAUDE_HOME (~/.claude).
+_CLIENT_ARTIFACTS: dict[str, tuple[str, str]] = {
+    "hooks/system-check.py": ("/hooks/system-check.py", SYSTEM_CHECK_PY),
+    "hooks/auto-memory.py": ("/hooks/auto-memory.py", AUTO_MEMORY_HOOK_PY),
+    "hooks/claude-md-guard.py": ("/hooks/claude-md-guard.py", CLAUDE_MD_GUARD_PY),
+    "hooks/save-plan.py": ("/hooks/save-plan.py", SAVE_PLAN_PY),
+    "hooks/vault-secret-reminder.py": ("/hooks/vault-secret-reminder.py", VAULT_SECRET_REMINDER_PY),
+    "bin/ai-rem": ("/bin/ai-rem", AI_REM_CLI_SRC),
+    **{"lib/" + name: ("/lib/" + name, src) for name, src in CLI_LIB_FILES.items()},
+    "commands/setup-ai-rem.md": ("/cmd", CMD_MD),
+    "commands/memory-cleanup.md": ("/cmd/memory-cleanup", MEMORY_CLEANUP_CMD_MD),
+    "commands/migrate-claude-md.md": ("/cmd/migrate-claude-md", MIGRATE_CLAUDE_MD_CMD_MD),
+    "commands/ai-rem-update.md": ("/cmd/ai-rem-update", AI_REM_UPDATE_CMD_MD),
+}
 
 db = ladybug.Database(
     DB_PATH,
@@ -1179,6 +1214,28 @@ async def cmd_memory_cleanup_route(request: Request) -> PlainTextResponse:
 @mcp.custom_route("/cmd/migrate-claude-md", methods=["GET"])
 async def cmd_migrate_claude_md_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(MIGRATE_CLAUDE_MD_CMD_MD, media_type="text/plain")
+
+
+@mcp.custom_route("/cmd/ai-rem-update", methods=["GET"])
+async def cmd_ai_rem_update_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(AI_REM_UPDATE_CMD_MD, media_type="text/plain")
+
+
+@mcp.custom_route("/manifest", methods=["GET"])
+async def manifest_route(request: Request) -> JSONResponse:
+    """Pruefsummen aller ausgelieferten Client-Dateien.
+
+    Damit sieht ein installierter Client, ob seine Kopien veraltet sind, ohne das
+    komplette Setup erneut zu fahren (`ai-rem update`). Oeffentlich wie die
+    Ausliefer-Routen selbst — es sind Hashes frei abrufbarer Dateien.
+
+    Kein Versionsfeld pro Datei: __VERSION__ kommt in Hooks/CLI/lib nicht vor, der
+    Hash bleibt ueber Releases stabil, die an der Datei nichts aendern. "Nichts zu
+    tun" ist damit die haeufige und billige Antwort.
+    """
+    return JSONResponse({"version": VERSION, "files": {
+        path: hashlib.sha256(src.encode("utf-8")).hexdigest()
+        for path, (_route, src) in _CLIENT_ARTIFACTS.items()}})
 
 
 @mcp.custom_route("/api/preferences", methods=["GET"])

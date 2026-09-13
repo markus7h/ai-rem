@@ -16,7 +16,12 @@ REPO = Path(__file__).resolve().parent.parent
 # nicht mehr kapern. Server-Deps (fastmcp/kuzu) gehoeren in den Docker-Container.
 
 import argparse
+import hashlib
 import json
+import os
+import subprocess
+import tempfile
+import urllib.request
 
 sys.path.insert(0, str(REPO))
 
@@ -232,6 +237,70 @@ def cmd_token(c: MCPClient, a):
     _print(f"Bearer {c.token}" if a.header else c.token)
 
 
+def _artifact_root(rel: str) -> Path:
+    """Wohin der Installer die Datei legt: bin/ und lib/ nach
+    ~/.local/share/ai-rem, alles andere nach CLAUDE_HOME (siehe scripts/setup.py)."""
+    if rel.startswith(("bin/", "lib/")):
+        return Path.home() / ".local" / "share" / "ai-rem"
+    cc = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+    return Path(cc) if cc else Path.home() / ".claude"
+
+
+def cmd_update(c: MCPClient, a):
+    """Client-Artefakte gegen /manifest pruefen und per setup.py --update nachziehen.
+
+    Bewusst KEIN `curl | bash`: der Download passiert in der lokal installierten,
+    vertrauten CLI und landet in einer Temp-Datei, die mit dem eigenen Interpreter
+    gestartet wird — dieselbe Vertrauensstufe wie jeder andere ai-rem-Befehl.
+    """
+    base = c.base_url
+    try:
+        with urllib.request.urlopen(base + "/manifest", timeout=10) as r:
+            manifest = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        raise MCPError(f"/manifest nicht erreichbar ({base}/manifest): {e}") from e
+
+    stale = []
+    for rel, want in sorted(manifest.get("files", {}).items()):
+        dst = _artifact_root(rel).joinpath(*rel.split("/"))
+        try:
+            have = hashlib.sha256(dst.read_bytes()).hexdigest()
+        except OSError:
+            have = ""
+        if have != want:
+            stale.append((rel, "fehlt" if not have else "veraltet"))
+
+    version = manifest.get("version", "?")
+    if not stale:
+        print(f"aktuell — alle {len(manifest.get('files', {}))} Dateien auf Stand {version}")
+        return
+    for rel, why in stale:
+        print(f"  {why}: {rel}")
+    if a.check:
+        print(f"{len(stale)} Datei(en) veraltet (Server {version}) — `ai-rem update` zieht sie nach.")
+        sys.exit(1)
+
+    try:
+        with urllib.request.urlopen(base + "/setup.py", timeout=30) as r:
+            setup_src = r.read()
+    except Exception as e:
+        raise MCPError(f"/setup.py nicht erreichbar: {e}") from e
+    fd, tmp = tempfile.mkstemp(suffix="-ai-rem-setup.py")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(setup_src)
+        # KG_URL explizit mitgeben: setup.py traegt sonst die URL, die der Server von
+        # sich selbst glaubt (KG_PUBLIC_URL). Die Basis, ueber die dieser Client
+        # gerade geredet hat, ist nachweislich erreichbar — sie gewinnt.
+        env = dict(os.environ, KG_URL=base)
+        sys.exit(subprocess.call([sys.executable, tmp, "--update"], env=env))
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ai-rem", description="ai-rem MCP CLI")
     p.add_argument(
@@ -379,6 +448,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='vollen Header \'Bearer <token>\' ausgeben (statt nur des Tokens)',
     )
     s.set_defaults(func=cmd_token)
+
+    s = sub.add_parser("update", help="Hooks/CLI/lib/Commands vom Server nachziehen")
+    s.add_argument("--check", action="store_true",
+                   help="nur berichten, nichts schreiben (Exit 1, wenn veraltet)")
+    s.set_defaults(func=cmd_update)
 
     return p
 

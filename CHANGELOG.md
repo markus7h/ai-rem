@@ -13,6 +13,32 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Added
+- **`ai-rem update` brings an installed client up to date.** Hooks, CLI, `lib/` and the
+  slash commands are shipped by the server and changed in 14 commits since August — and
+  were never refreshed, because nothing carried a version, a hash or an mtime to compare.
+  The only update path was re-running the full setup, which also redoes the SSH secret
+  pull, the `git clone` and the `npm` builds. Now `GET /manifest` publishes a SHA-256 per
+  shipped file, `ai-rem update --check` reports what is behind (exit 1), and `ai-rem
+  update` pulls it via `setup.py --update` — the file half of the setup, without
+  anything that needs SSH, git or npm. The SessionStart hook runs the same comparison and
+  reports a lag on its own, so the lag surfaces before anyone asks. New slash command
+  `/ai-rem-update`. `settings.json` keeps being merged additively; only the
+  server-owned `settings-template.json` is rewritten wholesale.
+
+### Fixed
+- **The CI build cache no longer freezes Debian security patches.** `ci.yml` built the
+  smoke image with a fixed `cache-from: type=gha`, which pinned the `apt-get update &&
+  apt-get upgrade` layer — the one whose entire job is to pick up those patches. As soon
+  as new CVEs landed, the Trivy gate in the same job blocked on vulnerabilities a real
+  build would already have fixed, and a re-run did nothing because it pulled the same
+  cache (13 Sep: twelve fixable perl CVEs, image on `5.40.1-6`, fix `5.40.1-6+deb13u1`
+  sitting in the mirror). The cache scope now rotates daily: one full build a day, and
+  the gate is never more than that far behind. Only `ci.yml` was affected — the published
+  images build without this cache.
+
 ## [1.2.3] – 2026-09-12
 
 ### Added

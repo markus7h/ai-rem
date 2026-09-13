@@ -801,6 +801,8 @@ def install_commands():
         print('✓ /memory-cleanup Command angelegt')
     if fetch_to(KG_URL + '/cmd/migrate-claude-md', os.path.join(CLAUDE_HOME, 'commands', 'migrate-claude-md.md')):
         print('✓ /migrate-claude-md Command angelegt')
+    if fetch_to(KG_URL + '/cmd/ai-rem-update', os.path.join(CLAUDE_HOME, 'commands', 'ai-rem-update.md')):
+        print('✓ /ai-rem-update Command angelegt')
 
 
 # ── Preferences & Tool-Entities direkt via MCP API anlegen ───────────────────
@@ -873,8 +875,35 @@ def create_entities(setup_cfg, ai_rem_token):
 
 # ── Ablauf ────────────────────────────────────────────────────────────────────
 
+def update_only():
+    """Nur die ausgelieferten Dateien auffrischen — kein Bootstrap.
+
+    Uebersprungen: register_mcp (laengst registriert), pull_secrets (SSH),
+    build_tools_mcp/build_mykeyvault_mcp (git+npm), update_claude_json,
+    create_entities (brauchen den Token), update_claude_md. Alles, was hier laeuft,
+    ist idempotent, und fetch_to() schreibt atomar — ein Serverfehler laesst die
+    bestehende Datei stehen.
+
+    write_settings_template() holt Neues vom Server ins Template, update_settings()
+    merged es additiv in die settings.json. Das Template gehoert dem Server und wird
+    komplett neu geschrieben; Handaenderungen gehoeren in die settings.json.
+    """
+    print('=== ai-rem Update (%s) ===' % PLATFORM)
+    os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
+    os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
+
+    setup_cfg = load_setup_config()
+    mcp_endpoint = choose_mcp_endpoint(setup_cfg)
+    write_settings_template(setup_cfg, mcp_endpoint)
+    hook_paths = install_hooks()
+    install_cli()
+    update_settings(setup_cfg, mcp_endpoint, hook_paths)
+    install_commands()
+    print('')
+    print('Fertig. Claude Code neu starten - Hooks werden nur beim Start geladen.')
+
+
 def main():
-    print('=== ai-rem Setup (%s) ===' % PLATFORM)
     # ponytail: KG_URL wird erst beim Ausliefern ersetzt (server.py). Aus einem
     # lokalen Checkout gestartet bliebe der Platzhalter stehen und landete als
     # kaputte MCP-URL in ~/.claude.json. Lieber hier abbrechen als still falsch
@@ -884,6 +913,9 @@ def main():
             'ai-rem: KG_URL ist ein nicht ersetzter Platzhalter (%s).\n'
             'Setup ueber den Server starten: bash <(curl -s <kg-url>/setup)\n' % KG_URL)
         sys.exit(2)
+    if '--update' in sys.argv[1:]:
+        return update_only()
+    print('=== ai-rem Setup (%s) ===' % PLATFORM)
     claude = find_claude()
     register_mcp(claude)
 
