@@ -31,6 +31,12 @@ services:
     # während alle Nachbarn hochkamen. Daher zurück auf unless-stopped.
     # Kehrt je ein Crash-Loop wieder, greift MEM_LIMIT — dann erst wieder on-failure:5.
     restart: unless-stopped
+    # `docker stop` (und damit jedes `compose up -d`) killt nach 10s hart. Der
+    # SIGTERM-Handler (server.py) merged davor die WAL in die kg.db — bei 180 MB
+    # dauert das laenger als 10s. Am 13.09.2026 traf der SIGKILL genau diesen
+    # Checkpoint: uebrig blieben kg.db.wal.checkpoint + Lock-Dateien, und ai-rem
+    # kam in einer Crash-Schleife nicht mehr hoch ("WAL file is corrupted").
+    stop_grace_period: 180s
     ports:
       - "${PORT:-3456}:${PORT:-3456}"
     volumes:
