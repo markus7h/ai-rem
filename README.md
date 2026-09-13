@@ -300,7 +300,14 @@ and is rewritten wholesale.
 CI runs on every push and pull request (`.github/workflows/ci.yml`): a `ruff` check for
 critical error classes (syntax, undefined names), a `compileall` smoke, an import smoke
 against a throwaway env, the `pytest` suite under `tests/`, and an image-smoke that builds
-the Docker image and polls `/health`. `main` is protected — changes land via PR with green CI.
+the Docker image, polls `/health` and runs Trivy as a gate on fixable CRITICAL/HIGH CVEs.
+`main` is protected — changes land via PR with green CI.
+
+The image build cache is scoped per day on purpose. A fixed cache pins the
+`apt-get update && apt-get upgrade` layer — the one that picks up Debian patches — so the
+Trivy gate starts blocking on CVEs a real build would already have fixed, and a re-run
+changes nothing because it pulls the same cache. Daily rotation costs one full build a day
+and keeps the gate at most that far behind.
 
 Local hygiene hooks mirror the CI ruff gate and add whitespace/EOF fixes plus a
 `detect-secrets` scan (baseline: `.secrets.baseline`). One-time setup:

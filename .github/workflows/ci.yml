@@ -79,14 +79,26 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
+      - name: Cache-Scope (rotiert taeglich)
+        id: cachescope
+        run: echo "key=ci-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
       - name: Build image (amd64, in den Runner-Docker laden)
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
           tags: ai-rem:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Der Scope MUSS rotieren. Mit einem festen Cache blieb der Layer
+          # `apt-get update && apt-get upgrade` (Dockerfile:12) ewig stehen — genau
+          # der, der die Debian-Patches einsammeln soll. Das Trivy-Gate unten blockte
+          # dann auf CVEs, die ein echter Build laengst gefixt haette: am 13.09.2026
+          # zwoelf fixbare perl-CVEs, Image auf 5.40.1-6, Fix 5.40.1-6+deb13u1 lag im
+          # Mirror bereit. Ein Re-Run half nicht — der Cache war ja der Punkt.
+          # Taeglich statt pro Lauf: ein Voll-Build am Tag, danach greifen die teuren
+          # pip-Layer wieder. Laenger als einen Tag darf das Gate nicht hinterherhinken.
+          cache-from: type=gha,scope=${{ steps.cachescope.outputs.key }}
+          cache-to: type=gha,mode=max,scope=${{ steps.cachescope.outputs.key }}
 
       - name: Smoke — Container starten + /health pollen
         run: |
