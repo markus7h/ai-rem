@@ -3,6 +3,7 @@ umbiegt. Faellt der Check falsch aus, bleibt ein Clone-Pfad auf einem Netzlaufwe
 stehen — und der Auto-Memory-Hook stirbt still, sobald der Mount haengt."""
 import importlib.util
 import pathlib
+import sys
 
 _spec = importlib.util.spec_from_file_location(
     "ai_rem_setup", pathlib.Path(__file__).resolve().parent.parent / "scripts" / "setup.py")
@@ -42,3 +43,26 @@ def test_transportfehler_laesst_bestehende_datei_stehen(tmp_path, monkeypatch):
     dst.write_bytes(b"alte funktionierende CLI")
     assert setup.fetch_to("http://x/bin/ai-rem", str(dst)) is False
     assert dst.read_bytes() == b"alte funktionierende CLI"
+
+
+def test_update_flag_ueberspringt_den_bootstrap(monkeypatch, tmp_path):
+    """`--update` darf nur Dateien auffrischen. Zoege es den Bootstrap mit, brauchte
+    ein simples Update wieder SSH, git und npm — und genau deshalb hat es bisher
+    niemand ausgefuehrt."""
+    gerufen = []
+    for name in ("find_claude", "register_mcp", "pull_secrets", "build_tools_mcp",
+                 "build_mykeyvault_mcp", "update_claude_json", "create_entities",
+                 "update_claude_md", "load_setup_config", "choose_mcp_endpoint",
+                 "write_settings_template", "install_hooks", "install_cli",
+                 "update_settings", "install_commands"):
+        monkeypatch.setattr(setup, name,
+                            (lambda n: lambda *a, **kw: gerufen.append(n))(name))
+    monkeypatch.setattr(setup, "KG_URL", "http://kg.test")
+    monkeypatch.setattr(setup, "CLAUDE_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["setup.py", "--update"])
+
+    setup.main()
+
+    assert gerufen == ["load_setup_config", "choose_mcp_endpoint",
+                       "write_settings_template", "install_hooks", "install_cli",
+                       "update_settings", "install_commands"]

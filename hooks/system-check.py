@@ -4,6 +4,7 @@
 Order: ai-rem → SMB → MCP (functional) → Settings (auto-sync) → Tools (count)
 Config is read from ~/.claude/settings-template.json — no hardcoded paths.
 """
+import hashlib
 import json
 import os
 import platform
@@ -606,6 +607,41 @@ def check_embed_pending():
         results.append(f"embed ❌ {n} ohne Vektor")
 
 
+def check_client_artifacts():
+    """Lokale Hooks/CLI/lib/Commands gegen /manifest pruefen.
+
+    Der Server liefert diese Dateien aus, aktualisiert wurden sie bisher nie — es
+    gab weder Version noch Hash zum Vergleichen. Der Hook meldet den Rueckstand,
+    nachziehen tut ihn `ai-rem update` (der Server hat kein Client-Dateisystem).
+
+    Rueckgabe: Hinweistext bei Rueckstand (geht als additionalContext rein, damit
+    der Agent den Befehl anbieten kann), sonst "".
+    """
+    manifest = _api_get("/manifest")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict):
+        return ""
+    share = os.path.join(os.path.expanduser("~"), ".local", "share", "ai-rem")
+    stale = []
+    for rel, want in sorted(manifest["files"].items()):
+        root = share if rel.startswith(("bin/", "lib/")) else CLAUDE_DIR
+        try:
+            with open(os.path.join(root, *rel.split("/")), "rb") as f:
+                have = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            have = ""
+        if have != want:
+            stale.append(rel)
+    if not stale:
+        results.append("client ✓")
+        return ""
+    results.append("client ❌ %d veraltet" % len(stale))
+    return (
+        "[ai-rem] %d Client-Datei(en) hinken dem Server (%s) hinterher: %s. "
+        "`ai-rem update` zieht sie nach, danach Claude Code neu starten."
+        % (len(stale), manifest.get("version", "?"), ", ".join(stale))
+    )
+
+
 def check_cleanup_pending():
     """Passive Anzeige offener Cleanup-Reviews: bei nicht-leerer Queue einen rein
     informativen additionalContext-Hinweis zurückgeben — KEIN Auto-Auftrag. Die
@@ -630,7 +666,9 @@ check_tools()
 check_ollama_and_catchup()
 check_embed_pending()
 _am_fault = check_auto_memory()
-_extra_ctx = "\n".join(x for x in (_am_fault, check_cleanup_pending()) if x)
+_client_stale = check_client_artifacts()
+_extra_ctx = "\n".join(
+    x for x in (_am_fault, _client_stale, check_cleanup_pending()) if x)
 
 _out = {"suppressOutput": True}
 _msg = " | ".join(results) if results else ""

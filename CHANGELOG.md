@@ -13,6 +13,21 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Added
+- **`ai-rem update` brings an installed client up to date.** Hooks, CLI, `lib/` and the
+  slash commands are shipped by the server and changed in 14 commits since August — and
+  were never refreshed, because nothing carried a version, a hash or an mtime to compare.
+  The only update path was re-running the full setup, which also redoes the SSH secret
+  pull, the `git clone` and the `npm` builds. Now `GET /manifest` publishes a SHA-256 per
+  shipped file, `ai-rem update --check` reports what is behind (exit 1), and `ai-rem
+  update` pulls it via `setup.py --update` — the file half of the setup, without
+  anything that needs SSH, git or npm. The SessionStart hook runs the same comparison and
+  reports a lag on its own, so the lag surfaces before anyone asks. New slash command
+  `/ai-rem-update`. `settings.json` keeps being merged additively; only the
+  server-owned `settings-template.json` is rewritten wholesale.
+
 ## [1.2.3] – 2026-09-12
 
 ### Added

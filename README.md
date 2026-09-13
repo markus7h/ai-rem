@@ -274,9 +274,24 @@ The script is idempotent and registers the MCP server, deploys the three hooks, 
 
 ### Update to a new version
 
+Server:
+
 ```bash
 ssh your-server "cd ~/mydocker/compose-files/ai-rem && docker compose pull && docker compose up -d"
 ```
+
+Client — hooks, CLI, lib and slash commands are shipped by the server and go stale
+with every release that touches one of them:
+
+```bash
+ai-rem update --check   # report only, exit 1 if anything is behind
+ai-rem update           # pull the new files, then restart Claude Code
+```
+
+The session-start hook compares the local copies against `/manifest` and says so on
+its own, so you normally learn about it before you have to ask. `settings.json` is
+only ever added to, never trimmed; the template it merges from belongs to the server
+and is rewritten wholesale.
 
 ---
 
