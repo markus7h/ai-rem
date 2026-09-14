@@ -13,9 +13,18 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [1.2.4] – 2026-09-14
 
 ### Added
+- **`ai-rem` is on the `PATH` after a setup.** The installer put the CLI in
+  `~/.local/share/ai-rem/bin/ai-rem` and pointed `AI_REM_CLI` at it — enough for the
+  hooks, useless for a human: typing `ai-rem update` got "command not found", so the one
+  command that keeps a client current was the one nobody could run. The setup now links
+  `~/.local/bin/ai-rem` (a `.cmd` shim on Windows, where symlinks need admin rights) to
+  that copy, and prints the line to add if `~/.local/bin` is not on the `PATH`. Shell
+  configs are left alone. An existing symlink there is replaced; a real file is not
+  touched. Because the link is not a shipped file, it carries no manifest hash, so
+  `ai-rem update --check` tests for it separately and reports it missing. (#141)
 - **`ai-rem update` brings an installed client up to date.** Hooks, CLI, `lib/` and the
   slash commands are shipped by the server and changed in 14 commits since August — and
   were never refreshed, because nothing carried a version, a hash or an mtime to compare.
@@ -26,7 +35,7 @@ German).
   anything that needs SSH, git or npm. The SessionStart hook runs the same comparison and
   reports a lag on its own, so the lag surfaces before anyone asks. New slash command
   `/ai-rem-update`. `settings.json` keeps being merged additively; only the
-  server-owned `settings-template.json` is rewritten wholesale.
+  server-owned `settings-template.json` is rewritten wholesale. (#139)
 
 ### Fixed
 - **A deploy no longer corrupts the WAL.** `docker stop` — and with it every `compose up
@@ -36,7 +45,7 @@ German).
   and the server crash-looped on `Checksum verification failed, the WAL file is corrupted`,
   taking the whole instance down until the leftovers were moved aside — the writes in that
   WAL were lost. `docker-compose.yml` now sets `stop_grace_period: 180s`, and
-  `tests/test_compose_stop_grace.py` keeps it there.
+  `tests/test_compose_stop_grace.py` keeps it there. (#140)
 - **The CI build cache no longer freezes Debian security patches.** `ci.yml` built the
   smoke image with a fixed `cache-from: type=gha`, which pinned the `apt-get update &&
   apt-get upgrade` layer — the one whose entire job is to pick up those patches. As soon
@@ -45,7 +54,7 @@ German).
   cache (13 Sep: twelve fixable perl CVEs, image on `5.40.1-6`, fix `5.40.1-6+deb13u1`
   sitting in the mirror). The cache scope now rotates daily: one full build a day, and
   the gate is never more than that far behind. Only `ci.yml` was affected — the published
-  images build without this cache.
+  images build without this cache. (#139)
 
 ## [1.2.3] – 2026-09-12
 
@@ -613,7 +622,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/markus7h/ai-rem/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/markus7h/ai-rem/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/markus7h/ai-rem/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/markus7h/ai-rem/compare/v1.2.0...v1.2.1

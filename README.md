@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.2.3](https://github.com/markus7h/ai-rem/releases/tag/v1.2.3)**.
+> This documentation describes **[v1.2.4](https://github.com/markus7h/ai-rem/releases/tag/v1.2.4)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -77,7 +77,7 @@ Every page shows the running server version at the right end of the navigation.
 
 Four Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
 
-- **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via an OpenAI-compatible LLM endpoint (`AI_REM_LLAMA_URL`, by default a LiteLLM router rather than a single GPU host), with an md-fallback + catch-up when it is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. The setup installs the CLI to `~/.local/share/ai-rem/bin/ai-rem` and points `AI_REM_CLI` at it, so the hook does not depend on where the repo was cloned.
+- **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via an OpenAI-compatible LLM endpoint (`AI_REM_LLAMA_URL`, by default a LiteLLM router rather than a single GPU host), with an md-fallback + catch-up when it is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. The setup installs the CLI to `~/.local/share/ai-rem/bin/ai-rem` and points `AI_REM_CLI` at it, so the hook does not depend on where the repo was cloned; `~/.local/bin/ai-rem` links to the same copy, which is what makes `ai-rem` a plain shell command.
 - **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue. Finished tasks are archived after the retention window whether they were closed via `extra.status` or only in the description text ("ERLEDIGT: …"). Plus a **staleness check** that flags entries with perishable infrastructure facts (IPs, ports, services, devices) for a reality check — never automatically.
 - **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
 - **Vault secret reminder** — a `PostToolUse` hook scans Bash output for auth/credential failures and injects a reminder to pull the matching secret from the vault via mykeyvault instead of asking the user for a token or password, failing silently so it never blocks a command.

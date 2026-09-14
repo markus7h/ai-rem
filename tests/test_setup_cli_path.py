@@ -54,7 +54,7 @@ def test_update_flag_ueberspringt_den_bootstrap(monkeypatch, tmp_path):
                  "build_mykeyvault_mcp", "update_claude_json", "create_entities",
                  "update_claude_md", "load_setup_config", "choose_mcp_endpoint",
                  "write_settings_template", "install_hooks", "install_cli",
-                 "update_settings", "install_commands"):
+                 "link_cli", "update_settings", "install_commands"):
         monkeypatch.setattr(setup, name,
                             (lambda n: lambda *a, **kw: gerufen.append(n))(name))
     monkeypatch.setattr(setup, "KG_URL", "http://kg.test")
@@ -65,4 +65,55 @@ def test_update_flag_ueberspringt_den_bootstrap(monkeypatch, tmp_path):
 
     assert gerufen == ["load_setup_config", "choose_mcp_endpoint",
                        "write_settings_template", "install_hooks", "install_cli",
-                       "update_settings", "install_commands"]
+                       "link_cli", "update_settings", "install_commands"]
+
+
+def test_link_cli_legt_symlink(tmp_path, monkeypatch):
+    """Ohne Eintrag im PATH ist `ai-rem update` nicht tippbar — genau der Befehl,
+    der den Client aktuell haelt."""
+    monkeypatch.setattr(setup, "SHIM_DIR", str(tmp_path / "bin"))
+    cli = tmp_path / "share" / "ai-rem" / "bin" / "ai-rem"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/usr/bin/env python3\n")
+
+    setup.link_cli(str(cli))
+
+    shim = tmp_path / "bin" / "ai-rem"
+    assert shim.is_symlink()
+    assert pathlib.Path(shim).resolve() == cli.resolve()
+
+
+def test_link_cli_ersetzt_alten_symlink(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "SHIM_DIR", str(tmp_path / "bin"))
+    (tmp_path / "bin").mkdir()
+    veraltet = tmp_path / "bin" / "ai-rem"
+    veraltet.symlink_to(tmp_path / "weg" / "ai-rem")  # Ziel existiert nicht
+    cli = tmp_path / "neu" / "ai-rem"
+    cli.parent.mkdir()
+    cli.write_text("x")
+
+    setup.link_cli(str(cli))
+
+    assert pathlib.Path(veraltet).resolve() == cli.resolve()
+
+
+def test_link_cli_laesst_fremde_datei_stehen(tmp_path, monkeypatch, capsys):
+    """Eine echte Datei an der Stelle kann eine bewusst installierte andere CLI
+    sein. Ueberschreiben waere Datenverlust ohne Rueckfrage."""
+    monkeypatch.setattr(setup, "SHIM_DIR", str(tmp_path / "bin"))
+    (tmp_path / "bin").mkdir()
+    fremd = tmp_path / "bin" / "ai-rem"
+    fremd.write_text("fremde CLI")
+
+    setup.link_cli(str(tmp_path / "neu"))
+
+    assert fremd.read_text() == "fremde CLI"
+    assert "nicht angefasst" in capsys.readouterr().out
+
+
+def test_link_cli_ohne_cli_pfad_macht_nichts(tmp_path, monkeypatch):
+    """install_cli() gibt bei fehlgeschlagenem Download '' zurueck — dann darf kein
+    Symlink ins Leere zeigen."""
+    monkeypatch.setattr(setup, "SHIM_DIR", str(tmp_path / "bin"))
+    setup.link_cli("")
+    assert not (tmp_path / "bin").exists()
