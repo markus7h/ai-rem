@@ -13,9 +13,18 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [Unreleased]
+## [1.2.4] – 2026-09-14
 
 ### Added
+- **`ai-rem` is on the `PATH` after a setup.** The installer put the CLI in
+  `~/.local/share/ai-rem/bin/ai-rem` and pointed `AI_REM_CLI` at it — enough for the
+  hooks, useless for a human: typing `ai-rem update` got "command not found", so the one
+  command that keeps a client current was the one nobody could run. The setup now links
+  `~/.local/bin/ai-rem` (a `.cmd` shim on Windows, where symlinks need admin rights) to
+  that copy, and prints the line to add if `~/.local/bin` is not on the `PATH`. Shell
+  configs are left alone. An existing symlink there is replaced; a real file is not
+  touched. Because the link is not a shipped file, it carries no manifest hash, so
+  `ai-rem update --check` tests for it separately and reports it missing.
 - **`ai-rem update` brings an installed client up to date.** Hooks, CLI, `lib/` and the
   slash commands are shipped by the server and changed in 14 commits since August — and
   were never refreshed, because nothing carried a version, a hash or an mtime to compare.
@@ -613,7 +622,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/markus7h/ai-rem/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/markus7h/ai-rem/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/markus7h/ai-rem/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/markus7h/ai-rem/compare/v1.2.0...v1.2.1

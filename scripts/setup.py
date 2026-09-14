@@ -577,6 +577,56 @@ def install_cli():
     return LOCAL_CLI
 
 
+SHIM_DIR = os.path.join(HOME, '.local', 'bin')
+
+
+def link_cli(cli_path):
+    """CLI unter ~/.local/bin verfuegbar machen, damit `ai-rem` tippbar ist.
+
+    AI_REM_CLI in der settings.json reicht den Hooks, nicht dem Menschen: der
+    Befehl, der den Client aktuell haelt (`ai-rem update`), war genau der, den
+    niemand aufrufen konnte. ~/.local/bin ist der XDG-Ort dafuer und auf
+    Debian/Ubuntu ueber ~/.profile bereits im PATH.
+
+    ponytail: Symlink statt Eintrag in .bashrc/.zshrc — kein Fremd-Editieren von
+    Shell-Configs, und liegt das Verzeichnis wider Erwarten nicht im PATH, sagen
+    wir es und der Nutzer entscheidet.
+    """
+    if not cli_path:
+        return
+    os.makedirs(SHIM_DIR, exist_ok=True)
+    shim = os.path.join(SHIM_DIR, 'ai-rem.cmd' if IS_WIN else 'ai-rem')
+
+    # Eine echte Datei fremder Herkunft bleibt unangetastet — die koennte eine
+    # bewusst installierte andere CLI sein. Nur eigene Symlinks/Shims ersetzen wir.
+    if os.path.lexists(shim) and not (os.path.islink(shim) or IS_WIN):
+        print('⚠ %s existiert und ist kein Symlink — nicht angefasst.' % shim)
+        return
+    try:
+        if os.path.lexists(shim):
+            os.unlink(shim)
+        if IS_WIN:
+            with open(shim, 'w', encoding='utf-8') as f:
+                f.write('@echo off\r\n"%s" "%s" %%*\r\n' % (sys.executable, cli_path))
+        else:
+            os.symlink(cli_path, shim)
+    except OSError as ex:
+        print('⚠ %s konnte nicht angelegt werden: %s' % (shim, ex))
+        return
+    print('✓ Befehl: %s' % shim)
+
+    paths = [os.path.normcase(os.path.normpath(p))
+             for p in os.environ.get('PATH', '').split(os.pathsep) if p]
+    if os.path.normcase(os.path.normpath(SHIM_DIR)) not in paths:
+        print('  ℹ %s liegt nicht im PATH. Ergaenzen mit:' % SHIM_DIR)
+        if IS_WIN:
+            print('    setx PATH "%%PATH%%;%s"' % SHIM_DIR)
+        else:
+            print('    echo \'export PATH="$HOME/.local/bin:$PATH"\' >> ~/.bashrc')
+        print('  (Auf vielen Systemen zieht ~/.profile das Verzeichnis beim naechsten'
+              ' Login automatisch.)')
+
+
 # ── settings.json: Permissions, Hooks registrieren, alte Hooks entfernen ─────
 
 def update_settings(setup_cfg, mcp_endpoint, hook_paths):
@@ -896,7 +946,7 @@ def update_only():
     mcp_endpoint = choose_mcp_endpoint(setup_cfg)
     write_settings_template(setup_cfg, mcp_endpoint)
     hook_paths = install_hooks()
-    install_cli()
+    link_cli(install_cli())
     update_settings(setup_cfg, mcp_endpoint, hook_paths)
     install_commands()
     print('')
@@ -937,7 +987,7 @@ def main():
 
     write_settings_template(setup_cfg, mcp_endpoint)
     hook_paths = install_hooks()
-    install_cli()
+    link_cli(install_cli())
     update_settings(setup_cfg, mcp_endpoint, hook_paths)
 
     # Auto-Memory md-Fallback: leere Datei (wird via @import in CLAUDE.md geladen)

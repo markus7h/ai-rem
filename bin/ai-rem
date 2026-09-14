@@ -270,6 +270,13 @@ def cmd_update(c: MCPClient, a):
         if have != want:
             stale.append((rel, "fehlt" if not have else "veraltet"))
 
+    # Der PATH-Shim steht in keinem Manifest (er ist ein Symlink, kein ausgeliefertes
+    # File) — ohne diesen Extra-Check meldet --check "aktuell", waehrend `ai-rem` in
+    # der Shell weiter unbekannt ist. setup.py --update legt ihn an.
+    shim = Path.home() / ".local" / "bin" / ("ai-rem.cmd" if os.name == "nt" else "ai-rem")
+    if not shim.exists():
+        stale.append(("ai-rem im PATH (%s)" % shim, "fehlt"))
+
     version = manifest.get("version", "?")
     if not stale:
         print(f"aktuell — alle {len(manifest.get('files', {}))} Dateien auf Stand {version}")
