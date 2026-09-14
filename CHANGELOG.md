@@ -24,7 +24,7 @@ German).
   that copy, and prints the line to add if `~/.local/bin` is not on the `PATH`. Shell
   configs are left alone. An existing symlink there is replaced; a real file is not
   touched. Because the link is not a shipped file, it carries no manifest hash, so
-  `ai-rem update --check` tests for it separately and reports it missing.
+  `ai-rem update --check` tests for it separately and reports it missing. (#141)
 - **`ai-rem update` brings an installed client up to date.** Hooks, CLI, `lib/` and the
   slash commands are shipped by the server and changed in 14 commits since August — and
   were never refreshed, because nothing carried a version, a hash or an mtime to compare.
@@ -35,7 +35,7 @@ German).
   anything that needs SSH, git or npm. The SessionStart hook runs the same comparison and
   reports a lag on its own, so the lag surfaces before anyone asks. New slash command
   `/ai-rem-update`. `settings.json` keeps being merged additively; only the
-  server-owned `settings-template.json` is rewritten wholesale.
+  server-owned `settings-template.json` is rewritten wholesale. (#139)
 
 ### Fixed
 - **A deploy no longer corrupts the WAL.** `docker stop` — and with it every `compose up
@@ -45,7 +45,7 @@ German).
   and the server crash-looped on `Checksum verification failed, the WAL file is corrupted`,
   taking the whole instance down until the leftovers were moved aside — the writes in that
   WAL were lost. `docker-compose.yml` now sets `stop_grace_period: 180s`, and
-  `tests/test_compose_stop_grace.py` keeps it there.
+  `tests/test_compose_stop_grace.py` keeps it there. (#140)
 - **The CI build cache no longer freezes Debian security patches.** `ci.yml` built the
   smoke image with a fixed `cache-from: type=gha`, which pinned the `apt-get update &&
   apt-get upgrade` layer — the one whose entire job is to pick up those patches. As soon
@@ -54,7 +54,7 @@ German).
   cache (13 Sep: twelve fixable perl CVEs, image on `5.40.1-6`, fix `5.40.1-6+deb13u1`
   sitting in the mirror). The cache scope now rotates daily: one full build a day, and
   the gate is never more than that far behind. Only `ci.yml` was affected — the published
-  images build without this cache.
+  images build without this cache. (#139)
 
 ## [1.2.3] – 2026-09-12
 
