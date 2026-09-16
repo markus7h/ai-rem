@@ -13,6 +13,24 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.2.5] – 2026-09-16
+
+### Fixed
+- **A damaged WAL no longer leaves the server in a crash loop.** On 2026-09-16 LadybugDB
+  segfaulted in the middle of a WAL checkpoint (exit 139, in `libstdc++`). A segfault does
+  not ask for SIGTERM, so `stop_grace_period` — which covers an orderly `docker stop` —
+  did not apply: the leftover `kg.db.wal.checkpoint` was unusable, every subsequent start
+  died on `Checksum verification failed, the WAL file is corrupted`, and
+  `restart: unless-stopped` retried 20 times without ever coming up. 15 minutes of
+  downtime, ended by moving the file aside by hand. The server now does that itself: on a
+  WAL error while opening kg.db, `kg.db.wal*`, `kg.db.shadow` and the checkpoint locks are
+  renamed to `*.corrupt-<timestamp>` and the open is retried once. Moved, not deleted.
+  LadybugDB words the damage differently depending on which file it hit, so both variants
+  are matched; any other error is passed through untouched, so a misconfiguration cannot
+  clear a healthy WAL. An **intact** WAL left behind by a hard kill is the normal case and
+  is still recovered as before. If the retry fails as well, the error stands — then only a
+  restore from `/backups` helps. (#142)
+
 ## [1.2.4] – 2026-09-14
 
 ### Added
@@ -622,7 +640,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.4...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.5...HEAD
+[1.2.5]: https://github.com/markus7h/ai-rem/compare/v1.2.4...v1.2.5
 [1.2.4]: https://github.com/markus7h/ai-rem/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/markus7h/ai-rem/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/markus7h/ai-rem/compare/v1.2.1...v1.2.2
