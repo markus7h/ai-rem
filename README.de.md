@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.2.4](https://github.com/markus7h/ai-rem/releases/tag/v1.2.4)**.
+> Diese Dokumentation bezieht sich auf **[v1.2.5](https://github.com/markus7h/ai-rem/releases/tag/v1.2.5)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -220,9 +220,19 @@ jedes `compose up -d`) schickt per Default 10 Sekunden später SIGKILL. Am 13.09
 dieser SIGKILL mitten in den Checkpoint: `kg.db.wal.checkpoint` und die Lock-Dateien
 blieben liegen, der nächste Start scheiterte an `Checksum verification failed, the WAL
 file is corrupted` — in einer Crash-Schleife, weil `unless-stopped` es immer wieder
-versuchte. Die Reparatur besteht darin, die Reste wegzuräumen; was in der WAL stand, ist
-weg. Drei Minuten Gnadenfrist reichen für einen Checkpoint dieser Größe locker und kosten
-nichts, wenn er früher fertig ist.
+versuchte. Drei Minuten Gnadenfrist reichen für einen Checkpoint dieser Größe locker und
+kosten nichts, wenn er früher fertig ist.
+
+Gegen den geordneten `docker stop` hilft das — gegen einen Absturz nicht. Am 16.09.2026
+segfaultete LadybugDB mitten im Checkpoint (Exit 139); ein Segfault fragt nicht nach
+SIGTERM, und dieselbe Crash-Schleife lief 20 Runden, bis jemand von Hand eingriff. Seit
+v1.2.5 räumt der Server die Reste selbst weg: meldet LadybugDB beim Öffnen eine
+beschädigte WAL, wandern `kg.db.wal*`, `kg.db.shadow` und die Checkpoint-Locks als
+`*.corrupt-<Zeitstempel>` zur Seite, und der Start läuft einmal neu an. Verschoben statt
+gelöscht — falls jemand forensisch drankommen will. Verloren ist damit nur, was seit dem
+letzten Checkpoint noch nicht gemerged war; eine **intakte** WAL bleibt unangetastet und
+wird normal recovert. Scheitert auch der zweite Versuch, bleibt es beim Fehler: dann hilft
+nur ein Restore aus `/backups`.
 
 ### Warum der Embedding-Backfill in Portionen schreibt
 

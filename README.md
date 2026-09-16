@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.2.4](https://github.com/markus7h/ai-rem/releases/tag/v1.2.4)**.
+> This documentation describes **[v1.2.5](https://github.com/markus7h/ai-rem/releases/tag/v1.2.5)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -218,9 +218,18 @@ into kg.db so the next start opens without an expensive recovery — and `docker
 (so every `compose up -d`) sends SIGKILL 10 seconds later by default. On 2026-09-13 that
 SIGKILL landed in the middle of the checkpoint: `kg.db.wal.checkpoint` and the lock files
 stayed behind, and the next start failed on `Checksum verification failed, the WAL file
-is corrupted` — in a crash loop, because `unless-stopped` kept retrying. Recovery is to
-move the leftovers aside; what was in the WAL is gone. Three minutes of grace are plenty
-for a checkpoint of this size and cost nothing when it finishes earlier.
+is corrupted` — in a crash loop, because `unless-stopped` kept retrying. Three minutes of
+grace are plenty for a checkpoint of this size and cost nothing when it finishes earlier.
+
+That covers an orderly `docker stop` — not a crash. On 2026-09-16 LadybugDB segfaulted in
+the middle of a checkpoint (exit 139); a segfault does not ask for SIGTERM, and the same
+crash loop ran 20 rounds until someone intervened by hand. Since v1.2.5 the server clears
+the leftovers itself: when LadybugDB reports a damaged WAL on open, `kg.db.wal*`,
+`kg.db.shadow` and the checkpoint locks are moved aside as `*.corrupt-<timestamp>` and the
+start is retried once. Moved, not deleted — in case anyone wants to look at them. All that
+is lost is whatever had not been merged since the last checkpoint; an **intact** WAL is
+left alone and recovers normally. If the second attempt fails too, the error stands: then
+only a restore from `/backups` helps.
 
 ### Why the embedding backfill writes in portions
 

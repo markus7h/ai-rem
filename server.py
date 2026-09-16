@@ -72,7 +72,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -426,10 +426,68 @@ _CLIENT_ARTIFACTS: dict[str, tuple[str, str]] = {
     "commands/ai-rem-update.md": ("/cmd/ai-rem-update", AI_REM_UPDATE_CMD_MD),
 }
 
-db = ladybug.Database(
-    DB_PATH,
-    buffer_pool_size=LADYBUG_BUFFER_POOL_SIZE_MB * 1024 * 1024 if LADYBUG_BUFFER_POOL_SIZE_MB else 0,
+# Ein harter Tod (SIGKILL, OOM, Segfault) laesst WAL-Reste liegen. Eine intakte
+# WAL recovert LadybugDB beim naechsten Start selbst — das ist der Normalfall und
+# darf nicht angefasst werden. Ist sie beschaedigt, wirft schon der Konstruktor,
+# und ohne Eingriff scheitert jeder Start erneut: mit `restart: unless-stopped`
+# dreht der Container endlos, ohne je hochzukommen (16.09.2026: Segfault in
+# libstdc++ mitten im Checkpoint, 20 Restarts, 15 Minuten Ausfall, von Hand
+# repariert). LadybugDB meldet den Schaden in zwei Varianten, je nachdem welche
+# Datei es erwischt hat.
+_WAL_CORRUPT_MARKERS = (
+    "wal file is corrupted",   # .wal.checkpoint: im Merge gestorben
+    "corrupted wal file",      # .wal: beschaedigter Record
 )
+
+# Reihenfolge egal, aber alle Checkpoint-Reste muessen mitgehen: bleibt eine
+# .shadow oder eine Lock-Datei des abgebrochenen Checkpoints liegen, nimmt der
+# naechste Start den halben Vorgang wieder auf und scheitert erneut.
+_WAL_SUFFIXES = (".wal", ".wal.checkpoint", ".shadow",
+                 ".checkpoint.apply.lock", ".checkpoint.intent.lock")
+
+
+def _quarantine_wal(path: str) -> list[str]:
+    """WAL-/Checkpoint-Reste neben die DB schieben. Umbenennen statt loeschen —
+    im Zweifel will man forensisch drankommen, und geloescht ist geloescht."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    moved = []
+    for suffix in _WAL_SUFFIXES:
+        src = path + suffix
+        if not os.path.exists(src):
+            continue
+        dst = "%s.corrupt-%s" % (src, stamp)
+        try:
+            os.rename(src, dst)
+            moved.append(os.path.basename(dst))
+        except OSError as ex:
+            log.error("WAL-Quarantaene: %s liess sich nicht verschieben: %s", src, ex)
+    return moved
+
+
+def _open_database(path: str) -> ladybug.Database:
+    """kg.db oeffnen, eine beschaedigte WAL genau einmal in Quarantaene schieben.
+
+    Nicht gemergte Transaktionen seit dem letzten Checkpoint sind damit weg — die
+    Alternative ist ein Dienst, der gar nicht mehr startet. Scheitert auch der
+    zweite Versuch, fliegt der Fehler: dann hilft nur ein Restore aus /backups.
+    """
+    pool = LADYBUG_BUFFER_POOL_SIZE_MB * 1024 * 1024 if LADYBUG_BUFFER_POOL_SIZE_MB else 0
+    try:
+        return ladybug.Database(path, buffer_pool_size=pool)
+    except RuntimeError as ex:
+        if not any(m in str(ex).lower() for m in _WAL_CORRUPT_MARKERS):
+            raise
+        log.error("kg.db laesst sich nicht oeffnen: %s", ex)
+        moved = _quarantine_wal(path)
+        if not moved:
+            raise
+        log.warning("WAL in Quarantaene (%s) — neuer Startversuch. Nicht gemergte "
+                    "Transaktionen seit dem letzten Checkpoint sind verloren.",
+                    ", ".join(moved))
+        return ladybug.Database(path, buffer_pool_size=pool)
+
+
+db = _open_database(DB_PATH)
 
 # Connection objects are not thread-safe, but a Database can host many.
 # A small pool lets independent requests run truly concurrently — under the
@@ -4202,10 +4260,7 @@ def _reopen_db() -> None:
     while not _pool.empty():
         _pool.get_nowait()
     db.close()
-    db = ladybug.Database(
-        DB_PATH,
-        buffer_pool_size=LADYBUG_BUFFER_POOL_SIZE_MB * 1024 * 1024 if LADYBUG_BUFFER_POOL_SIZE_MB else 0,
-    )
+    db = _open_database(DB_PATH)
     _pool = queue.Queue(maxsize=LADYBUG_POOL_SIZE)
     for _ in range(LADYBUG_POOL_SIZE):
         _pool.put(ladybug.Connection(db))
