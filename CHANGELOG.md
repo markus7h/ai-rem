@@ -29,7 +29,7 @@ German).
   are matched; any other error is passed through untouched, so a misconfiguration cannot
   clear a healthy WAL. An **intact** WAL left behind by a hard kill is the normal case and
   is still recovered as before. If the retry fails as well, the error stands — then only a
-  restore from `/backups` helps.
+  restore from `/backups` helps. (#142)
 
 ## [1.2.4] – 2026-09-14
 
