@@ -5,7 +5,7 @@
 # (uv/pip-compile) erst nachrüsten, wenn ein Transitiv-Bump real beißt.
 fastmcp==3.4.7
 ladybug==0.20.4
-numpy==2.5.2
+numpy==2.5.3
 cryptography==50.0.1
 pyyaml==6.0.3
 
