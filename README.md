@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.2.6](https://github.com/markus7h/ai-rem/releases/tag/v1.2.6)**.
+> This documentation describes **[v1.2.7](https://github.com/markus7h/ai-rem/releases/tag/v1.2.7)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -118,6 +118,7 @@ LADYBUG_BUFFER_POOL_SIZE_MB=256           # buffer pool in MiB (0 = default: 80%
 LADYBUG_WAL_CHECKPOINT_MB=2               # self-checkpoint the WAL above this size (0/empty = off)
 KG_REBUILD_MB=2048                        # compact kg.db on the next start above this size (there is no VACUUM)
 EMBED_BACKFILL_PORTION=300                # vectors written per database session
+EMBED_RECONCILE_SEC=3600                  # how often the server backfills missing vectors (0 = startup/nightly only)
 KG_MAX_MB=4096                            # above this the embedding backfill stops writing entirely
 KG_MIN_FREE_MB=1024                       # free disk space the backfill requires before it writes
 AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
@@ -142,8 +143,9 @@ fastembed and the model (413 MB → 162 MB).
 Either way the search is **hybrid**: substring hits (computed locally) and semantic
 hits are merged by reciprocal-rank fusion — entries corroborated by several signals rank
 first, name matches beat description matches. If the external endpoint is unreachable,
-entries are stored without a vector and search keeps working lexically — the
-startup/nightly backfill fills the gaps once the service is back.
+entries are stored without a vector and search keeps working lexically — the backfill
+fills the gaps once the service is back, at startup, hourly (`EMBED_RECONCILE_SEC`) and
+at the end of the nightly run.
 
 Switching backends changes the vector dimension (384 ↔ 1024), which makes the stored
 vectors meaningless. The server detects that on the next backfill and recomputes **all**

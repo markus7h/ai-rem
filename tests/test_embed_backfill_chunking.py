@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -186,6 +187,56 @@ def _scenario_checkpoint_verwirft() -> None:
     print("OK")
 
 
+def _scenario_reconcile() -> None:
+    """Der Scheduler zieht verlorene Vektoren stuendlich nach — auch bei
+    abgeschaltetem Cleanup.
+
+    Vorher lief der Backfill nur beim Start und am Ende des Nightly-Cleanups. Ein
+    einzelner Embed-Call, der am toten bge-m3-Deployment hinter dem LiteLLM-Router
+    scheiterte (18.09., 15:47), hinterliess damit bis zum naechsten Morgen eine
+    Entity ohne Vektor. Der Aufruf muss deshalb VOR dem enabled-Check stehen:
+    sonst haengt das Nachziehen am Cleanup-Schalter, der damit nichts zu tun hat.
+    """
+    server = _server("ai-rem-reconcile-")
+
+    server._load_cleanup_cfg = lambda: {"enabled": False}
+    laeufe = []
+    server._embed_backfill = lambda *a, **k: laeufe.append(1)
+
+    class _Abbruch:
+        """Statt der 60 s: kurz schlafen, nach zwei Iterationen Schluss."""
+
+        def __init__(self, schlaf=0.0):
+            self.schlaf = schlaf
+            self.n = 0
+
+        def wait(self, _sek):
+            time.sleep(self.schlaf)
+            self.n += 1
+            return self.n > 2
+
+    # Intervall abgelaufen -> je Iteration ein Lauf, trotz enabled=False.
+    server.EMBED_RECONCILE_SEC = 1
+    server._shutdown = _Abbruch(schlaf=1.05)
+    server._cleanup_scheduler_loop()
+    assert len(laeufe) == 2, f"Reconcile lief nicht je Iteration: {laeufe}"
+
+    # Intervall noch nicht abgelaufen -> kein Lauf.
+    server.EMBED_RECONCILE_SEC = 3600
+    laeufe.clear()
+    server._shutdown = _Abbruch()
+    server._cleanup_scheduler_loop()
+    assert laeufe == [], f"Reconcile ignoriert das Intervall: {laeufe}"
+
+    # 0 heisst aus — und zwar wirklich aus, nicht "jede Minute".
+    server.EMBED_RECONCILE_SEC = 0
+    server._shutdown = _Abbruch(schlaf=0.01)
+    server._cleanup_scheduler_loop()
+    assert laeufe == [], f"0 schaltet den Reconcile nicht ab: {laeufe}"
+
+    print("OK")
+
+
 def _lauf(szenario):
     r = subprocess.run(
         [sys.executable, __file__, szenario],
@@ -212,6 +263,10 @@ def test_backfill_bricht_ab_wenn_checkpoint_vektoren_verwirft():
     _lauf("checkpoint_verwirft")
 
 
+def test_scheduler_zieht_verlorene_vektoren_stuendlich_nach():
+    _lauf("reconcile")
+
+
 if __name__ == "__main__":
     szenario = sys.argv[1] if len(sys.argv) > 1 else "chunks"
     if szenario == "alle":
@@ -220,5 +275,7 @@ if __name__ == "__main__":
         _scenario_checkpoint_faellt_aus()
     elif szenario == "checkpoint_verwirft":
         _scenario_checkpoint_verwirft()
+    elif szenario == "reconcile":
+        _scenario_reconcile()
     else:
         _scenario()

@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.2.6](https://github.com/markus7h/ai-rem/releases/tag/v1.2.6)**.
+> Diese Dokumentation bezieht sich auf **[v1.2.7](https://github.com/markus7h/ai-rem/releases/tag/v1.2.7)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -117,6 +117,7 @@ LADYBUG_BUFFER_POOL_SIZE_MB=256          # Buffer-Pool in MiB (0 = Default: 80% 
 LADYBUG_WAL_CHECKPOINT_MB=2              # WAL selbst mergen ab dieser Größe (0/leer = aus)
 KG_REBUILD_MB=2048                       # kg.db beim nächsten Start kompaktieren ab dieser Größe (es gibt kein VACUUM)
 EMBED_BACKFILL_PORTION=300               # Vektoren je Datenbank-Session
+EMBED_RECONCILE_SEC=3600                 # so oft zieht der Server fehlende Vektoren nach (0 = nur Start/Nightly)
 KG_MAX_MB=4096                           # darüber schreibt der Embedding-Backfill gar nicht mehr
 KG_MIN_FREE_MB=1024                      # so viel Plattenplatz muss für einen Backfill frei sein
 AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im RAM gehalten werden
@@ -141,8 +142,8 @@ In beiden Fällen sucht ai-rem **hybrid**: Substring-Treffer (lokal berechnet) u
 semantische Treffer werden per Reciprocal-Rank-Fusion verschmolzen — Einträge, die
 mehrere Signale bestätigen, stehen vorn, Name-Treffer schlagen Beschreibungs-Treffer.
 Ist der externe Endpoint nicht erreichbar, werden Einträge ohne Vektor gespeichert und
-die Suche funktioniert lexikalisch weiter — der Backfill beim Start und im Nightly-Lauf
-holt die fehlenden Vektoren nach.
+die Suche funktioniert lexikalisch weiter — der Backfill holt die fehlenden Vektoren
+nach, beim Start, stündlich (`EMBED_RECONCILE_SEC`) und am Ende des Nightly-Laufs.
 
 Ein Backendwechsel ändert die Vektor-Dimension (384 ↔ 1024) und macht gespeicherte
 Vektoren bedeutungslos. Der Server erkennt das beim nächsten Backfill und rechnet

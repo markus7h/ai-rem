@@ -13,6 +13,26 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.2.7] – 2026-09-18
+
+### Fixed
+- **A vector lost to a failed embedding call is now picked up within the hour.**
+  `_embed_backfill` only ran at container start and at the end of the nightly
+  cleanup, so a single failed call left an entity unsearchable semantically until
+  the next morning — with the `system-check` hook reporting `embed ❌ N ohne Vektor`
+  at every session start in between. Seen on 2026-09-18: the LiteLLM router sent
+  three ai-rem calls (09:08, 12:12, 15:47) to a `bge-m3` deployment whose host was
+  down. The router knows the host is unhealthy and `enable_health_check_routing`
+  normally filters it out — 40 of 40 test calls went to the healthy host — but once
+  a deployment's 120 s cooldown expires it is back in the pool, and the gateway log
+  shows `Cooldown Deployments=[]` right next to the connection error. ai-rem cannot
+  fix the router, so it stops depending on every single call succeeding: the cleanup
+  scheduler thread, which ticks once a minute anyway, now also reconciles missing
+  vectors every `EMBED_RECONCILE_SEC` (default 3600, `0` disables). It runs before
+  the cleanup `enabled` check — backfilling vectors has nothing to do with whether
+  nightly cleanup is switched on — and is a single counting query when no vectors
+  are open.
+
 ## [1.2.6] – 2026-09-18
 
 ### Fixed
@@ -674,7 +694,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.6...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.7...HEAD
+[1.2.7]: https://github.com/markus7h/ai-rem/compare/v1.2.6...v1.2.7
 [1.2.6]: https://github.com/markus7h/ai-rem/compare/v1.2.5...v1.2.6
 [1.2.5]: https://github.com/markus7h/ai-rem/compare/v1.2.4...v1.2.5
 [1.2.4]: https://github.com/markus7h/ai-rem/compare/v1.2.3...v1.2.4
