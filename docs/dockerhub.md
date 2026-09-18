@@ -127,6 +127,7 @@ Set in the Compose `.env`:
 | `EMBED_ENABLED` | `1` | `0` disables semantic search entirely (lexical only) |
 | `KG_REBUILD_MB` | `2048` | If kg.db exceeds this at startup, the server compacts it (dump → fresh DB → import) — there is no `VACUUM`. A guard from the Kuzu era, kept as a safety net |
 | `EMBED_BACKFILL_PORTION` | `300` | Vectors written per database session. A Kuzu-era workaround for checkpoints that silently discarded writes; on LadybugDB the same pattern keeps all 1342 vectors in a 40 MB file. Kept for now because it also caps the memory peak during a restore |
+| `EMBED_RECONCILE_SEC` | `3600` | How often the server backfills entities left without a vector, e.g. after a failed embedding call. `0` falls back to startup and nightly cleanup only |
 | `KG_MAX_MB` | `4096` | Above this size the embedding backfill stops writing altogether — vectors are derived data and must not fill the disk |
 | `KG_MIN_FREE_MB` | `1024` | Free disk space the backfill requires before it writes |
 

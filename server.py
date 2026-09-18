@@ -73,7 +73,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.2.6"
+VERSION = "1.2.7"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -2436,6 +2436,13 @@ EMBED_BACKFILL_CHUNK = int(os.getenv("EMBED_BACKFILL_CHUNK", "32"))
 # Vektoren in 32er-Chunks: 771 MB Datei, 0 Vektoren übrig. Weniger Checkpoints
 # heißt kleinere Datei; nach oben begrenzt sie der Buffer-Pool.
 EMBED_BACKFILL_PORTION = int(os.getenv("EMBED_BACKFILL_PORTION", "300"))
+# Reconcile-Intervall. Der Backfill lief bisher nur beim Start und nach dem
+# Nightly-Cleanup. Scheitert ein einzelner Embed-Call — etwa weil der LiteLLM-
+# Router ihn auf ein totes bge-m3-Deployment geschickt hat —, blieb die Entity
+# damit bis zum nächsten Cleanup ohne Vektor: semantisch unauffindbar, und der
+# system-check-Hook meldet bei jedem Sessionstart "embed ❌ N ohne Vektor".
+# Stündlich reicht: ohne offene Vektoren kostet der Lauf eine Zähl-Query. 0 = aus.
+EMBED_RECONCILE_SEC = int(os.getenv("EMBED_RECONCILE_SEC", "3600"))
 
 _embed_model = None
 _embed_model_lock = threading.Lock()
@@ -4256,8 +4263,14 @@ def _cleanup_run(triggered_by: str = "scheduler") -> dict:
 
 
 def _cleanup_scheduler_loop() -> None:
+    # Trägt den Reconcile mit: der Thread tickt ohnehin jede Minute, und der
+    # Backfill im selben Thread kann nicht mit dem des Cleanups kollidieren.
+    naechster_reconcile = time.monotonic() + EMBED_RECONCILE_SEC
     while not _shutdown.wait(60):
         try:
+            if EMBED_RECONCILE_SEC and time.monotonic() >= naechster_reconcile:
+                naechster_reconcile = time.monotonic() + EMBED_RECONCILE_SEC
+                _embed_backfill()  # verlorene Vektoren nachziehen, No-op wenn keine offen
             cfg = _load_cleanup_cfg()
             if not cfg.get("enabled"):
                 continue

@@ -73,7 +73,7 @@ The verification age deliberately is **not** `updated_at`: every `memory_add` re
 
 > **LLM reachability:** the nightly judge needs `AI_REM_OLLAMA_URL` to point at a reachable endpoint; the judged model comes from `CLEANUP_LLM_MODEL` (default `qwen`). In the bundled `docker-compose.yml` it defaults to `http://mystorage.lan:11437` (override per deployment via `.env`). If unset/unreachable, the cleanup still runs but every ambiguous pair is pushed to the review queue instead of being auto-judged (`ollama_used=false` in the run log).
 >
-> **Cleanup hour vs. host sleep schedule:** the run also backfills missing embedding vectors at the end (`EMBED_URL`). If the llama-server or the embedding service lives on a host that sleeps at night, the cleanup hour must be set **after** its wake time — otherwise both go nowhere: the judge stays silent (`ollama_used=false`), the backfill fails with `No route to host`, and `embed_pending` in `/api/status` stops going down, because the nightly run is the only backfill trigger besides container start.
+> **Cleanup hour vs. host sleep schedule:** the run also backfills missing embedding vectors at the end (`EMBED_URL`). If the llama-server or the embedding service lives on a host that sleeps at night, the cleanup hour must be set **after** its wake time — otherwise both go nowhere: the judge stays silent (`ollama_used=false`), the backfill fails with `No route to host`. The hourly reconcile (`EMBED_RECONCILE_SEC`) catches `embed_pending` up again anyway, but the judge only runs once a night.
 
 ---
 
