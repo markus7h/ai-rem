@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.2.5](https://github.com/markus7h/ai-rem/releases/tag/v1.2.5)**.
+> Diese Dokumentation bezieht sich auf **[v1.2.6](https://github.com/markus7h/ai-rem/releases/tag/v1.2.6)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -223,16 +223,24 @@ file is corrupted` — in einer Crash-Schleife, weil `unless-stopped` es immer w
 versuchte. Drei Minuten Gnadenfrist reichen für einen Checkpoint dieser Größe locker und
 kosten nichts, wenn er früher fertig ist.
 
-Gegen den geordneten `docker stop` hilft das — gegen einen Absturz nicht. Am 16.09.2026
-segfaultete LadybugDB mitten im Checkpoint (Exit 139); ein Segfault fragt nicht nach
-SIGTERM, und dieselbe Crash-Schleife lief 20 Runden, bis jemand von Hand eingriff. Seit
-v1.2.5 räumt der Server die Reste selbst weg: meldet LadybugDB beim Öffnen eine
-beschädigte WAL, wandern `kg.db.wal*`, `kg.db.shadow` und die Checkpoint-Locks als
-`*.corrupt-<Zeitstempel>` zur Seite, und der Start läuft einmal neu an. Verschoben statt
-gelöscht — falls jemand forensisch drankommen will. Verloren ist damit nur, was seit dem
-letzten Checkpoint noch nicht gemerged war; eine **intakte** WAL bleibt unangetastet und
-wird normal recovert. Scheitert auch der zweite Versuch, bleibt es beim Fehler: dann hilft
-nur ein Restore aus `/backups`.
+Gegen den geordneten `docker stop` hilft das — gegen einen Absturz nicht. LadybugDB
+segfaultete am 16.09.2026 mitten im Checkpoint und am 18.09.2026 noch einmal (Exit 139);
+ein Segfault fragt nicht nach SIGTERM, und die Crash-Schleife lief 20 bzw. 22 Runden, bis
+jemand von Hand eingriff. v1.2.5 räumte auf, wenn LadybugDB eine beschädigte WAL *meldete*
+— am 18.09.2026 meldete es nichts, weil schon der Konstruktor per Signal starb, und ein
+SIGSEGV sieht kein `except`.
+
+Seit v1.2.6 fällt die Entscheidung dort, wo dieser Tod überhaupt sichtbar ist. Liegen neben
+der kg.db WAL- oder Checkpoint-Reste, öffnet der Server die Datenbank zuerst in einem
+Wegwerf-Subprozess. Überlebt der, läuft der echte Open unverändert; stirbt er, wandern
+vorher `kg.db.wal*`, `kg.db.shadow` und die Checkpoint-Locks als `*.corrupt-<Zeitstempel>`
+zur Seite. Verschoben statt gelöscht — falls jemand forensisch drankommen will. Verloren
+ist damit nur, was seit dem letzten Checkpoint noch nicht gemerged war; eine **intakte** WAL
+übersteht den Probe-Open und wird normal recovert. Ein per SIGKILL beendeter Probe zählt als
+überlebt: das ist der OOM-Killer, und Speicherdruck darf keine gesunden Transaktionen
+kosten. Der Probe kostet einen zweiten Open, deshalb läuft er nur, wenn wirklich Reste da
+sind — nach einem sauberen Stop also nie. Scheitert der Open trotzdem, bleibt es beim
+Fehler: dann hilft nur ein Restore aus `/backups`.
 
 ### Warum der Embedding-Backfill in Portionen schreibt
 

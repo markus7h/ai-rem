@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.2.5](https://github.com/markus7h/ai-rem/releases/tag/v1.2.5)**.
+> This documentation describes **[v1.2.6](https://github.com/markus7h/ai-rem/releases/tag/v1.2.6)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -221,15 +221,22 @@ stayed behind, and the next start failed on `Checksum verification failed, the W
 is corrupted` — in a crash loop, because `unless-stopped` kept retrying. Three minutes of
 grace are plenty for a checkpoint of this size and cost nothing when it finishes earlier.
 
-That covers an orderly `docker stop` — not a crash. On 2026-09-16 LadybugDB segfaulted in
-the middle of a checkpoint (exit 139); a segfault does not ask for SIGTERM, and the same
-crash loop ran 20 rounds until someone intervened by hand. Since v1.2.5 the server clears
-the leftovers itself: when LadybugDB reports a damaged WAL on open, `kg.db.wal*`,
-`kg.db.shadow` and the checkpoint locks are moved aside as `*.corrupt-<timestamp>` and the
-start is retried once. Moved, not deleted — in case anyone wants to look at them. All that
-is lost is whatever had not been merged since the last checkpoint; an **intact** WAL is
-left alone and recovers normally. If the second attempt fails too, the error stands: then
-only a restore from `/backups` helps.
+That covers an orderly `docker stop` — not a crash. LadybugDB segfaulted mid-checkpoint on
+2026-09-16 and again on 2026-09-18 (exit 139); a segfault does not ask for SIGTERM, and the
+crash loop ran 20 and 22 rounds until someone intervened by hand. v1.2.5 cleaned up when
+LadybugDB *reported* a damaged WAL — on 2026-09-18 it reported nothing, because the
+constructor itself died by signal, and no `except` ever sees a SIGSEGV.
+
+Since v1.2.6 the decision is made where that death is visible at all. If any WAL or
+checkpoint leftovers sit next to kg.db, the server first opens the database in a throwaway
+subprocess. Survives it, the real open proceeds untouched; dies it, `kg.db.wal*`,
+`kg.db.shadow` and the checkpoint locks are moved aside as `*.corrupt-<timestamp>` first.
+Moved, not deleted — in case anyone wants to look at them. All that is lost is whatever had
+not been merged since the last checkpoint; an **intact** WAL survives the probe and recovers
+normally. A probe killed by SIGKILL counts as survived: that is the OOM killer, and memory
+pressure must not cost healthy transactions. The probe costs a second open, so it only runs
+when leftovers are actually there — never after a clean stop. If the open fails anyway, the
+error stands: then only a restore from `/backups` helps.
 
 ### Why the embedding backfill writes in portions
 

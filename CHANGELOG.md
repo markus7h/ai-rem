@@ -13,6 +13,40 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.2.6] – 2026-09-18
+
+### Fixed
+- **The WAL guard now catches the death it was built for.** v1.2.5 hung on
+  `except RuntimeError` and cleaned up when LadybugDB *reported* a damaged WAL. On
+  2026-09-18 it reported nothing: the `ladybug.Database()` constructor itself died by
+  SIGSEGV, and no `except` ever sees a signal. Same picture as before — segfault in
+  `libstdc++` mid self-checkpoint, `kg.db.wal.checkpoint`, `kg.db.shadow` and both
+  checkpoint locks left behind — but this time 22 restarts produced not a single log
+  line, because the process was gone before the first one. Reproduced against the
+  production image on a copy of the crash state: `ladybug.Database()` exits 139, no
+  Python exception. The guard now decides where that death is observable at all: when
+  WAL or checkpoint leftovers are present, kg.db is opened in a throwaway subprocess
+  first, and an exit code other than 0 moves `kg.db.wal*`, `kg.db.shadow` and the
+  checkpoint locks aside as `*.corrupt-<timestamp>`. Moved, not deleted. A probe killed
+  by SIGKILL counts as survived — that is the OOM killer, and memory pressure must not
+  cost healthy transactions. A probe still running after 300s counts as survived too: a
+  long recovery is slow, not broken. The probe costs a full second open, so it only runs
+  when leftovers are actually there, never after a clean stop. (#143)
+
+### Changed
+- **LadybugDB 0.20.2 → 0.20.4.** 0.20.4 fixes, among others,
+  [#924](https://github.com/LadybugDB/ladybug/issues/924) — every checkpoint orphaned its
+  shadow `FileHandle`, leaking ~4 MiB of the `max_db_size` budget per fold, and the first
+  checkpoint past the cap segfaulted mid-fold leaving exactly the artifacts we keep
+  finding (stale `.shadow`, orphaned `.wal.checkpoint`). Whether that was our trigger is
+  unproven: no `Maximum database size` error appears in the logs of any of the four
+  incidents. 0.20.3/0.20.4 carry four further segfault candidates (use-after-free on a
+  `ResultSet` outliving its `Database` and on Arrow registry entries, a data race in
+  `OptimisticAllocator`, a MERGE crash on corrupted HASH PK entries). Verified before
+  rollout: 0.20.4 reads the 0.20.2 storage unchanged (1735 entities), and it still
+  segfaults on the already-broken state from 2026-09-18 — a damaged database stays
+  damaged, which is precisely why the guard above stays. (#143)
+
 ## [1.2.5] – 2026-09-16
 
 ### Fixed
@@ -640,7 +674,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.5...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.6...HEAD
+[1.2.6]: https://github.com/markus7h/ai-rem/compare/v1.2.5...v1.2.6
 [1.2.5]: https://github.com/markus7h/ai-rem/compare/v1.2.4...v1.2.5
 [1.2.4]: https://github.com/markus7h/ai-rem/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/markus7h/ai-rem/compare/v1.2.2...v1.2.3
