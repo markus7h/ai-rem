@@ -31,7 +31,7 @@ German).
   by SIGKILL counts as survived — that is the OOM killer, and memory pressure must not
   cost healthy transactions. A probe still running after 300s counts as survived too: a
   long recovery is slow, not broken. The probe costs a full second open, so it only runs
-  when leftovers are actually there, never after a clean stop. (#PR)
+  when leftovers are actually there, never after a clean stop. (#143)
 
 ### Changed
 - **LadybugDB 0.20.2 → 0.20.4.** 0.20.4 fixes, among others,
@@ -45,7 +45,7 @@ German).
   `OptimisticAllocator`, a MERGE crash on corrupted HASH PK entries). Verified before
   rollout: 0.20.4 reads the 0.20.2 storage unchanged (1735 entities), and it still
   segfaults on the already-broken state from 2026-09-18 — a damaged database stays
-  damaged, which is precisely why the guard above stays. (#PR)
+  damaged, which is precisely why the guard above stays. (#143)
 
 ## [1.2.5] – 2026-09-16
 
