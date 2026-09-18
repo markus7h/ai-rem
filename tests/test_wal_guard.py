@@ -5,9 +5,11 @@ beschaedigte kg.db.wal.checkpoint, an der danach JEDER Start scheiterte — mit
 `restart: unless-stopped` drehte der Container 20 Runden, ohne je hochzukommen,
 bis jemand die Datei von Hand wegschob. Genau diese Handarbeit macht der Guard.
 
-Die beiden Fehlertexte stammen aus echten Laeufen gegen ladybug 0.20.2 (sie
-unterscheiden sich je nachdem, welche Datei es erwischt hat) — faengt eine
-kuenftige Version sie anders zu formulieren an, fallen diese Tests auf.
+Am 18.09.2026 passierte dasselbe noch einmal, nur stiller: diesmal segfaultete
+schon der Konstruktor. Der Guard aus v1.2.5 hing an `except RuntimeError` und sah
+nichts — ein SIGSEGV ist keine Exception, der Prozess ist einfach weg. Deshalb
+faellt die Entscheidung jetzt in einem Wegwerf-Subprozess, wo derselbe Tod als
+Exit-Code sichtbar wird. Diese Tests decken beide Todesarten ab.
 """
 import os
 import subprocess
@@ -113,13 +115,45 @@ def test_intakte_wal_bleibt_unangetastet(tmp_path):
         "an einer intakten WAL darf der Guard nicht anfassen"
 
 
-def test_fremder_fehler_wird_durchgereicht(tmp_path, monkeypatch):
-    """Nur WAL-Schaeden rechtfertigen die Quarantaene. Bei jedem anderen Fehler
-    muessen die Dateien liegen bleiben — sonst raeumt ein Tippfehler in der
-    Konfiguration die WAL ab."""
+def test_segfault_beim_open_wird_erkannt(tmp_path, monkeypatch):
+    """Der Fall vom 18.09.: der Konstruktor stirbt per Signal, ohne je zu melden
+    warum. Im eigenen Prozess waere das nicht beobachtbar — genau dafuer laeuft
+    der Probe als Kindprozess."""
     p = _frische_db(tmp_path)
-    with open(p + ".wal", "wb") as f:
-        f.write(b"nicht anfassen")
+    _harter_tod(p, 300, 340)
+    assert os.path.exists(p + ".wal"), "ohne liegengebliebene WAL testet das hier nichts"
+
+    monkeypatch.setattr(server, "_PROBE_SRC",
+                        "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)")
+    db = server._open_database(p)
+    assert _zeilen(db) == 50, "der Stand bis zum letzten Merge muss stehen"
+    db.close()
+
+    assert [f for f in os.listdir(tmp_path) if ".corrupt-" in f], \
+        "ein per Signal gestorbener Probe muss die WAL wegschieben"
+
+
+def test_oom_kill_raeumt_nichts_weg(tmp_path, monkeypatch):
+    """SIGKILL kommt vom OOM-Killer, nicht von der WAL. Wer hier quarantaeniert,
+    wirft gesunde Transaktionen weg, weil der Speicher knapp war."""
+    p = _frische_db(tmp_path)
+    _harter_tod(p, 400, 440)
+
+    monkeypatch.setattr(server, "_PROBE_SRC",
+                        "import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+    db = server._open_database(p)
+    db.close()
+
+    assert not [f for f in os.listdir(tmp_path) if ".corrupt-" in f], \
+        "ein SIGKILL darf die WAL nicht kosten"
+
+
+def test_ueberlebter_probe_schuetzt_die_wal(tmp_path, monkeypatch):
+    """Ueberlebt der Probe, liegt es nicht an der WAL. Scheitert der echte Open
+    danach trotzdem, fliegt der Fehler — aber die Dateien bleiben liegen, sonst
+    raeumt ein Tippfehler in der Konfiguration die WAL ab."""
+    p = _frische_db(tmp_path)
+    _harter_tod(p, 500, 540)
 
     def explodiert(*a, **kw):
         raise RuntimeError("buffer pool is full")
@@ -128,7 +162,21 @@ def test_fremder_fehler_wird_durchgereicht(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="buffer pool"):
         server._open_database(p)
 
-    assert os.path.exists(p + ".wal"), "fremder Fehler darf nichts verschieben"
+    assert not [f for f in os.listdir(tmp_path) if ".corrupt-" in f], \
+        "fremder Fehler darf nichts verschieben"
+
+
+def test_ohne_reste_kein_subprozess(tmp_path, monkeypatch):
+    """Nach einem sauberen Stop gibt es nichts zu pruefen. Der Probe kostet einen
+    kompletten zweiten Open — der darf nicht bei jedem Start anfallen."""
+    p = _frische_db(tmp_path)
+    assert not server._wal_leftovers(p), "sauber geschlossen, also nichts liegen"
+
+    monkeypatch.setattr(server, "_probe_open",
+                        lambda *a: pytest.fail("Probe ohne WAL-Reste gestartet"))
+    db = server._open_database(p)
+    assert _zeilen(db) == 50
+    db.close()
 
 
 def test_quarantaene_meldet_was_sie_verschoben_hat(tmp_path):

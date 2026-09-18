@@ -17,6 +17,7 @@ import queue
 import re
 import socket
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -72,7 +73,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -428,22 +429,29 @@ _CLIENT_ARTIFACTS: dict[str, tuple[str, str]] = {
 
 # Ein harter Tod (SIGKILL, OOM, Segfault) laesst WAL-Reste liegen. Eine intakte
 # WAL recovert LadybugDB beim naechsten Start selbst — das ist der Normalfall und
-# darf nicht angefasst werden. Ist sie beschaedigt, wirft schon der Konstruktor,
-# und ohne Eingriff scheitert jeder Start erneut: mit `restart: unless-stopped`
-# dreht der Container endlos, ohne je hochzukommen (16.09.2026: Segfault in
-# libstdc++ mitten im Checkpoint, 20 Restarts, 15 Minuten Ausfall, von Hand
-# repariert). LadybugDB meldet den Schaden in zwei Varianten, je nachdem welche
-# Datei es erwischt hat.
-_WAL_CORRUPT_MARKERS = (
-    "wal file is corrupted",   # .wal.checkpoint: im Merge gestorben
-    "corrupted wal file",      # .wal: beschaedigter Record
-)
-
+# darf nicht angefasst werden. Ueberlebt der Open sie nicht, kommt der Dienst ohne
+# Eingriff nie wieder hoch: mit `restart: unless-stopped` dreht der Container
+# endlos (16.09.2026: 20 Restarts, 15 Minuten Ausfall; 18.09.2026: 22 Restarts,
+# gut zwei Stunden). Beide Male Segfault in libstdc++ mitten im Self-Checkpoint.
+#
 # Reihenfolge egal, aber alle Checkpoint-Reste muessen mitgehen: bleibt eine
 # .shadow oder eine Lock-Datei des abgebrochenen Checkpoints liegen, nimmt der
 # naechste Start den halben Vorgang wieder auf und scheitert erneut.
 _WAL_SUFFIXES = (".wal", ".wal.checkpoint", ".shadow",
                  ".checkpoint.apply.lock", ".checkpoint.intent.lock")
+
+# Recovery einer grossen WAL darf dauern. Laeuft der Probe laenger, wird nicht
+# geraten, sondern unveraendert geoeffnet: lieber ein Crash-Loop, den ein Mensch
+# sieht, als eine gesunde WAL, die keiner mehr hat.
+_PROBE_TIMEOUT_S = 300
+
+_PROBE_SRC = ("import sys, ladybug; "
+              "ladybug.Database(sys.argv[1], buffer_pool_size=int(sys.argv[2]))")
+
+
+def _wal_leftovers(path: str) -> list[str]:
+    """Suffixe der WAL-/Checkpoint-Reste, die neben der DB liegen."""
+    return [s for s in _WAL_SUFFIXES if os.path.exists(path + s)]
 
 
 def _quarantine_wal(path: str) -> list[str]:
@@ -464,27 +472,52 @@ def _quarantine_wal(path: str) -> list[str]:
     return moved
 
 
+def _probe_open(path: str, pool: int) -> bool:
+    """kg.db in einem Wegwerfprozess oeffnen. False = der Open ueberlebt es nicht.
+
+    Ein Segfault im LadybugDB-Konstruktor ist im eigenen Prozess nicht abfangbar —
+    kein `except` sieht ein SIGSEGV, der Prozess ist einfach weg. Genau daran lief
+    der Marker-Guard aus v1.2.5 am 18.09.2026 vorbei: er wartete auf eine
+    RuntimeError, die nie kam, weil LadybugDB gar nichts mehr melden konnte. Als
+    Exit-Code eines Kindprozesses ist derselbe Tod dagegen nur eine Zahl.
+    """
+    try:
+        proc = subprocess.run([sys.executable, "-c", _PROBE_SRC, path, str(pool)],
+                              capture_output=True, timeout=_PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        log.warning("Probe-Open laeuft seit %ds ohne Ergebnis — kg.db wird "
+                    "unveraendert geoeffnet.", _PROBE_TIMEOUT_S)
+        return True
+    except OSError as ex:
+        log.error("Probe-Open nicht startbar (%s) — kg.db wird unveraendert "
+                  "geoeffnet.", ex)
+        return True
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == -signal.SIGKILL:
+        # Der OOM-Killer, nicht die WAL. Wer hier quarantaeniert, wirft gesunde
+        # Transaktionen weg, weil der Speicher knapp war.
+        log.error("Probe-Open per SIGKILL beendet (OOM?) — kg.db bleibt unangetastet.")
+        return True
+    log.error("Probe-Open gescheitert (Exit %d): %s", proc.returncode,
+              proc.stderr.decode("utf-8", "replace").strip()[-400:] or "keine Ausgabe")
+    return False
+
+
 def _open_database(path: str) -> ladybug.Database:
-    """kg.db oeffnen, eine beschaedigte WAL genau einmal in Quarantaene schieben.
+    """kg.db oeffnen und WAL-Reste, an denen der Open stirbt, in Quarantaene schieben.
 
     Nicht gemergte Transaktionen seit dem letzten Checkpoint sind damit weg — die
-    Alternative ist ein Dienst, der gar nicht mehr startet. Scheitert auch der
-    zweite Versuch, fliegt der Fehler: dann hilft nur ein Restore aus /backups.
+    Alternative ist ein Dienst, der gar nicht mehr startet. Hilft auch das nicht,
+    bleibt nur ein Restore aus /backups.
     """
     pool = LADYBUG_BUFFER_POOL_SIZE_MB * 1024 * 1024 if LADYBUG_BUFFER_POOL_SIZE_MB else 0
-    try:
-        return ladybug.Database(path, buffer_pool_size=pool)
-    except RuntimeError as ex:
-        if not any(m in str(ex).lower() for m in _WAL_CORRUPT_MARKERS):
-            raise
-        log.error("kg.db laesst sich nicht oeffnen: %s", ex)
+    if _wal_leftovers(path) and not _probe_open(path, pool):
         moved = _quarantine_wal(path)
-        if not moved:
-            raise
-        log.warning("WAL in Quarantaene (%s) — neuer Startversuch. Nicht gemergte "
-                    "Transaktionen seit dem letzten Checkpoint sind verloren.",
-                    ", ".join(moved))
-        return ladybug.Database(path, buffer_pool_size=pool)
+        if moved:
+            log.warning("WAL in Quarantaene (%s) — nicht gemergte Transaktionen seit "
+                        "dem letzten Checkpoint sind verloren.", ", ".join(moved))
+    return ladybug.Database(path, buffer_pool_size=pool)
 
 
 db = _open_database(DB_PATH)
