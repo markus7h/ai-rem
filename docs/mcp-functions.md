@@ -27,7 +27,7 @@ Memory-Senke bleibt.
 | `memory_get_context` | Relevanten Subgraph laden. Ohne Topic: offene Tasks + aktive Projekte + letzte Einträge + gepinnte Preferences. Mit Topic: direkt passender Ausschnitt. **Session-Start-Tool.** |
 | `memory_search` | Hybride Suche (lexikalisch + semantisch) über Name/Beschreibung; kürzt lange Bodies (~120 Zeichen). |
 | `memory_search_full` | Wie `search`, aber mit vollständiger Beschreibung (keine Kürzung). |
-| `memory_add` | Entity anlegen **oder aktualisieren** (Upsert nach Name). Felder: name, type, description, context, pinned, extra (JSON). |
+| `memory_add` | Entity anlegen **oder aktualisieren** (Upsert nach Name). Felder: name, type, description, context, pinned, extra (JSON). `extra` wird **gemergt**, nicht übergebene Keys bleiben erhalten. Bei `Task` wird `status` auf `offen | laufend | blockiert | erledigt` normalisiert (Synonyme gemappt, nicht mappbarer Freitext nach `extra.status_note`); Task abschließen = `extra={"status": "erledigt"}`, archiviert wird nach der Karenzzeit automatisch. |
 | `memory_relate` | Gerichtete Beziehung zwischen zwei Entities anlegen (z. B. NUTZT, ARBEITET_AN, GELÖST_DURCH, HÄNGT_AB_VON). |
 | `memory_get_relations` | Alle Beziehungen einer Entity anzeigen. |
 | `memory_list` | Entities nach Typ auflisten. |
@@ -35,7 +35,7 @@ Memory-Senke bleibt.
 | `memory_set_project_context` | Projektkontext als `Project`-Entity anlegen/aktualisieren (dev_dir, repo, deploy_dir, deploy_host, deploy_cmd, skills, rules) — **feldweises Merge**, nicht übergebene Felder bleiben erhalten. |
 | `memory_project_context` | Vollen Projektkontext in einem Aufruf laden: ungekürzter Record inkl. `extra` **plus** alle verknüpften Entities. Exakt oder per Fuzzy-Namenstreffer. |
 | `memory_merge` | Zwei Duplikate nicht-destruktiv zusammenführen. |
-| `memory_archive` | Entity archivieren statt löschen (Historie bleibt erhalten). |
+| `memory_archive` | Entity archivieren statt löschen (Historie bleibt erhalten). Bei einem `Task` wird zugleich `status=erledigt` gesetzt. |
 | `memory_delete` | Entity + alle Kanten löschen. |
 | `memory_status` | Kurzstatus: Anzahl Entities und Relationen. |
 | `memory_check_update` | Installierte Version vs. Docker Hub prüfen. |

@@ -20,10 +20,10 @@ route. Setting `AI_REM_ADMIN_TOOLS=1` on the server re-registers all twelve as M
 |---|---|
 | `memory_get_context(topic, context, include_archived)` | Load relevant subgraph (tasks, projects, decisions, preferences) |
 | `memory_search(query, context, include_archived, limit)` | Hybrid search over name + description: full-query and per-token lexical matching fused with semantic vector recall via reciprocal-rank fusion — corroborated entries rank first, name matches beat description matches |
-| `memory_add(name, type, description, extra, context, pinned, supersedes)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context`. Updating a changed `description` snapshots the previous state into `extra.history[]` (last 10, newest first). `supersedes="<old name>"` archives that entry and links it via `VERALTET_DURCH` |
+| `memory_add(name, type, description, extra, context, pinned, supersedes)` | Create or update an entity. `pinned=True` → preference always appears at the top in `get_context`. Updating a changed `description` snapshots the previous state into `extra.history[]` (last 10, newest first). `supersedes="<old name>"` archives that entry and links it via `VERALTET_DURCH`. `extra` is **merged** into the stored dict, so keys you omit survive. On a `Task` the `status` is normalised to `offen | laufend | blockiert | erledigt` (synonyms mapped, unmappable free text kept in `extra.status_note`) — closing a task is `extra={"status": "erledigt"}`, archiving happens automatically after the grace period |
 | `memory_relate(from, relation, to, extra)` | Create a relationship between two entities |
 
-## Admin ops — via `ai-rem <cmd>` / `POST /api/tool` (12)
+## Admin ops — via `ai-rem <cmd>` / `POST /api/tool` (13)
 
 | Tool / CLI subcommand | Description |
 |---|---|
@@ -33,12 +33,13 @@ route. Setting `AI_REM_ADMIN_TOOLS=1` on the server re-registers all twelve as M
 | `memory_preference_update` · `preference-update` | Update preference fields without overwriting the description |
 | `memory_project_context` · `project-context` | Load a project's full working context in one call: untruncated record incl. `extra` (paths/skills/rules) **plus** all directly related entities |
 | `memory_set_project_context` · `set-project-context` | Create/update a project's working context as a `Project` entity — **field-wise merge** (omitted fields are kept; `""`/`[]` clears one) |
-| `memory_archive` · `archive` | Archive an entry instead of deleting it — hidden from context/search/list by default, optionally compressed and linked via `VERALTET_DURCH` |
+| `memory_archive` · `archive` | Archive an entry instead of deleting it (on a `Task` this also sets `status=erledigt`) — hidden from context/search/list by default, optionally compressed and linked via `VERALTET_DURCH` |
 | `memory_merge` · `merge` | Fold a duplicate into the canonical entry: relations repointed, unique info appended, duplicate archived and linked via `DUPLIKAT_VON` |
 | `memory_delete` · `delete --yes` | Remove an entity and its relationships |
 | `memory_purge_archived` · `purge-archived --yes` | Permanently delete archived entries (destructive); `--keep-days N` spares recent ones |
 | `memory_status` · `status` | Quick status: number of entities and relations |
 | `memory_check_update` · `check-update` | Show the installed version and check Docker Hub for a newer one |
+| `memory_normalize_task_status` · `POST /api/tool` only | One-off migration: rewrite legacy `extra.status` values of all tasks to the enum and backfill `extra.done_at`, without touching `updated_at`. `dry_run=True` by default |
 
 `memory_get_context`, `memory_search` and `memory_list` hide archived entries by
 default — opt in with `include_archived=true`.

@@ -159,6 +159,14 @@ def cmd_check_update(c: MCPClient, _):
     _print(c.call("memory_check_update"))
 
 
+def cmd_close(c: MCPClient, a):
+    # Archivieren tut danach der Nightly-Cleanup von selbst, hier reicht der Status.
+    extra = {"status": "erledigt"}
+    if a.note:
+        extra["status_note"] = a.note
+    _print(c.call("memory_add", {"name": a.name, "type": "Task", "extra": extra}))
+
+
 def cmd_archive(c: MCPClient, a):
     args = {"name": a.name}
     if a.compressed:
@@ -389,6 +397,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("check-update", help="memory_check_update")
     s.set_defaults(func=cmd_check_update)
+
+    s = sub.add_parser("close", help="Task auf status=erledigt setzen")
+    s.add_argument("name")
+    s.add_argument("--note", default=None, help="Notiz in extra.status_note")
+    s.set_defaults(func=cmd_close)
 
     s = sub.add_parser("archive", help="memory_archive (nicht-destruktiv)")
     s.add_argument("name")

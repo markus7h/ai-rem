@@ -13,6 +13,54 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.3.0] – 2026-09-19
+
+### Changed
+- **`memory_add` merges `extra` instead of replacing it.** Closing a task by hand
+  (`--extra '{"status":"erledigt"}'`) used to wipe `plan_file`, `kind` and
+  `created` off the entry, because the dict was overwritten wholesale. Keys you do
+  not pass now survive; same-named keys still win. Removing a key is no longer
+  possible through `memory_add` — that path is `POST /api/tool`.
+- **`CLEANUP_TASK_RETENTION_DAYS` default 30 → 14.**
+
+### Added
+- **`extra.status` on a `Task` is normalised to `offen | laufend | blockiert |
+  erledigt`.** Live data had 17 distinct status values across 111 tasks. The old
+  read path compared the raw string against a six-value whitelist without
+  `strip()`, so a truthy-but-unknown value (`"abgeschlosen"`, `"erledigt "`,
+  `"completed"`) fell through *both* branches of the nightly cleanup: not in the
+  done-set, and the description-text fallback only fires on an *empty* status. Such
+  a task was permanently "open" and immune to self-cleaning — a typo was worse than
+  no status at all. Writes never fail: known spellings map to the enum, free text is
+  preserved in `extra.status_note` and the task stays visible as `laufend`. Both the
+  write path and the read paths normalise, so entries restored by `_apply_import`
+  (which writes past `memory_add`) are covered too. `Project` entities are
+  explicitly exempt — `memory_set_project_context` writes `status="aktiv"`.
+- **A task closed via the status is archived after a grace period, anchored on
+  `extra.done_at`.** `updated_at` is rewritten by every `memory_add`, so the clock
+  would restart on each stray edit. Leaving `erledigt` deletes the anchor again.
+- **A completion marker that only exists in the description text no longer archives
+  by itself.** Prose is too unreliable a reason to hide an entry; it now produces a
+  pending item of kind `archive` in the review queue. Dismissing one sets
+  `extra.done_marker_dismissed`, so the same tasks do not queue up again every
+  night.
+- **The comfortable path.** A done button in the `/tasks` UI, `ai-rem close <name>
+  [--note ...]` on the CLI, and a line in the MCP `instructions` telling the model
+  that `memory_add(name, "Task", extra={"status": "erledigt"})` is all a closure
+  takes. This matters because the MCP surface is four tools — `memory_archive` sits
+  in the admin set and the model cannot call it at all.
+- **`memory_normalize_task_status(dry_run=True)`** (admin, via `POST /api/tool`) to
+  migrate existing entries once. It writes `extra` directly without touching
+  `updated_at`: going through `memory_add` would date all tasks to today, destroy
+  the recency ordering in `get_context` and restart every grace period.
+
+### Fixed
+- **`memory_archive` on a task now sets `status="erledigt"` as well.** The two axes
+  were decoupled, so an archived task reappeared as open under
+  `include_archived=1`.
+- A non-string `extra.status` no longer raises an `AttributeError` that took out the
+  whole open-tasks section of `memory_get_context`.
+
 ## [1.2.7] – 2026-09-18
 
 ### Fixed
@@ -694,7 +742,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.2.7...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/markus7h/ai-rem/compare/v1.2.7...v1.3.0
 [1.2.7]: https://github.com/markus7h/ai-rem/compare/v1.2.6...v1.2.7
 [1.2.6]: https://github.com/markus7h/ai-rem/compare/v1.2.5...v1.2.6
 [1.2.5]: https://github.com/markus7h/ai-rem/compare/v1.2.4...v1.2.5

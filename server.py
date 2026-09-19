@@ -73,7 +73,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.2.7"
+VERSION = "1.3.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -1148,7 +1148,10 @@ mcp = FastMCP(
         "gepinnte Regeln (sort_order) erreichen jede Session.\n"
         "- Project: laufende Arbeit, Ziele. Relative Daten → absolute.\n"
         "- Topic: Pointer auf externe Systeme/Referenzen.\n"
-        "- Task/Decision/Problem/Solution/Tool: offene Aufgaben, Architektur, Bugs, Lösungen, Tools.\n\n"
+        "- Task/Decision/Problem/Solution/Tool: offene Aufgaben, Architektur, Bugs, Lösungen, Tools.\n"
+        "  Task abschließen: memory_add(name, 'Task', extra={'status': 'erledigt'}) — das genügt, "
+        "archiviert wird automatisch nach der Karenzzeit. Status: offen | laufend | blockiert | "
+        "erledigt (Synonyme wie 'gemergt' oder 'done' werden gemappt, Freitext landet in status_note).\n\n"
         "## Nicht speichern\n"
         "Code-Patterns/Architektur/Pfade (aus Code ableitbar), git-Historie (git log/blame), "
         "Fix-Rezepte (Code+Commit), ephemere Sitzungsdetails. "
@@ -1972,9 +1975,17 @@ def memory_add(
 
     Partial-Update: Beim Aktualisieren eines bestehenden Eintrags werden nur
     übergebene Felder gesetzt. Weggelassene Felder (description/extra/context/pinned
-    = None) behalten ihren bisherigen Wert; um ein Feld gezielt zu leeren, "" bzw.
-    {} bzw. False explizit übergeben. Beim Neuanlegen gelten die alten Defaults
-    ("" / {} / False).
+    = None) behalten ihren bisherigen Wert; um description bzw. pinned gezielt zu
+    leeren, "" bzw. False explizit übergeben. Beim Neuanlegen gelten die alten
+    Defaults ("" / {} / False).
+
+    extra wird gemergt, nicht ersetzt: übergebene Keys überschreiben gleichnamige,
+    alle anderen bleiben stehen. Einzelne Keys entfernen geht darüber nicht.
+
+    Bei type="Task" wird extra.status auf offen | laufend | blockiert | erledigt
+    normalisiert (Synonyme wie "gemergt" oder "done" werden gemappt); nicht mappbarer
+    Freitext landet in extra.status_note. Ein Task gilt als erledigt, sobald der
+    Status "erledigt" ist — archiviert wird er danach automatisch vom Nightly-Cleanup.
 
     Versionierung: Ändert ein Update die description, wird der bisherige Stand als
     Snapshot in extra.history[] gesichert (neueste vorn, letzte 10). Unsichtbar für
@@ -2010,18 +2021,38 @@ def memory_add(
     else:
         eff_pinned = cur_pinned or ""
 
-    # extra zusammenbauen: explizit übergebenes extra ersetzt das alte, sonst das
-    # bestehende beibehalten. context wird (wie bisher) zusätzlich in extra gespiegelt.
+    # extra zusammenbauen: übergebene Keys werden in das bestehende extra gemergt.
+    # Früher ersetzte ein explizites extra das alte komplett — damit löschte ein
+    # memory_add(extra={"status": "erledigt"}) bei Plan-Tasks nebenbei plan_file, kind
+    # und created, und genau das machte den bequemen Abschlussweg unmöglich. Kein
+    # Aufrufer will Keys gezielt entfernen; dafür bleibt /api/tool.
+    # context wird (wie bisher) zusätzlich in extra gespiegelt.
+    try:
+        base_extra = json.loads(cur_extra_raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        base_extra = {}
     if extra is not None:
-        base_extra = dict(extra)
-    else:
-        try:
-            base_extra = json.loads(cur_extra_raw or "{}")
-        except (json.JSONDecodeError, TypeError):
-            base_extra = {}
+        base_extra.update(extra)
     base_extra.pop("context", None)
     if eff_ctx:
         base_extra["context"] = eff_ctx
+
+    # Task-Status kanonisieren. Nur für Task: memory_set_project_context schreibt
+    # status="aktiv" für Projects, das darf die Synonymtabelle nicht anfassen.
+    if type == "Task":
+        st, note = _canon_status(base_extra.get("status"))
+        base_extra["status"] = st
+        if note:
+            base_extra["status_note"] = note
+        else:
+            base_extra.pop("status_note", None)
+        # done_at ankert die Karenzzeit bis zur Auto-Archivierung. updated_at taugt
+        # dafür nicht: das schreibt jede Nebensatz-Ergänzung neu und würde die Frist
+        # damit immer wieder von vorn starten lassen.
+        if st == "erledigt":
+            base_extra.setdefault("done_at", ts)
+        else:
+            base_extra.pop("done_at", None)
 
     # Versionierung: alte descr snapshotten, wenn ein Update den Text real ändert.
     # history bleibt über einen expliziten extra-Ersatz hinweg erhalten (sonst ginge
@@ -2137,7 +2168,7 @@ def memory_set_project_context(
     """Projektkontext als Project-Entity anlegen/aktualisieren — feldweises Merge.
 
     Speichert pro Projekt dev_dir/repo, deploy_dir/deploy_host/deploy_cmd, skills
-    und rules im extra-JSON. Anders als memory_add (das extra komplett ERSETZT)
+    und rules im extra-JSON. Anders als memory_add (das nur die übergebenen Keys mergt)
     bleibt hier jedes nicht übergebene Feld erhalten — nur die gesetzten Parameter
     werden gemergt. "" bzw. [] leert ein Feld gezielt. status defaultet beim
     Neuanlegen auf "aktiv". Voller Abruf inkl. Relationen via memory_project_context.
@@ -3020,7 +3051,7 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
 
     Liefert (task_name, descr, status, project_name|None). Ein Task ohne
     Project-Relation hat project_name=None; mit mehreren Projekten erscheint er
-    pro Project einmal. 'Offen' = Status nicht in _DONE_STATUSES.
+    pro Project einmal. 'Offen' = kanonischer Status ist nicht 'erledigt'.
     ponytail: ungerichteter Rel-Match (Task↔Project), ein Task hat real ein Projekt.
     """
     ctx_param: dict = {"ctx": context} if context else {}
@@ -3038,10 +3069,15 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
     out: list[tuple] = []
     for name, descr, extra_s, proj in rows:
         try:
-            status = (json.loads(extra_s or "{}").get("status") or "offen")
+            raw_status = json.loads(extra_s or "{}").get("status")
         except json.JSONDecodeError:
-            status = "offen"
-        if status.lower() in _DONE_STATUSES:  # weiter unten definiert, lazy aufgeloest
+            raw_status = ""
+        # Kanonisieren statt roh vergleichen: _apply_import (Backup-Restore) schreibt
+        # mit eigenem CREATE an memory_add vorbei, der Bestand ist also nicht
+        # zwangsläufig normalisiert. _canon_status ist weiter unten definiert, die
+        # Modulkonstante wird lazy aufgelöst.
+        status, _note = _canon_status(raw_status)
+        if status == "erledigt":
             continue
         out.append((name, descr or "", status, proj))
     return out
@@ -3072,14 +3108,18 @@ def _task_rows_full(context: str, include_archived: bool) -> list[dict]:
         item = by_name.get(name)
         if item is None:
             try:
-                status = (json.loads(extra_s or "{}").get("status") or "offen")
+                ex = json.loads(extra_s or "{}")
             except json.JSONDecodeError:
-                status = "offen"
+                ex = {}
+            status, _note = _canon_status(ex.get("status"))
             item = {
                 "name": name,
                 "descr": descr or "",
                 "status": status,
-                "done": status.lower() in _DONE_STATUSES,
+                # Originaltext eines nicht mappbaren Status — die UI zeigt ihn als
+                # Tooltip, sonst wäre die Information nach dem Mappen unsichtbar.
+                "status_note": ex.get("status_note", ""),
+                "done": status == "erledigt",
                 "projects": [],
                 "context": ctx or "",
                 "archived": arch == "true",
@@ -3506,6 +3546,13 @@ def _set_archived(eid: str, ts: str, *, compressed_description: str = "") -> Opt
         new_descr = compressed_description.strip()
         extra["compressed"] = True
     extra["archived_at"] = ts
+    # Archiviert und erledigt waren bisher entkoppelt: ein archivierter Task behielt
+    # status="offen" und tauchte mit include_archived=1 wieder in der Offene-Liste auf.
+    # Guard auf Task, weil _set_archived auch über supersedes und memory_merge für
+    # alle anderen Typen läuft.
+    if typ == "Task" and _canon_status(extra.get("status"))[0] != "erledigt":
+        extra["status"] = "erledigt"
+        extra.setdefault("done_at", ts)
     db_exec(
         "MATCH (e:Entity {id: $id}) SET e.archived = 'true', e.descr = $descr, "
         "e.extra = $extra, e.updated_at = $ts",
@@ -3632,6 +3679,44 @@ def memory_purge_archived(keep_days: int = 0) -> str:
 # bleiben als reine Python-Funktionen erhalten und sind ueber die REST-Route
 # POST /api/tool erreichbar (bin/ai-rem CLI, /memory-cleanup, Web-UI). Mit
 # AI_REM_ADMIN_TOOLS=1 werden sie zusaetzlich wieder als MCP-Tools registriert.
+def memory_normalize_task_status(dry_run: bool = True) -> str:
+    """Bestands-Tasks auf das Status-Enum normalisieren — Einmal-Lauf nach dem Update.
+
+    Nötig nur für Altbestand: die Lesepfade kanonisieren ohnehin, die Migration räumt
+    die gespeicherten Werte auf und setzt den done_at-Anker nach.
+
+    Schreibt extra direkt statt über memory_add, weil das alle Tasks auf heute datieren
+    würde — das zerstörte die Recency-Sortierung in get_context und startete die
+    Karenzuhr bis zur Auto-Archivierung neu. Idempotent: der zweite Lauf meldet 0.
+    """
+    rows = _rows(db_exec(
+        "MATCH (e:Entity {type: 'Task'}) RETURN e.name, e.extra, e.updated_at"))
+    geaendert: list = []
+    for name, extra_raw, upd in rows:
+        try:
+            extra = json.loads(extra_raw or "{}")
+        except json.JSONDecodeError:
+            extra = {}
+        vorher = dict(extra)
+        status, note = _canon_status(extra.get("status"))
+        extra["status"] = status
+        if note:
+            extra["status_note"] = note
+        if status == "erledigt":
+            extra.setdefault("done_at", upd or _now())
+        else:
+            extra.pop("done_at", None)
+        if extra == vorher:
+            continue
+        geaendert.append(f"  {name}: {vorher.get('status', '')!r} → {status!r}")
+        if not dry_run:
+            db_exec("MATCH (e:Entity {id: $id}) SET e.extra = $extra",
+                    {"id": _id(name), "extra": json.dumps(extra, ensure_ascii=False)})
+    kopf = (f"{'Trockenlauf' if dry_run else 'Normalisiert'}: "
+            f"{len(geaendert)}/{len(rows)} Tasks")
+    return "\n".join([kopf, *geaendert]) if geaendert else kopf
+
+
 _ADMIN_TOOL_FUNCS = {
     "memory_preference_update": memory_preference_update,
     "memory_set_project_context": memory_set_project_context,
@@ -3645,6 +3730,7 @@ _ADMIN_TOOL_FUNCS = {
     "memory_archive": memory_archive,
     "memory_merge": memory_merge,
     "memory_purge_archived": memory_purge_archived,
+    "memory_normalize_task_status": memory_normalize_task_status,
 }
 # Alle 16 Funktionen sind ueber /api/tool aufrufbar (auch die 4 Kern-Tools, damit
 # die CLI/Extractor genau einen Pfad haben). Das tools/list-Surface ist davon
@@ -3719,7 +3805,7 @@ AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
 CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
                           os.getenv("CLEANUP_OLLAMA_MODEL", "qwen")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
-CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "30"))
+CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "14"))
 # Veraltungs-Check: ab wann ein Infra-Eintrag erneut gegen die Realitaet geprueft gehoert.
 CLEANUP_VERIFY_AFTER_DAYS = int(os.getenv("CLEANUP_VERIFY_AFTER_DAYS", "90"))
 CLEANUP_VERIFY_MAX_PER_RUN = int(os.getenv("CLEANUP_VERIFY_MAX_PER_RUN", "5"))
@@ -3730,8 +3816,49 @@ _cleanup_lock = threading.Lock()
 
 _STOPWORDS = {"der", "die", "das", "und", "the", "a", "an", "von", "fuer", "für",
               "mit", "im", "in", "of", "for", "to", "ai", "rem"}
-_DONE_STATUSES = {"erledigt", "done", "closed", "abgeschlossen", "fertig", "geschlossen"}
+# Task-Status: kanonische Werte plus Synonymtabelle. Das Feld war lange freier Text,
+# was drei Schreibweisen für "fertig" und ganze Sätze wie "PR 743 offen, Merge
+# ausstehend" hervorgebracht hat. Schlimmer noch: ein Tippfehler ("abgeschlosen") war
+# schädlicher als ein leeres Feld, weil der Task damit gleichzeitig als offen galt UND
+# der Selbstreinigung entkam (die griff nur bei leerem Status auf den Beschreibungstext
+# zurückgriff). Geschrieben wird jetzt nur noch kanonisch, nicht Mappbares landet in
+# extra.status_note und ist damit erhalten, aber nicht mehr steuerungsrelevant.
+_STATUS_SYNONYMS = {
+    "": "offen", "offen": "offen", "open": "offen", "neu": "offen", "new": "offen",
+    "todo": "offen", "to do": "offen", "geplant": "offen", "backlog": "offen",
+    "laufend": "laufend", "läuft": "laufend", "laeuft": "laufend", "in arbeit": "laufend",
+    "in_arbeit": "laufend", "in progress": "laufend", "in-progress": "laufend",
+    "wip": "laufend", "begonnen": "laufend", "angefangen": "laufend", "doing": "laufend",
+    "started": "laufend", "ongoing": "laufend", "review": "laufend", "in review": "laufend",
+    "blockiert": "blockiert", "blocked": "blockiert", "wartet": "blockiert",
+    "waiting": "blockiert", "on hold": "blockiert", "pausiert": "blockiert",
+    "gestoppt": "blockiert",
+    "erledigt": "erledigt", "done": "erledigt", "closed": "erledigt",
+    "geschlossen": "erledigt", "abgeschlossen": "erledigt", "fertig": "erledigt",
+    "gemergt": "erledigt", "gemerged": "erledigt", "merged": "erledigt",
+    "committet": "erledigt", "committed": "erledigt", "deployed": "erledigt",
+    "deployt": "erledigt", "released": "erledigt", "resolved": "erledigt",
+    "gelöst": "erledigt", "geloest": "erledigt", "completed": "erledigt",
+    "complete": "erledigt", "abgehakt": "erledigt", "umgesetzt": "erledigt",
+    "behoben": "erledigt", "fixed": "erledigt",
+}
 _OBSOLETE_STATUSES = {"obsolet", "obsolete", "veraltet", "deprecated", "überholt", "ueberholt"}
+
+
+def _canon_status(raw) -> tuple:
+    """(kanonischer Status, Notiz). Notiz != "" nur bei nicht mappbarem Freitext.
+
+    str() statt direktem .lower(): ein extra.status vom Typ bool oder int hat früher
+    die komplette Offene-Tasks-Sektion mit AttributeError gekillt. Obsolet-Werte
+    reicht die Funktion unverändert durch — die lösen im Cleanup ein sofortiges
+    Archiv ohne Karenzzeit aus und sind kein Task-Status im engeren Sinn."""
+    s = str(raw or "").strip()
+    key = re.sub(r"\s+", " ", s.lower()).strip(" .,:;!-")
+    if key in _STATUS_SYNONYMS:
+        return _STATUS_SYNONYMS[key], ""
+    if key in _OBSOLETE_STATUSES:
+        return key, ""
+    return "laufend", s
 # Zweite Achse neben extra.status: viele Tasks werden nur im Beschreibungstext
 # abgeschlossen ("ERLEDIGT 2026-09-01: ..."), ohne dass jemand den Status setzt.
 # Ohne diese Regel bleiben sie fuer immer offen — der Zaehler waechst dann monoton.
@@ -3896,9 +4023,12 @@ def _resolve_pending_action(pid: str, action: str) -> dict:
             else:
                 return {"error": f"unbekannte kind: {kind}"}
         elif item.get("kind") == "verify":
-            # 'Verwerfen' heisst hier "nicht meldenswert" — braucht denselben Cooldown,
+            # 'Verwerfen' heißt hier "nicht meldenswert" — braucht denselben Cooldown,
             # sonst steht der Eintrag morgen Nacht wieder in der Queue.
             _mark_verify_checked(item["target"], _now())
+        elif item.get("kind") == "archive":
+            # Aus demselben Grund: der Erledigt-Marker bleibt ja im Text stehen.
+            _mark_extra(item["target"], "done_marker_dismissed", _now())
         _save_pending([it for it in items if it.get("id") != pid])
     if action == "apply" and item.get("kind") != "verify":
         _embed_backfill()  # gemergte/archivierte Entity aus der Vektor-Matrix nachziehen
@@ -4018,11 +4148,11 @@ def _ollama_summarize(name: str, descr: str) -> str:
     return (content or "")[:240].strip()
 
 
-def _mark_verify_checked(name: str, ts: str) -> bool:
-    """extra.verify_checked setzen — Cooldown des Veraltungs-Checks.
+def _mark_extra(name: str, key: str, value) -> bool:
+    """Einen einzelnen extra-Key setzen. False, wenn die Entity fehlt.
 
-    Laesst updated_at bewusst unangetastet: eine Pruefung ist keine inhaltliche Aenderung
-    und darf weder Ranking noch Task-Retention verschieben."""
+    Lässt updated_at bewusst unangetastet: ein Cooldown-Marker ist keine inhaltliche
+    Änderung und darf weder Ranking noch Task-Retention verschieben."""
     eid = _id(name)
     rows = _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.extra", {"id": eid}))
     if not rows:
@@ -4031,10 +4161,15 @@ def _mark_verify_checked(name: str, ts: str) -> bool:
         extra = json.loads(rows[0][0] or "{}")
     except json.JSONDecodeError:
         extra = {}
-    extra["verify_checked"] = ts
+    extra[key] = value
     db_exec("MATCH (e:Entity {id: $id}) SET e.extra = $extra",
             {"id": eid, "extra": json.dumps(extra, ensure_ascii=False)})
     return True
+
+
+def _mark_verify_checked(name: str, ts: str) -> bool:
+    """extra.verify_checked setzen — Cooldown des Veraltungs-Checks."""
+    return _mark_extra(name, "verify_checked", ts)
 
 
 def _stale_candidates(ents: list, skip: set) -> list:
@@ -4075,17 +4210,27 @@ def _cleanup_candidates() -> dict:
 
     now = datetime.now()
     auto_archive: list = []
+    archive_review: list = []
     for e in ents:
-        status = str(e["extra"].get("status", "")).lower()
-        if status in _OBSOLETE_STATUSES:
-            auto_archive.append({"name": e["name"], "reason": f"status={status}"})
-        elif e["type"] == "Task" and (status in _DONE_STATUSES
-                                      or (not status and _DONE_BODY.match(e["descr"]))):
-            age = _age_days(e["updated_at"], now)
+        raw_status = str(e["extra"].get("status", "")).strip().lower()
+        status, _note = _canon_status(raw_status)
+        if raw_status in _OBSOLETE_STATUSES:
+            auto_archive.append({"name": e["name"], "reason": f"status={raw_status}"})
+        elif e["type"] == "Task" and status == "erledigt":
+            # Karenzzeit ab done_at, nicht ab updated_at: sonst verlängert jede spätere
+            # Textkorrektur an einem längst erledigten Task die Frist erneut. Fallback
+            # für Bestand, der noch vor der Einführung von done_at geschlossen wurde.
+            age = _age_days(str(e["extra"].get("done_at") or e["updated_at"]), now)
             if age is not None and age >= CLEANUP_TASK_RETENTION_DAYS:
-                grund = f"status={status}" if status else "Beschreibung beginnt mit Erledigt-Marker"
-                auto_archive.append({"name": e["name"],
-                                     "reason": f"erledigt seit {age}d ({grund})"})
+                auto_archive.append({"name": e["name"], "reason": f"erledigt seit {age}d"})
+        elif (e["type"] == "Task" and _DONE_BODY.match(e["descr"])
+              and not e["extra"].get("done_marker_dismissed")):
+            # Erledigt-Marker steht nur im Beschreibungstext, der Status widerspricht.
+            # Das wurde früher stillschweigend archiviert; Fließtext ist dafür zu
+            # unzuverlässig, deshalb geht es als Vorschlag in die Review-Queue.
+            archive_review.append(
+                {"kind": "archive", "target": e["name"],
+                 "reason": f"Erledigt-Marker im Text, Status '{status}' widerspricht"})
 
     archived_names = {a["name"] for a in auto_archive}
     by_type: dict = {}
@@ -4129,7 +4274,7 @@ def _cleanup_candidates() -> dict:
     queued = {it.get("target") for it in _load_pending() if it.get("kind") == "verify"}
     verify = _stale_candidates(ents, archived_names | queued)
     return {"auto_archive": auto_archive, "auto_merge": auto_merge, "review": review,
-            "verify": verify}
+            "verify": verify, "archive_review": archive_review[:CLEANUP_MAX_PER_RUN]}
 
 
 def _graph_invariants() -> list[str]:
@@ -4206,6 +4351,10 @@ def _cleanup_run(triggered_by: str = "scheduler") -> dict:
         res = memory_archive(item["name"], compressed_description=summary)
         applied.append({"kind": "archive", "target": item["name"],
                         "reason": item["reason"], "compressed": bool(summary), "result": res})
+
+    # Nicht ausgeführt, nur vorgeschlagen: kind "archive" kennen sowohl
+    # _resolve_pending_action als auch die Cleanup-UI bereits von den Überlauf-Items.
+    to_pending.extend(cands["archive_review"])
 
     for canon, dup in cands["auto_merge"]:
         if capped():

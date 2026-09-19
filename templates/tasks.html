@@ -34,6 +34,8 @@ tr.arch td{opacity:.55}
 .date{font-size:11px;color:var(--muted);white-space:nowrap}
 .arch-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap}
 .arch-btn:hover{border-color:var(--err);color:var(--err)}
+.done-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap;margin-right:6px}
+.done-btn:hover{border-color:var(--ok);color:var(--ok)}
 .more{display:block;width:100%;margin-top:14px;background:var(--card);border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:9px;font-size:13px;font-weight:500;cursor:pointer}
 .more:hover{border-color:var(--accent)}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
@@ -104,7 +106,7 @@ function render(){
   $('more').style.display=shown<list.length?'block':'none';
   $('rows').innerHTML=page.map((t,i)=>`
     <tr class="${t.archived?'arch':''}">
-      <td><span class="tag ${t.done?'done':''}">${esc(t.status)}</span></td>
+      <td><span class="tag ${t.done?'done':''}"${t.status_note?` title="${esc(t.status_note)}"`:''}>${esc(t.status)}</span>${t.status_note?' <span class="muted">*</span>':''}</td>
       <td class="muted">${t.projects.length?esc(t.projects.join(', ')):'—'}</td>
       <td>
         <div class="name" onclick="toggleDescr(${i})">${esc(t.name)}${t.archived?' <span class="tag ctx">archiviert</span>':''}${t.context?` <span class="tag ctx">${esc(t.context)}</span>`:''}</div>
@@ -112,13 +114,22 @@ function render(){
         <div class="full-descr" id="fd${i}">${esc(t.descr)||'—'}</div>
       </td>
       <td class="date">${t.updated_at?t.updated_at.slice(0,10):'—'}</td>
-      <td>${t.archived?'':`<button class="arch-btn" onclick="archive(${i})">Archivieren</button>`}</td>
+      <td>${t.archived?'':`${t.done?'':`<button class="done-btn" onclick="setDone(${i})">Erledigt</button>`}<button class="arch-btn" onclick="archive(${i})">Archivieren</button>`}</td>
     </tr>`).join('')||'<tr><td colspan="5" class="muted">nichts gefunden</td></tr>';
 }
 
 function toggleDescr(i){
   const el=$('fd'+i);
   el.style.display=el.style.display==='block'?'none':'block';
+}
+
+async function setDone(i){
+  const t=filtered().slice(0,shown)[i];
+  const r=await fetch('/api/tool',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:'memory_add',arguments:{name:t.name,type:'Task',extra:{status:'erledigt'}}})});
+  if(!r.ok){toast('Fehler: '+await r.text(),'err');return;}
+  toast('✓ Erledigt: '+t.name,'ok');
+  load();
 }
 
 async function archive(i){
