@@ -50,12 +50,14 @@ def test_unchanged_descr_no_snapshot():
     assert "history" not in _extra("VerNoop")
 
 
-def test_history_survives_extra_replace():
+def test_extra_wird_gemergt_und_history_bleibt():
     server.memory_add("VerKeep", "Tool", description="alt", extra={"a": 1})
     server.memory_add("VerKeep", "Tool", description="neu", extra={"b": 2})
     ex = _extra("VerKeep")
-    assert ex["b"] == 2 and "a" not in ex          # extra ersetzt
+    assert ex["a"] == 1 and ex["b"] == 2           # extra gemergt, nicht ersetzt
     assert ex["history"][0]["descr"] == "alt"      # history trotzdem erhalten
+    server.memory_add("VerKeep", "Tool", extra={"a": 9})
+    assert _extra("VerKeep")["a"] == 9             # gleichnamiger Key gewinnt
 
 
 def test_history_capped_at_10():

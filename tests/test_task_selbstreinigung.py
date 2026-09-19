@@ -1,7 +1,7 @@
 """Tests für die beiden Bremsen gegen wachsende Task-Karteileichen.
 
-1. Cleanup archiviert Tasks, deren Beschreibung mit einem Erledigt-Marker beginnt,
-   auch wenn niemand extra.status gesetzt hat.
+1. Cleanup schlägt Tasks, deren Beschreibung mit einem Erledigt-Marker beginnt, zur
+   Archivierung vor (Review-Queue) — archiviert wird nur, was am Status erledigt ist.
 2. Der Extraktor legt für reine Arbeitsschritte ("PR #262", "task_556") keinen Task an.
 """
 import os
@@ -22,36 +22,51 @@ from lib.extractor import is_step_task  # noqa: E402
 
 
 def _alt(name: str) -> None:
-    """updated_at über die Retention-Frist zurückdatieren."""
+    """updated_at und done_at über die Retention-Frist zurückdatieren.
+
+    done_at muss mit: die Karenzzeit hängt daran, updated_at ist nur der Fallback
+    für Bestand, der vor der Einführung des Ankers geschlossen wurde."""
     alt = (datetime.now() - timedelta(days=server.CLEANUP_TASK_RETENTION_DAYS + 5)
            ).strftime("%Y-%m-%dT%H:%M:%S")
     server.db_exec("MATCH (e:Entity {id: $id}) SET e.updated_at = $ts",
                    {"id": server._id(name), "ts": alt})
+    server._mark_extra(name, "done_at", alt)
 
 
-def test_body_marker_wird_archiviert():
+def test_body_marker_wird_vorgeschlagen_nicht_archiviert():
     server.memory_add("BodyErledigt", "Task",
                       description="ERLEDIGT 2026-09-01: Release deployed und verifiziert.")
     server.memory_add("BodyOffen", "Task",
                       description="OFFEN: Retry für gescheiterte Dokumente fehlt noch.")
-    server.memory_add("BodyErledigtFrisch", "Task",
-                      description="GELÖST 2026-09-05: PR gemergt.")
     _alt("BodyErledigt")
     _alt("BodyOffen")
 
-    namen = {a["name"] for a in server._cleanup_candidates()["auto_archive"]}
-    assert "BodyErledigt" in namen
-    assert "BodyOffen" not in namen
-    # Retention gilt weiter: frisch Erledigtes wird nicht sofort weggeräumt.
-    assert "BodyErledigtFrisch" not in namen
+    cands = server._cleanup_candidates()
+    # Fließtext ist als Archivierungsgrund zu unzuverlässig — nur Vorschlag.
+    assert "BodyErledigt" not in {a["name"] for a in cands["auto_archive"]}
+    ziele = {a["target"] for a in cands["archive_review"]}
+    assert "BodyErledigt" in ziele
+    assert "BodyOffen" not in ziele
 
 
-def test_expliziter_status_schlaegt_body():
+def test_vorschlag_kommt_nach_dismiss_nicht_wieder():
+    server.memory_add("BodyDismissed", "Task",
+                      description="ERLEDIGT 2026-09-02: nichts mehr zu tun.")
+    assert "BodyDismissed" in {a["target"] for a in
+                               server._cleanup_candidates()["archive_review"]}
+    server._mark_extra("BodyDismissed", "done_marker_dismissed", server._now())
+    assert "BodyDismissed" not in {a["target"] for a in
+                                   server._cleanup_candidates()["archive_review"]}
+
+
+def test_expliziter_status_verhindert_auto_archiv():
     server.memory_add("StatusOffenTrotzMarker", "Task",
                       description="ERLEDIGT bis auf Punkt 3.", extra={"status": "offen"})
     _alt("StatusOffenTrotzMarker")
-    namen = {a["name"] for a in server._cleanup_candidates()["auto_archive"]}
-    assert "StatusOffenTrotzMarker" not in namen
+    cands = server._cleanup_candidates()
+    assert "StatusOffenTrotzMarker" not in {a["name"] for a in cands["auto_archive"]}
+    # Der Widerspruch Status/Text ist trotzdem meldenswert.
+    assert "StatusOffenTrotzMarker" in {a["target"] for a in cands["archive_review"]}
 
 
 def test_nur_tasks_betroffen():

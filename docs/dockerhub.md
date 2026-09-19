@@ -118,6 +118,7 @@ Set in the Compose `.env`:
 | `AI_REM_OLLAMA_URL` | `http://mystorage.lan:11437` | LLM endpoint (OpenAI-compatible) for nightly cleanup / extraction. Defaults to the LiteLLM router rather than a GPU host directly, so a sleeping backend falls back instead of failing |
 | `AI_REM_LLM_API_KEY` | — | Bearer token for that endpoint. Empty = no `Authorization` header |
 | `CLEANUP_LLM_MODEL` | `qwen` | Model name sent to `AI_REM_OLLAMA_URL` |
+| `CLEANUP_TASK_RETENTION_DAYS` | `14` | Grace period before a task on `status=erledigt` is archived, counted from `extra.done_at` |
 | `EMBED_API_KEY` | — | Bearer token for `EMBED_URL`. Empty = no `Authorization` header |
 | `EMBED_URL` | — | Embedding backend. Empty = in-process (fastembed/MiniLM, bundled in `latest`). Set to an OpenAI-compatible `/v1/embeddings` URL to use an external service — required for `-slim` images. Switching backends re-computes all vectors on the next start; if the endpoint is down, entries are stored without a vector and the backfill catches up later |
 | `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |

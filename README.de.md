@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.2.7](https://github.com/markus7h/ai-rem/releases/tag/v1.2.7)**.
+> Diese Dokumentation bezieht sich auf **[v1.3.0](https://github.com/markus7h/ai-rem/releases/tag/v1.3.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -77,7 +77,7 @@ Jede Seite zeigt die laufende Server-Version rechts in der Navigation.
 Vier Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph befüllt und sauber:
 
 - **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via OpenAI-kompatiblem LLM-Endpoint (`AI_REM_LLAMA_URL`, per Default ein LiteLLM-Router statt eines einzelnen GPU-Hosts), mit md-Fallback + Catch-up, wenn er down ist. Er läuft detached (die Extraktion dauert Minuten) und meldet beim nächsten Sessionstart, wenn er gestört ist. Das Setup legt die CLI nach `~/.local/share/ai-rem/bin/ai-rem` und richtet `AI_REM_CLI` darauf aus — der Hook hängt damit nicht daran, wohin das Repo geklont wurde. `~/.local/bin/ai-rem` verlinkt auf dieselbe Kopie, damit `ai-rem` in der Shell als normaler Befehl verfügbar ist.
-- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Erledigte Tasks werden nach der Aufbewahrungsfrist archiviert — egal ob sie über `extra.status` oder nur im Beschreibungstext geschlossen wurden („ERLEDIGT: …"). Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
+- **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Erledigte Tasks werden 14 Tage, nachdem `extra.status` auf `erledigt` stand, archiviert (der Status wird gegen das Enum `offen | laufend | blockiert | erledigt` normalisiert, gängige Synonyme gemappt, nicht mappbarer Freitext bleibt in `extra.status_note`). Ein Erledigt-Marker, der nur im Beschreibungstext steht („ERLEDIGT: …"), archiviert nie von selbst - er landet in der Review-Queue. Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
 - **Plan-Speicherung** — ein `ExitPlanMode`-Hook speichert jeden finalisierten Plan als offenen `Task`, sodass Pläne eine zentrale, maschinenübergreifende Liste werden.
 - **Vault-Secret-Erinnerung** — ein `PostToolUse`-Hook durchsucht die Bash-Ausgabe nach Auth-/Credential-Fehlern und injiziert eine Erinnerung, das passende Secret via mykeyvault aus dem Vault zu holen, statt den User nach Token oder Passwort zu fragen — fail-silent, blockiert also nie einen Befehl.
 
