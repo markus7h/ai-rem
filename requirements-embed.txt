@@ -3,4 +3,4 @@
 # Nur im Default-Image installiert; das :slim-Image laesst beides weg und braucht
 # dafuer EMBED_URL auf einen externen OpenAI-kompatiblen /v1/embeddings-Endpoint.
 # Pinning-Regeln wie in requirements.txt (Issue #27, Dependabot-gated).
-fastembed==0.8.0
+fastembed==0.8.1
