@@ -99,14 +99,15 @@ button:disabled{opacity:.45;cursor:not-allowed}
   <div class="card">
     <h2>Restore</h2>
     <div class="row">
-      <input type="file" id="rf" accept=".json">
+      <input type="file" id="rf" accept=".json,.enc">
       <select id="rm">
         <option value="merge">Merge</option>
+        <option value="upsert">Upsert (newer wins)</option>
         <option value="replace">Replace (wipe first)</option>
       </select>
       <button onclick="doRestore()">Restore</button>
     </div>
-    <p class="hint">Merge adds missing entries. Replace deletes the entire graph before importing.</p>
+    <p class="hint">Merge adds missing entries. Upsert also overwrites entries whose backup state is newer — the way back after lost writes. Replace deletes the entire graph before importing.</p>
   </div>
 
   <div class="card">

@@ -13,6 +13,32 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.3.2] – 2026-10-06
+
+### Fixed
+- **A crash no longer discards days of writes.** `_checkpoint_wal` only merged the WAL
+  above `LADYBUG_WAL_CHECKPOINT_MB` (2 MB). Everyday writes stayed below that for days,
+  so everything since the last restart lived in the WAL alone. On 2026-10-05 the server
+  died mid-checkpoint, the WAL guard quarantined the 1.7 MB checkpoint file and ten days
+  of writes were gone — closed tasks came back as open, the nightly cleanup's
+  archivings were undone. The WAL is now also checkpointed once it has been idle for
+  `AI_REM_WAL_CHECKPOINT_IDLE_S` (default 300 s), so a crash costs minutes, not days.
+- **`ai-rem close --note` kept the note.** `memory_add` dropped an explicitly passed
+  `extra.status_note` whenever the status mapped cleanly (e.g. `erledigt`).
+
+### Added
+- **Import mode `upsert`** (`POST /import?mode=upsert`, `/api/restore` with
+  `mode=upsert`). Like `merge`, but existing entities are overwritten when the
+  imported `updated_at` is newer — this brings back changed entries (task status,
+  archive flag) from a backup without clobbering younger writes. Deletions are not
+  undone by any mode.
+- **Automatic recovery after a WAL quarantine.** If the start-up guard had to move
+  WAL leftovers aside, the newest backup from before the crash is replayed with
+  `upsert`. `memory_status` reports the loss and the recovery result.
+
+### Changed
+- Dependency bump: `numpy` 2.5.2 → 2.5.3 (#138).
+
 ## [1.3.1] – 2026-10-05
 
 ### Changed
@@ -757,7 +783,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/markus7h/ai-rem/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/markus7h/ai-rem/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/markus7h/ai-rem/compare/v1.2.7...v1.3.0
 [1.2.7]: https://github.com/markus7h/ai-rem/compare/v1.2.6...v1.2.7

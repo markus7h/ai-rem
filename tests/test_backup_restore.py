@@ -73,6 +73,40 @@ def _scenario() -> None:
     assert stamps[1] == "2026-01-02T03:04:05", f"updated_at verloren: {stamps}"
     assert stamps[0] != stamps[1], f"created_at hat updated_at ueberschrieben: {stamps}"
 
+    # upsert (WAL-Verlust 05.10.2026): geaenderte Entities kommen zurueck, wenn der
+    # Stand im Body neuer ist; juengere Writes in der DB bleiben stehen.
+    by_name = {e["name"]: e for e in body["entities"]}
+    by_name["Beta"].update(description="Aufgabe B erledigt", archived=True,
+                           updated_at="2099-01-01T00:00:00",
+                           extra={**by_name["Beta"]["extra"], "status": "erledigt"})
+    by_name["Gamma"].update(description="veraltet", updated_at="2000-01-01T00:00:00")
+    body["entities"].append({"id": "delta", "name": "Delta", "type": "Tool",
+                             "description": "neu", "extra": {},
+                             "updated_at": "2026-02-01T00:00:00"})
+    res = server._apply_import(body, mode="upsert")
+    assert (res["entities_created"], res["entities_updated"]) == (1, 1), res
+    beta = server._rows(server.db_exec(
+        "MATCH (e:Entity {id:'beta'}) RETURN e.descr, e.archived, e.extra, e.updated_at"))[0]
+    assert beta[0] == "Aufgabe B erledigt" and beta[1] == "true", f"upsert fehlt: {beta}"
+    assert json.loads(beta[2])["status"] == "erledigt" and beta[3] == "2099-01-01T00:00:00"
+    gamma = server._rows(server.db_exec("MATCH (e:Entity {id:'gamma'}) RETURN e.descr"))[0][0]
+    assert gamma == "Werkzeug C", f"aelterer Stand hat juengeren ueberschrieben: {gamma}"
+    assert counts() == (4, 2), f"Counts nach upsert: {counts()}"
+
+    # Auto-Recovery: nach einer WAL-Quarantaene spielt der Start das juengste Backup
+    # von davor per upsert ein. Simuliert: Backup ziehen, Write "verlieren".
+    server.memory_add("Alpha", "Project", description="Projekt A v2")
+    fn2 = server._do_backup()
+    os.utime(os.path.join(server.BACKUP_DIR, fn2), (1, 1))  # sicher vor dem "Crash"
+    server.db_exec("MATCH (e:Entity {id:'alpha'}) SET e.descr = 'Projekt A', "
+                   "e.updated_at = '2000-01-01T00:00:00'")
+    server._WAL_LOSS = {"at": 2, "moved": ["kg.db.wal.corrupt-x"]}
+    server._recover_from_backup()
+    alpha = server._rows(server.db_exec("MATCH (e:Entity {id:'alpha'}) RETURN e.descr"))[0][0]
+    assert alpha == "Projekt A v2", f"Recovery hat den Stand nicht zurueckgeholt: {alpha}"
+    assert server._WAL_LOSS["backup"] == fn2
+    assert "wiederhergestellt" in server.memory_status()
+
     print("OK")
 
 

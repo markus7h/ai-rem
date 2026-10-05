@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.3.1](https://github.com/markus7h/ai-rem/releases/tag/v1.3.1)**.
+> Diese Dokumentation bezieht sich auf **[v1.3.2](https://github.com/markus7h/ai-rem/releases/tag/v1.3.2)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -115,6 +115,7 @@ AI_REM_BACKUP_KEY=...                     # Optional — Backups verschlüsseln 
 LADYBUG_POOL_SIZE=4                         # Connection-Pool-Größe
 LADYBUG_BUFFER_POOL_SIZE_MB=256          # Buffer-Pool in MiB (0 = Default: 80% Host-RAM)
 LADYBUG_WAL_CHECKPOINT_MB=2              # WAL selbst mergen ab dieser Größe (0/leer = aus)
+AI_REM_WAL_CHECKPOINT_IDLE_S=300         # ...und sobald sie so lange ruht (0 = aus)
 KG_REBUILD_MB=2048                       # kg.db beim nächsten Start kompaktieren ab dieser Größe (es gibt kein VACUUM)
 EMBED_BACKFILL_PORTION=300               # Vektoren je Datenbank-Session
 EMBED_RECONCILE_SEC=3600                 # so oft zieht der Server fehlende Vektoren nach (0 = nur Start/Nightly)

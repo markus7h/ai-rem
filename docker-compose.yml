@@ -83,6 +83,7 @@ services:
       # WAL selbst mergen, sobald sie diese Größe überschreitet (+ beim Shutdown).
       # Verhindert eine aufgestaute WAL, die beim Öffnen teure Recovery (→ OOM) auslöst.
       - LADYBUG_WAL_CHECKPOINT_MB=${LADYBUG_WAL_CHECKPOINT_MB:-2}
+      - AI_REM_WAL_CHECKPOINT_IDLE_S=${AI_REM_WAL_CHECKPOINT_IDLE_S:-300}
       # Pflicht (fail-closed): ohne Token startet der Server nicht. Quelle:
       # mykeyvault (Item ai-rem-api-token), via deploy.sh in die .env geschrieben.
       - AI_REM_API_TOKEN=${AI_REM_API_TOKEN:?AI_REM_API_TOKEN nicht gesetzt — siehe deploy.sh / .env}

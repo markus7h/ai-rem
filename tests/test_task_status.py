@@ -66,6 +66,16 @@ def test_freitext_landet_in_status_note():
     assert "status_note" not in _extra("TS_Freitext")
 
 
+def test_close_note_bleibt_erhalten():
+    # ai-rem close --note schickt status + status_note; die Notiz fiel bisher dem
+    # Mapping zum Opfer, weil "erledigt" keinen Freitext-Rest hat.
+    server.memory_add("TS_CloseNote", "Task", description="x")
+    server.memory_add("TS_CloseNote", "Task",
+                      extra={"status": "erledigt", "status_note": "via PR #42"})
+    ex = _extra("TS_CloseNote")
+    assert ex["status"] == "erledigt" and ex["status_note"] == "via PR #42"
+
+
 def test_projekt_status_bleibt_unberuehrt():
     # memory_set_project_context schreibt status="aktiv" — kein Task-Status.
     server.memory_set_project_context("TS_Projekt", description="p", status="aktiv")
