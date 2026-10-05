@@ -190,3 +190,22 @@ def test_quarantaene_meldet_was_sie_verschoben_hat(tmp_path):
     assert len(moved) == 3
     assert all(".corrupt-" in name for name in moved)
     assert not os.path.exists(p + ".wal")
+
+
+def test_kleine_wal_wird_nach_leerlauf_gecheckpointet(tmp_path, monkeypatch):
+    # 05.10.2026: 1,7 MB WAL blieben zehn Tage unter der 2-MB-Schwelle und gingen
+    # mit einem Crash komplett verloren. Ruht die WAL, wird trotzdem gemerged.
+    monkeypatch.setattr(server, "LADYBUG_WAL_CHECKPOINT_IDLE_S", 300)
+    wal = tmp_path / "kg.db.wal"
+    wal.write_bytes(b"x" * 155)
+    assert not server._wal_idle(os.stat(wal)), "frische WAL schon gecheckpointet"
+    alt = os.stat(wal).st_mtime - 301
+    os.utime(wal, (alt, alt))
+    assert server._wal_idle(os.stat(wal)), "ruhende WAL wird nicht gecheckpointet"
+    wal.write_bytes(b"")
+    os.utime(wal, (alt, alt))
+    assert not server._wal_idle(os.stat(wal)), "leere WAL gilt als offen"
+    monkeypatch.setattr(server, "LADYBUG_WAL_CHECKPOINT_IDLE_S", 0)
+    wal.write_bytes(b"x")
+    os.utime(wal, (alt, alt))
+    assert not server._wal_idle(os.stat(wal)), "IDLE_S=0 schaltet nicht ab"

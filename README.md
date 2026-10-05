@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for Claude
 
-> This documentation describes **[v1.3.1](https://github.com/markus7h/ai-rem/releases/tag/v1.3.1)**.
+> This documentation describes **[v1.3.2](https://github.com/markus7h/ai-rem/releases/tag/v1.3.2)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -116,6 +116,7 @@ LADYBUG_POOL_SIZE=4                         # Connection pool size
 DISCOVER_ROUTINES_LIMIT=10               # Pinned routines injected per prompt via /discover (curated by sort_order)
 LADYBUG_BUFFER_POOL_SIZE_MB=256           # buffer pool in MiB (0 = default: 80% of host RAM)
 LADYBUG_WAL_CHECKPOINT_MB=2               # self-checkpoint the WAL above this size (0/empty = off)
+AI_REM_WAL_CHECKPOINT_IDLE_S=300          # ...and once it has been idle this long (0 = off)
 KG_REBUILD_MB=2048                        # compact kg.db on the next start above this size (there is no VACUUM)
 EMBED_BACKFILL_PORTION=300                # vectors written per database session
 EMBED_RECONCILE_SEC=3600                  # how often the server backfills missing vectors (0 = startup/nightly only)

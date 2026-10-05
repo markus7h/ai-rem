@@ -73,7 +73,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -101,6 +101,11 @@ LADYBUG_BUFFER_POOL_SIZE_MB = int(_env("BUFFER_POOL_SIZE_MB", "256"))
 # (6.9 MB WAL → ~2.4 GB Buffer-Peak → OOM). Darum checkpointen wir selbst, sobald
 # die WAL diese Schwelle überschreitet (Scheduler, 60s-Takt) + einmal beim Shutdown.
 LADYBUG_WAL_CHECKPOINT_MB = float(_env("WAL_CHECKPOINT_MB", "2"))
+# Die Größenschwelle allein reicht nicht: kleine Writes blieben tagelang darunter,
+# und am 05.10.2026 riss ein einziger Crash mitten im Checkpoint zehn Tage Writes
+# (1,7 MB WAL) mit in die Quarantäne. Darum wird zusätzlich gecheckpointet, sobald
+# die WAL so lange nicht mehr geschrieben wurde — ein Crash kostet dann Minuten.
+LADYBUG_WAL_CHECKPOINT_IDLE_S = int(os.getenv("AI_REM_WAL_CHECKPOINT_IDLE_S", "300"))
 
 # Kuzu gibt beim Überschreiben von Properties keinen Speicher zurück: ein Checkpoint
 # schreibt die betroffene Column neu und lässt die alte Version in der Datei liegen.
@@ -504,6 +509,12 @@ def _probe_open(path: str, pool: int) -> bool:
     return False
 
 
+# Gesetzt, wenn _open_database beim Start WAL-Reste quarantänisiert hat. Der
+# Verlust blieb am 05.10.2026 stundenlang unbemerkt — erst als geschlossene Tasks
+# wieder offen auftauchten. _recover_from_backup holt nach, memory_status meldet es.
+_WAL_LOSS: Optional[dict] = None
+
+
 def _open_database(path: str) -> ladybug.Database:
     """kg.db oeffnen und WAL-Reste, an denen der Open stirbt, in Quarantaene schieben.
 
@@ -515,6 +526,8 @@ def _open_database(path: str) -> ladybug.Database:
     if _wal_leftovers(path) and not _probe_open(path, pool):
         moved = _quarantine_wal(path)
         if moved:
+            global _WAL_LOSS
+            _WAL_LOSS = {"at": time.time(), "moved": moved}
             log.warning("WAL in Quarantaene (%s) — nicht gemergte Transaktionen seit "
                         "dem letzten Checkpoint sind verloren.", ", ".join(moved))
     return ladybug.Database(path, buffer_pool_size=pool)
@@ -1042,6 +1055,16 @@ def _do_backup() -> str:
 _shutdown = threading.Event()
 
 
+def _wal_idle(st: os.stat_result) -> bool:
+    """True, wenn die WAL Writes enthält und seit IDLE_S nicht mehr angefasst wurde.
+
+    Nach einem CHECKPOINT löscht ladybug die WAL-Datei; existiert sie mit Inhalt,
+    stehen darin also nicht gemergte Writes."""
+    if not LADYBUG_WAL_CHECKPOINT_IDLE_S or st.st_size == 0:
+        return False
+    return time.time() - st.st_mtime >= LADYBUG_WAL_CHECKPOINT_IDLE_S
+
+
 def _checkpoint_wal(force: bool = False) -> bool:
     """WAL in die DB mergen, damit sie nicht aufstaut. `force` checkpointet
     unabhängig von der Größe (Shutdown); sonst nur ab LADYBUG_WAL_CHECKPOINT_MB.
@@ -1053,7 +1076,8 @@ def _checkpoint_wal(force: bool = False) -> bool:
     eskalieren müssen."""
     wal = DB_PATH + ".wal"
     try:
-        mb = os.path.getsize(wal) / 1024 / 1024
+        st = os.stat(wal)
+        mb = st.st_size / 1024 / 1024
     except OSError:
         # Keine WAL-Datei: bei force trotzdem checkpointen — die Dirty-Pages hängen
         # am Buffer-Pool, nicht an der WAL-Größe. Der frühere blanke return machte
@@ -1061,7 +1085,7 @@ def _checkpoint_wal(force: bool = False) -> bool:
         if not force:
             return True
         mb = 0.0
-    if not force and mb < LADYBUG_WAL_CHECKPOINT_MB:
+    if not force and mb < LADYBUG_WAL_CHECKPOINT_MB and not _wal_idle(st):
         return True
     for versuch in (1, 2):
         try:
@@ -1565,8 +1589,9 @@ async def import_route(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
     mode = request.query_params.get("mode", "merge")
-    if mode not in ("merge", "replace"):
-        return JSONResponse({"error": "mode must be 'merge' or 'replace'"}, status_code=400)
+    if mode not in ("merge", "upsert", "replace"):
+        return JSONResponse({"error": "mode must be 'merge', 'upsert' or 'replace'"},
+                            status_code=400)
 
     result = await asyncio.to_thread(_apply_import, body, mode)
     return JSONResponse(result)
@@ -1757,8 +1782,8 @@ async def api_restore(request: Request) -> JSONResponse:
     if not file:
         return JSONResponse({"error": "no file uploaded"}, status_code=400)
     mode = form.get("mode", "merge")
-    if mode not in ("merge", "replace"):
-        return JSONResponse({"error": "mode must be merge or replace"}, status_code=400)
+    if mode not in ("merge", "upsert", "replace"):
+        return JSONResponse({"error": "mode must be merge, upsert or replace"}, status_code=400)
     content = await file.read()
     if _is_encrypted(content):
         key = _backup_key()
@@ -1855,20 +1880,52 @@ def _archived_clause(alias: str, include_archived: bool, *, where: bool = False)
     return f" {keyword} ({alias}.archived IS NULL OR {alias}.archived <> 'true')"
 
 
+def _upsert_entity(eid: str, entity: dict) -> None:
+    """Bestehende Entity mit dem Stand aus einem Export überschreiben (upsert-Import).
+
+    Der Vektor wird geleert statt neu gerechnet: _embed_backfill zieht ihn danach
+    chunkweise nach, und archivierte Einträge fliegen aus der In-Memory-Matrix."""
+    extra = entity.get("extra", {}) or {}
+    archived = "true" if entity.get("archived") in (True, "true") else ""
+    db_exec(
+        """MATCH (e:Entity {id: $id})
+           SET e.name = $name, e.type = $type, e.descr = $descr, e.extra = $extra,
+               e.context = $ctx, e.pinned = $pinned, e.sort_order = $so,
+               e.archived = $archived, e.updated_at = $updated, e.embedding = ''""",
+        {"id": eid, "name": entity["name"], "type": entity.get("type", "Unknown"),
+         "descr": entity.get("description", ""),
+         "extra": json.dumps(extra, ensure_ascii=False),
+         "ctx": entity.get("context") or extra.get("context", "") or "",
+         "pinned": "true" if entity.get("pinned") in (True, "true") else "",
+         "so": str(entity.get("sort_order") or ""),
+         "archived": archived, "updated": entity.get("updated_at") or _now()},
+    )
+    if archived:
+        _remove_embed_row(entity["name"])
+
+
 def _apply_import(body: dict, mode: str) -> dict:
-    """Apply an export-format `body` to the graph in 'merge' or 'replace' mode.
+    """Apply an export-format `body` to the graph in 'merge', 'upsert' or 'replace' mode.
+
+    'merge' legt nur fehlende Entities an. 'upsert' überschreibt zusätzlich
+    bestehende, deren updated_at im Body neuer ist — das holt nach einem WAL-Verlust
+    auch geänderte Einträge (Task-Status, Archiv-Flag) aus dem Backup zurück, ohne
+    jüngere Writes zu überfahren. Löschungen macht keiner der Modi rückgängig.
 
     Pre-fetches all existing entity ids and relation tuples to avoid per-row
     existence queries. Returns a summary dict.
     """
+    existing_upd: dict[str, str] = {}
     if mode == "replace":
         db_exec("MATCH (e:Entity) DETACH DELETE e")
         existing_eids: set[str] = set()
         existing_rels: set[tuple] = set()
     else:
-        existing_eids = {
-            r[0] for r in _rows(db_exec("MATCH (e:Entity) RETURN e.id"))
+        existing_upd = {
+            r[0]: r[1] or ""
+            for r in _rows(db_exec("MATCH (e:Entity) RETURN e.id, e.updated_at"))
         }
+        existing_eids = set(existing_upd)
         existing_rels = {
             (r[0], r[1], r[2])
             for r in _rows(db_exec(
@@ -1877,13 +1934,17 @@ def _apply_import(body: dict, mode: str) -> dict:
         }
 
     ts = _now()
-    entities_created = entities_skipped = 0
+    entities_created = entities_updated = entities_skipped = 0
     relations_created = relations_skipped = 0
 
     for entity in body.get("entities", []):
         eid = entity.get("id") or _id(entity["name"])
         if eid in existing_eids:
-            entities_skipped += 1
+            if mode == "upsert" and (entity.get("updated_at") or "") > existing_upd.get(eid, ""):
+                _upsert_entity(eid, entity)
+                entities_updated += 1
+            else:
+                entities_skipped += 1
             continue
         extra = entity.get("extra", {}) or {}
         # Prefer top-level `context` (new format); fall back to extra.context
@@ -1938,12 +1999,13 @@ def _apply_import(body: dict, mode: str) -> dict:
         existing_rels.add(key)
         relations_created += 1
 
-    if entities_created:
+    if entities_created or entities_updated:
         _embed_backfill()  # importierte Einträge semantisch durchsuchbar machen
 
     return {
         "status": "ok", "mode": mode,
         "entities_created": entities_created,
+        "entities_updated": entities_updated,
         "entities_skipped": entities_skipped,
         "relations_created": relations_created,
         "relations_skipped": relations_skipped,
@@ -2044,7 +2106,9 @@ def memory_add(
         base_extra["status"] = st
         if note:
             base_extra["status_note"] = note
-        else:
+        elif not (extra and extra.get("status_note")):
+            # Eine explizit übergebene Notiz (ai-rem close --note) bleibt stehen; sonst
+            # verschwindet die Freitext-Notiz eines früheren Status mit dem Mapping.
             base_extra.pop("status_note", None)
         # done_at ankert die Karenzzeit bis zur Auto-Archivierung. updated_at taugt
         # dafür nicht: das schreibt jede Nebensatz-Ergänzung neu und würde die Frist
@@ -3473,7 +3537,15 @@ def memory_status() -> str:
     """Kurzstatus: Anzahl Entities und Relationen im Knowledge Graph."""
     e_count = _rows(db_exec("MATCH (e:Entity) RETURN count(e)"))[0][0]
     r_count = _rows(db_exec("MATCH ()-[r:Rel]->() RETURN count(r)"))[0][0]
-    return f"ai-rem: {e_count} Entities, {r_count} Relationen"
+    out = f"ai-rem: {e_count} Entities, {r_count} Relationen"
+    if _WAL_LOSS:
+        when = datetime.fromtimestamp(_WAL_LOSS["at"]).strftime("%Y-%m-%d %H:%M")
+        res = _WAL_LOSS.get("result")
+        out += (f"\n⚠ WAL-Verlust beim Start {when}: "
+                + (f"aus {_WAL_LOSS['backup']} wiederhergestellt ({res['entities_created']} neu, "
+                   f"{res['entities_updated']} aktualisiert)" if res
+                   else "nicht automatisch wiederhergestellt — Restore mit mode=upsert"))
+    return out
 
 
 def memory_check_update() -> str:
@@ -4502,6 +4574,47 @@ if _db_size_mb() > KG_REBUILD_MB:
         # Weiterlaufen mit der aufgeblähten DB ist besser als gar kein Dienst —
         # der Backfill-Guard verhindert, dass sie noch weiter wächst.
         log.error("kg.db-Rebuild fehlgeschlagen, laufe mit der bisherigen DB weiter: %s", e)
+
+def _recover_from_backup() -> None:
+    """Nach einer WAL-Quarantäne das jüngste Backup von davor per upsert einspielen.
+
+    Die Backups laufen stündlich, die WAL hielt dagegen alles seit dem letzten
+    Checkpoint. upsert übernimmt nur, was im Backup neuer ist; Löschungen aus dem
+    verlorenen Fenster kommen dabei nicht zurück. Nur beim Start aufrufen."""
+    if not _WAL_LOSS:
+        return
+    before = [f for f in _list_backup_files() if os.path.getmtime(f) < _WAL_LOSS["at"]]
+    if not before:
+        log.error("WAL-Verlust: kein Backup von vor dem Crash in %s — manuell prüfen.",
+                  BACKUP_DIR)
+        return
+    path = max(before, key=os.path.getmtime)
+    name = os.path.basename(path)
+    _WAL_LOSS["backup"] = name
+    try:
+        with open(path, "rb") as f:
+            content = f.read()
+        if _is_encrypted(content):
+            key = _backup_key()
+            if not key:
+                log.error("WAL-Verlust: %s ist verschlüsselt, AI_REM_BACKUP_KEY fehlt — "
+                          "Restore mit mode=upsert manuell einspielen.", name)
+                return
+            content = _decrypt_backup(content, key)
+        res = _apply_import(json.loads(content), "upsert")
+    except Exception as e:
+        log.error("WAL-Verlust: Recovery aus %s fehlgeschlagen: %s", name, e)
+        return
+    _WAL_LOSS["result"] = res
+    log.warning("WAL-Verlust: aus %s wiederhergestellt — %d neu, %d aktualisiert, "
+                "%d Relationen.", name, res["entities_created"], res["entities_updated"],
+                res["relations_created"])
+
+
+try:
+    _recover_from_backup()
+except Exception as e:
+    log.error("WAL-Recovery abgebrochen: %s", e)
 
 # Fehlende Embeddings nachziehen, bevor uvicorn startet (lädt ggf. das Modell).
 # Blockierend statt im Thread, weil der Backfill zwischen den Portionen die
