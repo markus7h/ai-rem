@@ -13,6 +13,21 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.3.1] – 2026-10-05
+
+### Changed
+- **LadybugDB 0.20.4 → 0.21.2.** 0.21 brings, among others, the fix for the HNSW
+  SET-on-NULL segfault (LadybugDB/ladybug#900). Dependabot's 0.21.1 bump (#150) was red:
+  0.21.x has a regression where `MATCH (t:Entity {type: 'Task'}) OPTIONAL MATCH …`
+  nulls the *whole* row — including `t` — when the optional part finds nothing, as
+  soon as the outer `MATCH` filters with an inline property map. With `WHERE t.type =
+  'Task'` the result is correct. Hit: tasks without a project came back as `None`, so
+  `memory_get_context` died on `" · ".join(...)`, and the `/tasks` UI lost every task
+  without a project relation. Both task queries (`_open_task_rows`,
+  `_task_rows_full`) now filter with `WHERE`; on 0.20.4 the result is identical.
+- Dependency bumps: `cryptography` 50.0.1 → 50.0.2 (#149), `fastembed` 0.8.0 → 0.8.1
+  (#147), `fastmcp` 3.4.7 → 4.0.10 (#151).
+
 ## [1.3.0] – 2026-09-19
 
 ### Changed
@@ -742,7 +757,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/markus7h/ai-rem/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/markus7h/ai-rem/compare/v1.2.7...v1.3.0
 [1.2.7]: https://github.com/markus7h/ai-rem/compare/v1.2.6...v1.2.7
 [1.2.6]: https://github.com/markus7h/ai-rem/compare/v1.2.5...v1.2.6
