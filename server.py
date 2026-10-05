@@ -73,7 +73,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -3057,9 +3057,11 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
     ctx_param: dict = {"ctx": context} if context else {}
     rows = _rows(
         db_exec(
-            f"""MATCH (t:Entity {{type: 'Task'}})
-               {_ctx_clause('t', context, where=True)}
-               {_archived_clause('t', include_archived, where=not context)}
+            # Typfilter als WHERE, nicht als Inline-Map: ladybug 0.21.x setzt bei
+            # (t:Entity {type: ...}) + OPTIONAL MATCH ohne Treffer auch t auf NULL.
+            f"""MATCH (t:Entity) WHERE t.type = 'Task'
+               {_ctx_clause('t', context)}
+               {_archived_clause('t', include_archived)}
                OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
                RETURN t.name, t.descr, t.extra, p.name
                ORDER BY t.updated_at DESC""",
@@ -3093,9 +3095,11 @@ def _task_rows_full(context: str, include_archived: bool) -> list[dict]:
     ctx_param: dict = {"ctx": context} if context else {}
     rows = _rows(
         db_exec(
-            f"""MATCH (t:Entity {{type: 'Task'}})
-               {_ctx_clause('t', context, where=True)}
-               {_archived_clause('t', include_archived, where=not context)}
+            # Typfilter als WHERE, nicht als Inline-Map: ladybug 0.21.x setzt bei
+            # (t:Entity {type: ...}) + OPTIONAL MATCH ohne Treffer auch t auf NULL.
+            f"""MATCH (t:Entity) WHERE t.type = 'Task'
+               {_ctx_clause('t', context)}
+               {_archived_clause('t', include_archived)}
                OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
                RETURN t.name, t.descr, t.extra, p.name, t.context, t.archived, t.updated_at
                ORDER BY t.updated_at DESC""",

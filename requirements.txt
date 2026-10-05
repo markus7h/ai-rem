@@ -4,7 +4,7 @@
 # ponytail: nur Top-Level gepinnt — Transitive floaten noch; echtes Lockfile
 # (uv/pip-compile) erst nachrüsten, wenn ein Transitiv-Bump real beißt.
 fastmcp==4.0.10
-ladybug==0.20.4
+ladybug==0.21.2
 numpy==2.5.2
 cryptography==50.0.2
 pyyaml==6.0.3
