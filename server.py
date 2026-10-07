@@ -17,6 +17,7 @@ import os
 import queue
 import re
 import socket
+import secrets
 import signal
 import subprocess
 import sys
@@ -24,6 +25,7 @@ import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone, time as dtime
+from html import escape as html_escape
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Optional
 
@@ -75,7 +77,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -180,7 +182,7 @@ _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  #
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
 _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/install",
                          "/setup-config", "/hooks/", "/bin/", "/lib/", "/cmd", "/login",
-                         "/clients/",
+                         "/clients/", "/pair", "/api/pair/start", "/api/pair/poll",
                          "/manifest",
                          "/favicon.ico", "/assets/")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -1671,8 +1673,16 @@ _INSTALL_HTML = _pkg_text("templates/install.html").replace('__KG_URL__', _KG_UR
 _LOGIN_HTML = _pkg_text("templates/login.html")
 
 
-def _login_page(error: str = "") -> str:
-    return _LOGIN_HTML.replace("__ERROR__", error)
+def _login_page(error: str = "", next_url: str = "") -> str:
+    return (_LOGIN_HTML.replace("__ERROR__", error)
+            .replace("__NEXT__", html_escape(_safe_next(next_url), quote=True)))
+
+
+def _safe_next(next_url: str) -> str:
+    """Nur lokale Pfade als Login-Ziel — kein Open-Redirect auf fremde Hosts."""
+    if next_url.startswith("/") and not next_url.startswith("//") and "\\" not in next_url:
+        return next_url
+    return "/ui"
 
 
 def _request_authed(request: Request) -> bool:
@@ -1690,17 +1700,20 @@ def _request_authed(request: Request) -> bool:
 
 @mcp.custom_route("/login", methods=["GET"])
 async def login_get(request: Request) -> Response:
+    next_url = request.query_params.get("next", "")
     if _request_authed(request):
-        return RedirectResponse("/ui", status_code=302)
-    return Response(content=_login_page(), media_type="text/html")
+        return RedirectResponse(_safe_next(next_url), status_code=302)
+    return Response(content=_login_page(next_url=next_url), media_type="text/html")
 
 
 @mcp.custom_route("/login", methods=["POST"])
 async def login_post(request: Request) -> Response:
     body = (await request.body()).decode("utf-8", "ignore")
-    token = urllib.parse.parse_qs(body).get("token", [""])[0]
+    form = urllib.parse.parse_qs(body)
+    token = form.get("token", [""])[0]
+    next_url = form.get("next", [""])[0]
     if AI_REM_API_TOKEN and hmac.compare_digest(token, AI_REM_API_TOKEN):
-        resp = RedirectResponse("/ui", status_code=302)
+        resp = RedirectResponse(_safe_next(next_url), status_code=302)
         resp.set_cookie(
             _UI_COOKIE, _UI_SESSION_VALUE, max_age=_UI_COOKIE_TTL,
             path="/", httponly=True, secure=True, samesite="strict",
@@ -1708,9 +1721,170 @@ async def login_post(request: Request) -> Response:
         return resp
     await asyncio.sleep(0.5)  # milde Brute-Force-Bremse (Token hat 256 Bit Entropie)
     return Response(
-        content=_login_page("Falscher Token."),
+        content=_login_page("Falscher Token.", next_url),
         media_type="text/html", status_code=401,
     )
+
+
+# ─── Geräte-Kopplung (Installer ohne SSH) ────────────────────────────────────
+# Device-Authorization-Flow wie `gh auth login`: der Installer startet eine Kopplung
+# (öffentlich), der User gibt sie in der eingeloggten Web-UI frei, der Installer
+# holt den Token genau einmal ab. Damit verteilt ai-rem Secrets — aber nur nach
+# expliziter Freigabe durch jemanden, der den Token bereits hat (UI-Cookie), mit
+# 10 min Ablauf und Einmal-Abholung. Ohne AI_REM_PAIR_VAULT_TOKEN geht nur der
+# ai-rem-Token raus; mykeyvault faellt beim Client dann auf HTTP zurueck.
+AI_REM_PAIR_VAULT_TOKEN = os.getenv("AI_REM_PAIR_VAULT_TOKEN", "").strip()
+PAIR_TTL_SEC = 600
+PAIR_START_PER_IP = 10        # Kopplungen je IP und TTL-Fenster
+PAIR_MAX_PENDING = 50
+# Code-Alphabet ohne 0/O/1/I (Verwechslung beim Abtippen).
+_PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # pragma: allowlist secret
+_PAIR_HISTORY = os.path.join(BACKUP_DIR, "paired-devices.json")
+_pairs: dict[str, dict] = {}   # pair_id → {code, state, device, platform, ip, expires}
+_pair_lock = threading.Lock()
+_PAIR_HTML = _pkg_text("templates/pair.html")
+
+
+def _client_ip(request: Request) -> str:
+    # Letzter Eintrag = den hat unser Reverse-Proxy (Caddy) angehaengt; die vorderen
+    # kann der Client frei setzen und damit das Rate-Limit je IP umgehen.
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else ""
+
+
+def _pair_gc(now: float) -> None:
+    for pid in [p for p, e in _pairs.items() if e["expires"] < now]:
+        del _pairs[pid]
+
+
+def _pair_by_code(code: str) -> tuple[str, dict] | tuple[None, None]:
+    code = code.strip().upper()
+    for pid, e in _pairs.items():
+        if hmac.compare_digest(e["code"], code):
+            return pid, e
+    return None, None
+
+
+def _pair_public_base() -> str:
+    # Der UI-Cookie ist Secure: die Freigabe muss über https laufen, sonst bleibt
+    # der Login nicht hängen. Ohne TLS-Basis bleibt nur die KG_URL.
+    return (_load_setup_cfg().get("ai_rem_https_url") or _KG_URL).rstrip("/")
+
+
+def _pair_vault_url() -> str:
+    return (_load_setup_cfg().get("mcp_register", {}).get("mykeyvault", {}).get("vault_url", ""))
+
+
+def _pair_history_add(entry: dict) -> None:
+    try:
+        with open(_PAIR_HISTORY, encoding="utf-8") as f:
+            hist = json.load(f)
+    except (OSError, ValueError):
+        hist = []
+    hist = [entry, *hist][:50]
+    _ensure_backup_dir()
+    tmp = _PAIR_HISTORY + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(hist, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, _PAIR_HISTORY)
+
+
+@mcp.custom_route("/api/pair/start", methods=["POST"])
+async def pair_start(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ip = _client_ip(request)
+    now = time.time()
+    with _pair_lock:
+        _pair_gc(now)
+        if sum(1 for e in _pairs.values() if e["ip"] == ip) >= PAIR_START_PER_IP \
+                or len(_pairs) >= PAIR_MAX_PENDING:
+            return JSONResponse({"error": "zu viele offene Kopplungen, spaeter erneut"},
+                                status_code=429)
+        code = "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(8))
+        code = code[:4] + "-" + code[4:]
+        pid = secrets.token_urlsafe(32)
+        _pairs[pid] = {"code": code, "state": "pending", "ip": ip,
+                       "device": str(body.get("device", ""))[:80],
+                       "platform": str(body.get("platform", ""))[:80],
+                       "expires": now + PAIR_TTL_SEC}
+    log.info("Kopplung gestartet: %s (%s, %s)", code, _pairs[pid]["device"], ip)
+    return JSONResponse({"pair_id": pid, "code": code, "expires_in": PAIR_TTL_SEC,
+                         "verify_url": f"{_pair_public_base()}/pair?code={code}"})
+
+
+@mcp.custom_route("/api/pair/poll", methods=["POST"])
+async def pair_poll(request: Request) -> JSONResponse:
+    try:
+        pid = str((await request.json()).get("pair_id", ""))
+    except Exception:
+        pid = ""
+    with _pair_lock:
+        _pair_gc(time.time())
+        e = _pairs.get(pid)
+        if e is None:
+            return JSONResponse({"state": "expired"})
+        if e["state"] != "approved":
+            return JSONResponse({"state": e["state"]})
+        del _pairs[pid]  # Einmal-Abholung
+    out = {"state": "approved", "ai_rem_token": AI_REM_API_TOKEN}
+    if AI_REM_PAIR_VAULT_TOKEN:
+        out.update(vault_token=AI_REM_PAIR_VAULT_TOKEN, vault_url=_pair_vault_url())
+    return JSONResponse(out)
+
+
+@mcp.custom_route("/api/pair/info", methods=["GET"])
+async def pair_info(request: Request) -> JSONResponse:
+    with _pair_lock:
+        _pair_gc(time.time())
+        _pid, e = _pair_by_code(request.query_params.get("code", ""))
+        if e is None:
+            return JSONResponse({"error": "Unbekannter oder abgelaufener Code."}, status_code=404)
+        return JSONResponse({"code": e["code"], "state": e["state"], "device": e["device"],
+                             "platform": e["platform"], "ip": e["ip"],
+                             "expires_in": int(e["expires"] - time.time())})
+
+
+@mcp.custom_route("/api/pair/approve", methods=["POST"])
+async def pair_approve(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    with _pair_lock:
+        _pair_gc(time.time())
+        _pid, e = _pair_by_code(str(body.get("code", "")))
+        if e is None or e["state"] != "pending":
+            return JSONResponse({"error": "Unbekannter, abgelaufener oder schon entschiedener Code."},
+                                status_code=404)
+        e["state"] = "approved" if body.get("approve") else "denied"
+        entry = {"ts": _now(), "device": e["device"], "platform": e["platform"],
+                 "ip": e["ip"], "state": e["state"]}
+    _pair_history_add(entry)
+    log.info("Kopplung %s: %s (%s)", entry["state"], entry["device"], entry["ip"])
+    return JSONResponse({"status": entry["state"]})
+
+
+@mcp.custom_route("/api/pair/history", methods=["GET"])
+async def pair_history(request: Request) -> JSONResponse:
+    try:
+        with open(_PAIR_HISTORY, encoding="utf-8") as f:
+            return JSONResponse(json.load(f)[:10])
+    except (OSError, ValueError):
+        return JSONResponse([])
+
+
+@mcp.custom_route("/pair", methods=["GET"])
+async def pair_page(request: Request) -> Response:
+    # Nicht eingeloggt → Login mit Rücksprung auf genau diese Seite.
+    if not _request_authed(request):
+        target = "/pair?code=" + urllib.parse.quote(request.query_params.get("code", ""))
+        return RedirectResponse("/login?next=" + urllib.parse.quote(target, safe=""), status_code=302)
+    return Response(content=_PAIR_HTML, media_type="text/html")
 
 
 @mcp.custom_route("/logout", methods=["GET"])

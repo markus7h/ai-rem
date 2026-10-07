@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Gerät koppeln</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<style>
+body{background:#fafafa;color:#333;font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;display:flex;flex-direction:column;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px;box-sizing:border-box}
+.box{background:#fff;border:1px solid #ececec;border-left:3px solid #388e3c;border-radius:12px;padding:28px;width:100%;max-width:420px;box-sizing:border-box}
+h1{font-size:20px;margin:0 0 4px;color:#000}
+p.sub{color:#666;font-size:13px;margin:0 0 20px}
+.code{font-size:28px;font-weight:700;letter-spacing:3px;text-align:center;margin:8px 0 16px;color:#000}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0 0 20px;font-size:13px}
+dt{color:#666}dd{margin:0;word-break:break-all}
+.row{display:flex;gap:10px}
+button{flex:1;border:none;border-radius:6px;padding:10px;font-size:14px;font-weight:500;cursor:pointer}
+.ok{background:#388e3c;color:#fff}.ok:hover{background:#2e7d32}
+.no{background:#fff;color:#dd3333;border:1px solid #dd3333}
+.msg{margin-top:16px;font-size:13px;min-height:18px}
+.warn{color:#8a6d00;font-size:12px;margin:0 0 16px}
+h2{font-size:14px;margin:24px 0 8px;color:#000}
+ul{list-style:none;padding:0;margin:0;font-size:12px;color:#666}
+li{padding:4px 0;border-top:1px solid #f0f0f0}
+</style></head>
+<body>
+<a href="/" style="display:inline-block;margin-bottom:14px"><img src="/assets/logo.png" alt="ai-rem" height="34" style="display:block"></a>
+<div class="box">
+<h1>Gerät koppeln</h1>
+<p class="sub">Ein Installer bittet um Zugang zu ai-rem.</p>
+<div id="req"></div>
+<div class="msg" id="msg"></div>
+<h2>Zuletzt gekoppelte Geräte</h2>
+<ul id="hist"><li>—</li></ul>
+</div>
+<script>
+const code = new URLSearchParams(location.search).get('code') || '';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load() {
+  const r = await fetch('/api/pair/info?code=' + encodeURIComponent(code));
+  const d = await r.json();
+  if (!r.ok) {
+    $('req').innerHTML = '<p>' + esc(d.error || 'Unbekannter oder abgelaufener Code.') + '</p>';
+  } else {
+    $('req').innerHTML =
+      '<div class="code">' + esc(d.code) + '</div>' +
+      '<p class="warn">Nur freigeben, wenn derselbe Code gerade im Terminal angezeigt wird.</p>' +
+      '<dl><dt>Gerät</dt><dd>' + esc(d.device) + '</dd><dt>System</dt><dd>' + esc(d.platform) +
+      '</dd><dt>IP</dt><dd>' + esc(d.ip) + '</dd><dt>Läuft ab</dt><dd>in ' + Math.round(d.expires_in / 60) + ' min</dd></dl>' +
+      (d.state === 'pending'
+        ? '<div class="row"><button class="ok" onclick="decide(true)">Freigeben</button><button class="no" onclick="decide(false)">Ablehnen</button></div>'
+        : '<p>Status: ' + esc(d.state) + '</p>');
+  }
+  const h = await (await fetch('/api/pair/history')).json();
+  $('hist').innerHTML = h.length ? h.map(e => '<li>' + esc(e.ts) + ' · ' + esc(e.device) + ' · ' + esc(e.platform) + ' · ' + esc(e.ip) + '</li>').join('') : '<li>—</li>';
+}
+async function decide(approve) {
+  const r = await fetch('/api/pair/approve', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code, approve})});
+  const d = await r.json();
+  $('msg').textContent = r.ok ? (approve ? 'Freigegeben — der Installer läuft jetzt weiter.' : 'Abgelehnt.') : (d.error || 'Fehler');
+  load();
+}
+load();
+</script>
+</body></html>

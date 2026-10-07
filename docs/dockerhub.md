@@ -68,8 +68,9 @@ On native Windows (PowerShell, no WSL): `irm http://<SERVER_IP>:3456/setup.ps1 |
 The idempotent setup installs the `ai-rem` CLI and sets up every frontend it finds:
 Claude Code (MCP, hooks, `CLAUDE.md` pointer, slash commands) and opencode (`opencode.json`
 MCP block, `AGENTS.md` pointer, auto-memory plugin, commands). Other MCP frontends get
-ready-to-paste snippets (`--client generic`). Later: `ai-rem install --client …`,
-`ai-rem update`, `ai-rem doctor`.
+ready-to-paste snippets (`--client generic`). No SSH key or preinstalled Node needed:
+the installer pairs the machine via a browser approval and installs missing packages
+after one prompt. Later: `ai-rem install --client …`, `ai-rem update`, `ai-rem doctor --fix`.
 ([Setup details](https://github.com/markus7h/ai-rem/blob/main/docs/installation.md))
 
 ---

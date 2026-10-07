@@ -367,8 +367,16 @@ def cmd_update(c: MCPClient, a):
 
 
 def cmd_install(c: MCPClient, a):
-    """Ziel(e) einrichten oder nachruesten. Ohne --client: was installiert ist."""
-    _run_setup(c.base_url, *_client_arg(a.client or ["auto"]))
+    """Ziel(e) einrichten oder nachruesten. Ohne --client: was installiert ist.
+    Fehlende Pakete installiert das Setup nach Rueckfrage (--yes: ohne), einen
+    fehlenden Token holt es per Geraete-Kopplung im Browser (--pair: erzwingen)."""
+    flags = (["--yes"] if a.yes else []) + (["--pair"] if a.pair else [])
+    _run_setup(c.base_url, *_client_arg(a.client or ["auto"]), *flags)
+
+
+def cmd_pair(c: MCPClient, a):
+    """Nur den Token neu holen (Freigabe im Browser), z.B. nach einer Rotation."""
+    _run_setup(c.base_url, "--pair-only")
 
 
 def cmd_uninstall(c: MCPClient, a):
@@ -405,6 +413,11 @@ def cmd_doctor(c: MCPClient, a):
     except MCPError as e:
         ok = False
         print(f"Dateien:   ✗ {e}")
+    if not ok and a.fix:
+        # Ein erneutes install repariert alles Bekannte: Token (Kopplung), Pakete,
+        # veraltete Dateien. Es ist idempotent.
+        print("\n→ Reparatur: ai-rem install")
+        _run_setup(base, *_client_arg(targets or ["auto"]), *(["--pair"] if not c.token else []))
     sys.exit(0 if ok else 1)
 
 
@@ -564,13 +577,19 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("install", help="Frontend(s) einrichten/nachruesten (claude, opencode, generic)")
     s.add_argument("--client", action="append", choices=(*TARGETS, "auto"),
                    help="Ziel, mehrfach angebbar (Default: auto = installierte Frontends)")
+    s.add_argument("--yes", "-y", action="store_true", help="fehlende Pakete ohne Rueckfrage installieren")
+    s.add_argument("--pair", action="store_true", help="Token per Geraete-Kopplung neu holen")
     s.set_defaults(func=cmd_install)
+
+    s = sub.add_parser("pair", help="Token per Freigabe im Browser holen (ohne SSH)")
+    s.set_defaults(func=cmd_pair)
 
     s = sub.add_parser("uninstall", help="ai-rem aus einem Frontend entfernen")
     s.add_argument("--client", action="append", choices=TARGETS, required=True)
     s.set_defaults(func=cmd_uninstall)
 
     s = sub.add_parser("doctor", help="Client-Zustand: Version, Ziele, Drift, Token")
+    s.add_argument("--fix", action="store_true", help="Probleme gleich beheben (ruft install)")
     s.set_defaults(func=cmd_doctor)
 
     s = sub.add_parser("update", help="Hooks/Plugins/CLI/Commands aller Ziele vom Server nachziehen")

@@ -149,8 +149,9 @@ def test_uninstall_opencode(setup):
 def test_parse_args(setup, monkeypatch):
     monkeypatch.setattr(setup.shutil, "which", lambda n: "/x" if n == "opencode" else None)
     assert setup.parse_args(["--client", "auto"])["targets"] == ["opencode"]
-    assert setup.parse_args(["--client=claude,opencode", "--update"]) == \
-        {"update": True, "uninstall": False, "targets": ["claude", "opencode"]}
+    a = setup.parse_args(["--client=claude,opencode", "--update", "-y"])
+    assert (a["update"], a["uninstall"], a["targets"], a["yes"], a["pair"]) == \
+        (True, False, ["claude", "opencode"], True, False)
     monkeypatch.setattr(setup.shutil, "which", lambda n: None)
     assert setup.detect_targets() == ["generic"]
 
