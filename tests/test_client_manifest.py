@@ -32,8 +32,10 @@ def test_jede_ausgelieferte_datei_steht_im_manifest():
                 "hooks/claude-md-guard.py", "hooks/save-plan.py",
                 "hooks/vault-secret-reminder.py", "bin/ai-rem",
                 "commands/setup-ai-rem.md", "commands/memory-cleanup.md",
-                "commands/migrate-claude-md.md", "commands/ai-rem-update.md"}
+                "commands/migrate-claude-md.md", "commands/ai-rem-update.md",
+                "opencode/plugin/ai-rem.ts"}
     erwartet |= {"lib/" + n for n in server.CLI_LIB_FILES}
+    erwartet |= {"opencode/command/%s.md" % n for n in server.OPENCODE_COMMANDS}
     assert erwartet == set(server._CLIENT_ARTIFACTS)
 
 
@@ -43,9 +45,10 @@ def test_hash_passt_zur_datei_neben_server_py():
     keinem Client-Artefakt vor — sonst waere jeder Release ein Zwangs-Update)."""
     manifest = _manifest()
     for rel in manifest:
-        if rel.startswith("commands/"):
+        if "commands/" in rel or "command/" in rel:
             continue  # Commands sind Inline-Strings in server.py, keine Repo-Datei
-        with open(os.path.join(ROOT, rel), "rb") as f:
+        repo_rel = {"opencode/plugin/ai-rem.ts": "clients/opencode/ai-rem.ts"}.get(rel, rel)
+        with open(os.path.join(ROOT, repo_rel), "rb") as f:
             roh = f.read()
         assert "__VERSION__" not in roh.decode("utf-8"), rel
         assert hashlib.sha256(roh).hexdigest() == manifest[rel], rel
@@ -59,6 +62,8 @@ def test_zu_jedem_artefakt_gibt_es_eine_route():
     for rel, (route, _src) in server._CLIENT_ARTIFACTS.items():
         if rel.startswith("lib/"):
             route = "/lib/{name}"  # eine parametrisierte Route fuer alle lib-Module
+        elif rel.startswith("opencode/command/"):
+            route = "/cmd/opencode/{name}"
         assert '@mcp.custom_route("%s"' % route in quelltext, (rel, route)
 
 
@@ -75,3 +80,10 @@ def test_manifest_route_gibt_version_und_hashes():
 def test_manifest_ist_oeffentlich():
     """Ohne das Prefix antwortet die Route 401 — und der Hook meldete still nichts."""
     assert any("/manifest".startswith(p) for p in server._PUBLIC_PATH_PREFIXES)
+
+
+def test_opencode_routen_sind_oeffentlich():
+    """Das Setup holt Plugin und Commands anonym, wie die Hooks."""
+    for path in ("/clients/opencode/ai-rem.ts", "/cmd/opencode/memory-cleanup"):
+        assert any(path == p or path.startswith(p.rstrip("/") + "/")
+                   for p in server._PUBLIC_PATH_PREFIXES), path

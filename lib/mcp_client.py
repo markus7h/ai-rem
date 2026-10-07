@@ -15,26 +15,59 @@ class MCPError(RuntimeError):
     pass
 
 
-_CLAUDE_JSON = os.path.expanduser("~/.claude.json")
+def _claude_json_path() -> str:
+    # Gleiche Regel wie scripts/setup.py: mit CLAUDE_CONFIG_DIR liegt .claude.json dort.
+    cc = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
+    return os.path.join(cc, ".claude.json") if cc else os.path.expanduser("~/.claude.json")
+
+
+# Client-neutrale Konfiguration, von scripts/setup.py fuer jedes Ziel geschrieben:
+# {"endpoint": ".../mcp", "token_file": "...", "targets": ["claude", "opencode"]}.
+CLIENT_JSON = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "ai-rem", "client.json")
+
+
+def load_client_cfg() -> dict:
+    try:
+        with open(CLIENT_JSON, encoding="utf-8") as f:
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def _claude_servers() -> dict:
+    try:
+        with open(_claude_json_path(), encoding="utf-8") as f:
+            return json.load(f).get("mcpServers", {}) or {}
+    except Exception:
+        return {}
 
 
 def _resolve_token(timeout: float = 15.0) -> str:
-    """ai-rem-API-Token beziehen: Env AI_REM_TOKEN → bereits in ~/.claude.json
-    hinterlegter Bearer-Header (vom system-check-Hook geschrieben) → Runtime-Fetch
-    aus mykeyvault (vault-api-Koordinaten ebenfalls aus ~/.claude.json).
+    """ai-rem-API-Token beziehen: Env AI_REM_TOKEN → Token-Datei aus
+    ~/.config/ai-rem/client.json → Bearer-Header in ~/.claude.json (vom
+    system-check-Hook geschrieben) → Runtime-Fetch aus mykeyvault (Koordinaten aus
+    ~/.claude.json).
 
     Der Header in ~/.claude.json ist der einzige Kanal, über den Claudes built-in
     /mcp-Tool den Token bekommt (statischer Config-Read — kann nicht selbst aus dem
     Vault lesen). Vault = Rotationsquelle, Header = Session-Cache; darum bleibt der
-    Header-Sync tragend und nicht entfernbar (vgl. Issue #35)."""
+    Header-Sync tragend und nicht entfernbar (vgl. Issue #35). opencode liest den
+    Token per {file:…} aus derselben Token-Datei, die hier an zweiter Stelle steht."""
     tok = os.environ.get("AI_REM_TOKEN", "")
     if tok:
         return tok
-    try:
-        with open(_CLAUDE_JSON) as f:
-            servers = json.load(f).get("mcpServers", {})
-    except Exception:
-        return ""
+    tf = load_client_cfg().get("token_file", "")
+    if tf:
+        try:
+            with open(os.path.expanduser(tf), encoding="utf-8") as f:
+                tok = f.read().strip()
+            if tok:
+                return tok
+        except OSError:
+            pass
+    servers = _claude_servers()
     hdr = (servers.get("ai-rem", {}).get("headers", {}) or {}).get("Authorization", "")
     if hdr.lower().startswith("bearer "):
         return hdr[7:].strip()
@@ -50,15 +83,12 @@ def _resolve_token(timeout: float = 15.0) -> str:
         return ""
 
 
-def _endpoint_from_claude_json(server: str = "ai-rem") -> str:
-    """MCP-Endpoint-URL aus ~/.claude.json (mcpServers.<server>.url) lesen — derselbe
-    Ort, aus dem schon der Token kommt. So muss AI_REM_ENDPOINT nicht gesetzt sein."""
-    try:
-        with open(_CLAUDE_JSON) as f:
-            servers = json.load(f).get("mcpServers", {})
-        return (servers.get(server, {}) or {}).get("url", "") or ""
-    except Exception:
-        return ""
+def _default_endpoint(server: str = "ai-rem") -> str:
+    """MCP-Endpoint aus client.json, sonst aus ~/.claude.json (mcpServers.<server>.url)
+    — derselbe Ort, aus dem schon der Token kommt. So muss AI_REM_ENDPOINT nicht
+    gesetzt sein."""
+    return (load_client_cfg().get("endpoint", "")
+            or (_claude_servers().get(server, {}) or {}).get("url", "") or "")
 
 
 class MCPClient:
@@ -66,15 +96,20 @@ class MCPClient:
         self.endpoint = (
             endpoint
             or os.environ.get("AI_REM_ENDPOINT")
-            or _endpoint_from_claude_json()
+            or _default_endpoint()
             or "http://localhost:3456/mcp"
         )
         self.timeout = timeout
         self.token = _resolve_token(timeout)
+        # Herkunft fuer extra.client beim Anlegen (Server liest X-AI-REM-Client).
+        self.client_name = os.environ.get("AI_REM_CLIENT", "") or "ai-rem-cli"
         self._sid: Optional[str] = None
 
     def _auth_header(self) -> dict:
-        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        h = {"X-AI-REM-Client": self.client_name}
+        if self.token:
+            h["Authorization"] = f"Bearer {self.token}"
+        return h
 
     def _post(self, body: dict, sid: Optional[str] = None):
         headers = {
@@ -122,7 +157,7 @@ class MCPClient:
                 "params": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": {"name": "ai-rem-cli", "version": "1.0"},
+                    "clientInfo": {"name": self.client_name, "version": "1.0"},
                 },
             }
         )

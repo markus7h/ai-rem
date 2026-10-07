@@ -54,7 +54,8 @@ def test_update_flag_ueberspringt_den_bootstrap(monkeypatch, tmp_path):
                  "build_mykeyvault_mcp", "update_claude_json", "create_entities",
                  "update_claude_md", "load_setup_config", "choose_mcp_endpoint",
                  "write_settings_template", "install_hooks", "install_cli",
-                 "link_cli", "update_settings", "install_commands"):
+                 "link_cli", "update_settings", "install_commands", "record_client",
+                 "installed_targets"):
         monkeypatch.setattr(setup, name,
                             (lambda n: lambda *a, **kw: gerufen.append(n))(name))
     monkeypatch.setattr(setup, "KG_URL", "http://kg.test")
@@ -63,9 +64,10 @@ def test_update_flag_ueberspringt_den_bootstrap(monkeypatch, tmp_path):
 
     setup.main()
 
-    assert gerufen == ["load_setup_config", "choose_mcp_endpoint",
-                       "write_settings_template", "install_hooks", "install_cli",
-                       "link_cli", "update_settings", "install_commands"]
+    assert gerufen == ["installed_targets", "load_setup_config", "choose_mcp_endpoint",
+                       "install_cli", "link_cli", "write_settings_template",
+                       "install_hooks", "update_settings", "install_commands",
+                       "record_client"]
 
 
 def test_link_cli_legt_symlink(tmp_path, monkeypatch):

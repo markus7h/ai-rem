@@ -8,6 +8,7 @@ import atexit
 import fcntl
 import glob
 import collections
+import contextvars
 import hashlib
 import hmac
 import json
@@ -74,7 +75,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -179,6 +180,7 @@ _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  #
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
 _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/install",
                          "/setup-config", "/hooks/", "/bin/", "/lib/", "/cmd", "/login",
+                         "/clients/",
                          "/manifest",
                          "/favicon.ico", "/assets/")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -227,6 +229,10 @@ AI_REM_CLI_SRC = _pkg_text("bin/ai-rem")
 CLI_LIB_FILES = {name: _pkg_text("lib/" + name) for name in
                  ("__init__.py", "mcp_client.py", "extractor.py", "extractor_heuristic.py")}
 
+# opencode-Plugin: Gegenstueck zu auto-memory.py/system-check.py (session.idle →
+# ai-rem ingest, session.created → catchup + Update-Check).
+OPENCODE_PLUGIN_TS = _pkg_text("clients/opencode/ai-rem.ts")
+
 # save-plan.py: PostToolUse-Hook auf ExitPlanMode — speichert den finalisierten Plan
 # als offenen Task in ai-rem (Frontmatter name/description/status). Fail-silent.
 SAVE_PLAN_PY = _pkg_text("hooks/save-plan.py")
@@ -262,7 +268,7 @@ if ! curl -sf "$KG_URL/setup.py" -o "$TMP" || [ ! -s "$TMP" ]; then
     echo "✗ Download fehlgeschlagen: $KG_URL/setup.py"
     exit 1
 fi
-python3 "$TMP"
+python3 "$TMP" "$@"
 """.replace("__KG_URL__", _KG_URL)
 
 SETUP_PS1 = r"""# ai-rem Setup-Wrapper (Windows PowerShell) - laedt das plattformneutrale
@@ -407,18 +413,36 @@ veralten mit jedem Release, in dem sich eine davon geändert hat.
 
 1. Stand prüfen:  `ai-rem update --check`  (Exit 1, wenn etwas veraltet ist)
 2. Nachziehen:    `ai-rem update`
-3. Danach Claude Code **neu starten** — Hooks werden nur beim Start geladen.
+3. Danach den Client (Claude Code, opencode) **neu starten** — Hooks und Plugins
+   werden nur beim Start geladen.
 
-Die `settings.json` wird dabei nur ergänzt (neue Permissions und Hook-Gruppen aus
-dem Template), nie beschnitten. Das Template selbst gehört dem Server und wird
-vollständig neu geschrieben — eigene Änderungen gehören in die settings.json.
+`ai-rem update` aktualisiert alle installierten Ziele (`ai-rem doctor` zeigt sie);
+ein weiteres Frontend kommt mit `ai-rem install --client <claude|opencode|generic>` dazu.
+
+Claude Code: Die `settings.json` wird dabei nur ergänzt (neue Permissions und
+Hook-Gruppen aus dem Template), nie beschnitten. Das Template selbst gehört dem Server
+und wird vollständig neu geschrieben — eigene Änderungen gehören in die settings.json.
 """
+
+# opencode-Commands (~/.config/opencode/command/<name>.md): derselbe Prompt, davor das
+# Frontmatter, aus dem opencode die Beschreibung in der Command-Liste nimmt.
+# migrate-claude-md fehlt bewusst — das betrifft nur Claude Code.
+OPENCODE_COMMANDS = {
+    name: "---\ndescription: %s\n---\n%s" % (descr, body)
+    for name, descr, body in (
+        ("setup-ai-rem", "ai-rem einrichten", CMD_MD),
+        ("memory-cleanup", "Memory-Cleanup (Review-Abarbeitung)", MEMORY_CLEANUP_CMD_MD),
+        ("ai-rem-update", "ai-rem Client aktualisieren", AI_REM_UPDATE_CMD_MD),
+    )
+}
 
 # Client-Artefakte: lokaler Zielpfad → (Ausliefer-Route, Inhalt). Grundlage fuer
 # /manifest. Gehasht wird genau der String, den die Route ausgibt — Manifest und
 # Auslieferung koennen so nicht auseinanderlaufen (tests/test_client_manifest.py).
-# Pfad-Konvention fuer den Client: bin/ und lib/ liegen unter
-# ~/.local/share/ai-rem, alles andere unter CLAUDE_HOME (~/.claude).
+# Pfad-Konvention fuer den Client (bin/ai-rem _artifact_root, scripts/setup.py):
+#   bin/, lib/   → ~/.local/share/ai-rem       (Ziel "common", immer installiert)
+#   opencode/    → ~/.config/opencode          (Ziel "opencode")
+#   alles andere → CLAUDE_HOME (~/.claude)     (Ziel "claude")
 _CLIENT_ARTIFACTS: dict[str, tuple[str, str]] = {
     "hooks/system-check.py": ("/hooks/system-check.py", SYSTEM_CHECK_PY),
     "hooks/auto-memory.py": ("/hooks/auto-memory.py", AUTO_MEMORY_HOOK_PY),
@@ -431,6 +455,9 @@ _CLIENT_ARTIFACTS: dict[str, tuple[str, str]] = {
     "commands/memory-cleanup.md": ("/cmd/memory-cleanup", MEMORY_CLEANUP_CMD_MD),
     "commands/migrate-claude-md.md": ("/cmd/migrate-claude-md", MIGRATE_CLAUDE_MD_CMD_MD),
     "commands/ai-rem-update.md": ("/cmd/ai-rem-update", AI_REM_UPDATE_CMD_MD),
+    "opencode/plugin/ai-rem.ts": ("/clients/opencode/ai-rem.ts", OPENCODE_PLUGIN_TS),
+    **{f"opencode/command/{name}.md": (f"/cmd/opencode/{name}", src)
+       for name, src in OPENCODE_COMMANDS.items()},
 }
 
 # Ein harter Tod (SIGKILL, OOM, Segfault) laesst WAL-Reste liegen. Eine intakte
@@ -567,6 +594,23 @@ async def db_exec_async(query: str, params: dict | None = None) -> ladybug.Query
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+# Herkunft eines Schreibzugriffs (claude-code, opencode, ai-rem-cli …). Die CLI und
+# Hooks gehen über /api/tool und schicken X-AI-REM-Client; MCP-Clients nennen sich
+# im initialize (clientInfo.name). Gesetzt wird extra.client nur beim Anlegen.
+_REQUEST_CLIENT: contextvars.ContextVar[str] = contextvars.ContextVar("ai_rem_client", default="")
+
+
+def _caller_client() -> str:
+    who = _REQUEST_CLIENT.get()
+    if not who:
+        try:
+            from fastmcp.server.dependencies import get_context
+            who = get_context().session.client_params.clientInfo.name or ""
+        except Exception:
+            who = ""
+    return re.sub(r"[^\w.@-]", "", who)[:64]
 
 
 def _rows(result: ladybug.QueryResult) -> list[list]:
@@ -1154,9 +1198,12 @@ _UI_HTML = _pkg_text("templates/ui.html")
 mcp = FastMCP(
     "ai-rem",
     instructions=(
-        "Langzeit-Gedächtnis als Knowledge Graph. Einzige Quelle für persistenten Kontext — Claude Codes natives Markdown-Auto-Memory ist deaktiviert.\n\n"
+        "Langzeit-Gedächtnis als Knowledge Graph. Einzige Quelle für persistenten Kontext — "
+        "client-eigene Memory-Mechanismen (z.B. Claude Codes Markdown-Auto-Memory) sind deaktiviert.\n\n"
         "## Kontext holen\n"
-        "memory_get_context für offene Tasks/Projekte/letzte Einträge, memory_search für gezielte Themen. "
+        "Zu Beginn jeder Session einmal memory_get_context() aufrufen (offene Tasks, Projekte, "
+        "Routinen & Anweisungen) — Clients ohne Session-Hook bekommen ihn sonst nie. "
+        "memory_search für gezielte Themen. "
         "Vor Rückfragen immer erst in ai-rem prüfen ob die Info schon da ist.\n\n"
         "## Speichern — proaktiv, ohne Nachfrage\n"
         "memory_add + memory_relate. Vor neuem Eintrag prüfen ob Entity schon existiert — updaten statt duplizieren.\n\n"
@@ -1165,8 +1212,9 @@ mcp = FastMCP(
         "Body bei Regeln: Regel + Why: + How to apply: — die Kern-Regel MUSS in die "
         "ERSTEN ~120 Zeichen (vor 'Why:'), da get_context auf descr[:120] kürzt und alles "
         "dahinter passiv unsichtbar bleibt.\n"
-        "  VOR dem Anlegen einer neuen Verhaltensregel prüfen, ob ein Claude-Code-Hook "
-        "(settings.json, deterministisch, kostet keinen Routine-Slot) die bessere "
+        "  VOR dem Anlegen einer neuen Verhaltensregel prüfen, ob ein Client-Hook "
+        "(Claude Code: settings.json; opencode: Plugin — deterministisch, kostet keinen "
+        "Routine-Slot) die bessere "
         "Realisierung ist — automatisierte 'immer wenn X dann Y'-Verhalten gehören in "
         "Hooks; falls sinnvoll, dem User die Hook-Variante VORSCHLAGEN statt still eine "
         "Preference anzulegen. Routine-Slots sind knapp: nur DISCOVER_ROUTINES_LIMIT "
@@ -1338,6 +1386,19 @@ async def cmd_migrate_claude_md_route(request: Request) -> PlainTextResponse:
 @mcp.custom_route("/cmd/ai-rem-update", methods=["GET"])
 async def cmd_ai_rem_update_route(request: Request) -> PlainTextResponse:
     return PlainTextResponse(AI_REM_UPDATE_CMD_MD, media_type="text/plain")
+
+
+@mcp.custom_route("/clients/opencode/ai-rem.ts", methods=["GET"])
+async def opencode_plugin_route(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(OPENCODE_PLUGIN_TS, media_type="text/plain")
+
+
+@mcp.custom_route("/cmd/opencode/{name}", methods=["GET"])
+async def opencode_cmd_route(request: Request) -> PlainTextResponse:
+    src = OPENCODE_COMMANDS.get(request.path_params["name"])
+    if src is None:
+        return PlainTextResponse("not found", status_code=404)
+    return PlainTextResponse(src, media_type="text/plain")
 
 
 @mcp.custom_route("/manifest", methods=["GET"])
@@ -2106,6 +2167,10 @@ def memory_add(
     base_extra.pop("context", None)
     if eff_ctx:
         base_extra["context"] = eff_ctx
+    if not existed and not base_extra.get("client"):
+        who = _caller_client()
+        if who:
+            base_extra["client"] = who
 
     # Task-Status kanonisieren. Nur für Task: memory_set_project_context schreibt
     # status="aktiv" für Projects, das darf die Synonymtabelle nicht anfassen.
@@ -3513,7 +3578,10 @@ def memory_project_context(name: str) -> str:
         lines.append(
             f"\n### MCP-Setup → `{target}`\n"
             "Client: diese Datei schreiben, falls dort nicht identisch vorhanden, "
-            "danach **Claude Code neu starten** (.mcp.json wird nur beim Start geladen).\n"
+            "danach **Claude Code neu starten** (.mcp.json wird nur beim Start geladen). "
+            "opencode: dieselben Server stattdessen als `mcp`-Block in `opencode.json` "
+            "im Projekt (stdio → type \"local\" mit command als Array, http → "
+            "type \"remote\", env → environment).\n"
             "```json\n" + json.dumps(mcp_cfg, ensure_ascii=False, indent=2) + "\n```")
 
     out_rows = _rows(db_exec(
@@ -4751,6 +4819,11 @@ class AuthMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or self._authorized(scope):
+            if scope["type"] == "http":
+                for name, value in scope.get("headers", []):
+                    if name == b"x-ai-rem-client":
+                        _REQUEST_CLIENT.set(value.decode("latin-1", "ignore"))
+                        break
             return await self.app(scope, receive, send)
         await send({
             "type": "http.response.start",

@@ -222,7 +222,7 @@ jobs:
           # Eigene Landing-Page (statt der wachsenden README), mit absoluten GitHub-Links —
           # relative Links rendern auf Docker Hub nicht. Größe so vom 25k-Limit entkoppelt.
           DESC_FILE="docs/dockerhub.md"
-          SHORT_DESC="Persistent knowledge-graph memory for Claude Code — self-hosted MCP server"
+          SHORT_DESC="Shared knowledge-graph memory for Claude Code, opencode & any MCP agent — self-hosted"
 
           # Die jüngsten Changelog-Einträge in den Marker-Block schreiben, damit auf
           # Docker Hub steht, was sich pro Version ändert (dort gibt es keine Releases).

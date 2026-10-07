@@ -29,6 +29,51 @@ Das Skript erledigt automatisch:
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`. Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
 
+## Frontends (Ziele)
+
+Die Schritte oben sind das Ziel **`claude`**. Das Setup wählt Ziele mit `--client`
+(`bash <(curl -s …/setup) --client opencode` oder später `ai-rem install --client …`); der
+Default `auto` nimmt jedes Frontend, dessen Binary im `PATH` liegt, und fällt sonst auf
+`generic` zurück. Installierte Ziele stehen in `~/.config/ai-rem/client.json`, zusammen mit
+dem Endpoint und der Token-Datei `~/.config/ai-rem/token` (Modus 0600), die CLI und opencode lesen.
+
+**`opencode`** — die Unterschiede zu Claude Code:
+
+| | Claude Code | opencode |
+|---|---|---|
+| Config | `~/.claude.json` → `mcpServers` | `~/.config/opencode/opencode.json` → `mcp` |
+| stdio-Server | `"type": "stdio"`, `command` + `args` | `"type": "local"`, `command` als **ein Array** |
+| http-Server | `"type": "http"`, `url` + `headers` | `"type": "remote"`, `url` + `headers` |
+| Env pro Server | `env` | `environment` |
+| Instruktionen | `~/.claude/CLAUDE.md` | `~/.config/opencode/AGENTS.md` + `instructions[]` |
+| Secrets | Klartext in der 0600-Config | `{file:~/.config/ai-rem/token}` |
+| Session-Hooks | SessionStart / PreCompact / SessionEnd | Plugin-Events `session.created` / `session.idle` / `session.compacted` |
+
+Was das Ziel schreibt:
+1. `opencode.json`: mergt `mcp.ai-rem` (remote, Bearer aus der Token-Datei) und — wenn
+   node und die Builds da sind — `mykeyvault` und `tools` als `local`-Server; `node` kommt
+   aus dem `PATH` (Homebrew: `/opt/homebrew/bin/node`). Provider, Modelle und fremde Server
+   bleiben unberührt, einmalig wird `opencode.json.pre-airem.bak` angelegt. Eine
+   JSONC-Datei mit Kommentaren wird **nicht** umgeschrieben — der Block landet stattdessen
+   in `~/.config/ai-rem/snippets/opencode-mcp.json`. Die Auto-Memory-`fallback.md` kommt
+   in `instructions[]` (opencode kennt keinen `@`-Import).
+2. `AGENTS.md`: ein markierter `<!-- ai-rem:begin/end -->`-Block, der den Agenten zu
+   Sitzungsbeginn `memory_get_context()` aufrufen lässt — opencode hat keinen Session-Start-Hook.
+3. `plugin/ai-rem.ts`: exportiert die Session über das SDK und startet `ai-rem ingest`
+   detached, 10 Minuten nach dem letzten `session.idle` (nur bei neuen Nachrichten) und
+   sofort bei `session.compacted`; bei `session.created` laufen `ai-rem catchup` und einmal
+   pro Prozess `ai-rem update --check` (Toast bei Drift).
+4. `command/*.md`: `/setup-ai-rem`, `/memory-cleanup`, `/ai-rem-update`.
+
+**`generic`** — schreibt nichts außerhalb von `~/.config/ai-rem/snippets/`: fertige Blöcke
+für Codex (`config.toml`, Token über `AI_REM_TOKEN`), Gemini CLI (`settings.json`), Cursor
+(`mcp.json`) und einen `AGENTS.md`-Pointer. Diese Frontends bekommen Tools und
+Server-Instruktionen, aber kein Auto-Memory.
+
+`ai-rem uninstall --client <ziel>` entfernt, was das Ziel angelegt hat (bei opencode den
+`ai-rem`-Server, den `instructions`-Eintrag, den `AGENTS.md`-Block, Plugin und Commands;
+`mykeyvault`/`tools` bleiben stehen).
+
 ## Bestehende Installation aktuell halten
 
 Die Schritte 3–9 liefern Dateien aus, die sich etwa bei jedem zweiten Release ändern.
@@ -38,7 +83,7 @@ stattdessen die CLI:
 
 ```bash
 ai-rem update --check   # nur berichten, Exit 1 wenn etwas hinterherhinkt
-ai-rem update           # Dateien nachziehen, danach Claude Code neu starten
+ai-rem update           # Dateien aller installierten Ziele nachziehen, danach die Frontends neu starten
 ```
 
 `GET /manifest` listet zu jeder ausgelieferten Datei einen SHA-256; die CLI hasht die
