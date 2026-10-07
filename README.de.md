@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für Claude
 
-> Diese Dokumentation bezieht sich auf **[v1.3.2](https://github.com/markus7h/ai-rem/releases/tag/v1.3.2)**.
+> Diese Dokumentation bezieht sich auf **[v1.4.0](https://github.com/markus7h/ai-rem/releases/tag/v1.4.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**

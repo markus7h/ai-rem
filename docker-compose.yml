@@ -64,6 +64,8 @@ services:
       # den Kimi-Fallback. Pro Deployment via .env überschreibbar.
       # Ohne Erreichbarkeit läuft der Cleanup weiter, schiebt aber unklare Fälle nur in die Review-Queue.
       - AI_REM_OLLAMA_URL=${AI_REM_OLLAMA_URL:-http://mystorage.lan:11437}
+      # Zeitzone fuer das Cleanup-Fenster (der Container selbst laeuft in UTC).
+      - AI_REM_TZ=${AI_REM_TZ:-Europe/Berlin}
       # Key für den Router (Virtual Key, nicht der Master-Key). Leer = kein
       # Authorization-Header, für einen llama-server ohne --api-key.
       - AI_REM_LLM_API_KEY=${AI_REM_LLM_API_KEY:-}
@@ -97,10 +99,10 @@ services:
       # kleinere Image :latest-slim nutzen (ohne fastembed und Modell).
       # Ein Wechsel rechnet beim naechsten Start alle Vektoren neu (andere Dimension);
       # ist der Dienst nicht erreichbar, faellt die Suche auf rein lexikalisch zurueck.
-      # Schlaeft der Ziel-Host nachts (gilt genauso fuer AI_REM_OLLAMA_URL oben), muss die
-      # Cleanup-Stunde in der /cleanup-UI HINTER dessen Aufwachzeit liegen: der Nightly-Lauf
-      # ist neben dem Container-Start der einzige Backfill-Trigger, und er bricht bei
-      # unerreichbarem Dienst komplett ab (kein Chunk geschrieben, embed_pending bleibt stehen).
+      # Schlaeft der Ziel-Host nachts (gilt genauso fuer AI_REM_OLLAMA_URL oben), muss das
+      # Cleanup-Fenster in der /cleanup-UI in dessen Wachzeit liegen (Default 06:15-22:30,
+      # Lokalzeit AI_REM_TZ). Ist das LLM zu Fensterbeginn nicht erreichbar, wartet der
+      # Lauf (Retry alle 15 min) und startet spaetestens 30 min vor Fensterende.
       - EMBED_URL=${EMBED_URL:-}
       # Bearer-Token fuer EMBED_URL — noetig, wenn dort ein Router mit Auth steht.
       # Leer = kein Authorization-Header (direkter llama-server ohne --api-key).

@@ -8,6 +8,8 @@ ladybug==0.21.2
 numpy==2.5.3
 cryptography==50.0.2
 pyyaml==6.0.3
+# Zonendaten fuer AI_REM_TZ (Cleanup-Fenster) — das Slim-Image hat kein /usr/share/zoneinfo.
+tzdata==2026.5
 
 # fastembed (in-process Embeddings) steht in requirements-embed.txt und wird nur
 # ins Default-Image installiert — das :slim-Image faehrt ueber EMBED_URL extern.

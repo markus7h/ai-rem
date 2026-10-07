@@ -58,7 +58,8 @@ button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid 
 <div class="card">
   <div class="row">
     <label><input type="checkbox" id="en"> Nightly aktiv</label>
-    <label>Stunde <input type="number" id="hr" min="0" max="23"></label>
+    <label>Fenster <input type="time" id="ws"> – <input type="time" id="we"></label>
+    <span class="muted" id="tz"></span>
     <button onclick="saveCfg()">Speichern</button>
     <button class="ghost" onclick="runNow()">Jetzt ausführen</button>
     <span class="muted" id="lr"></span>
@@ -87,7 +88,7 @@ const $=id=>document.getElementById(id);
 function toast(m,ok=true){const t=$('toast');t.textContent=m;t.className='toast show '+(ok?'ok':'err');setTimeout(()=>t.className='toast',2200);}
 async function load(){
   const cfg=await (await fetch('/api/cleanup/config')).json();
-  $('en').checked=!!cfg.enabled;$('hr').value=cfg.hour??3;
+  $('en').checked=!!cfg.enabled;$('ws').value=cfg.window_start;$('we').value=cfg.window_end;$('tz').textContent=cfg.tz||'';
   $('lr').textContent=cfg.last_run?('letzter Lauf: '+cfg.last_run.replace('T',' ')):'noch kein Lauf';
   const pend=await (await fetch('/api/cleanup/pending')).json();
   $('pending').innerHTML=pend.length?pend.map(p=>{
@@ -115,8 +116,8 @@ B) ${esc((p.detail.b||{}).descr||'')}</div>`):'';
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 async function saveCfg(){
   const r=await fetch('/api/cleanup/config',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({enabled:$('en').checked,hour:parseInt($('hr').value)})});
-  toast(r.ok?'Gespeichert':'Fehler',r.ok);load();
+    body:JSON.stringify({enabled:$('en').checked,window_start:$('ws').value,window_end:$('we').value})});
+  const j=await r.json();toast(r.ok?'Gespeichert':('Fehler: '+(j.error||r.status)),r.ok);load();
 }
 async function runNow(){
   toast('Läuft…');const r=await fetch('/api/cleanup/now',{method:'POST'});const j=await r.json();

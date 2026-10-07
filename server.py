@@ -22,7 +22,8 @@ import sys
 import threading
 import time
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, time as dtime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Optional
 
 import ladybug
@@ -73,7 +74,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.3.2"
+VERSION = "1.4.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -1475,10 +1476,17 @@ async def api_cleanup_config_post(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
     cfg = _load_cleanup_cfg()
     cfg["enabled"] = bool(body.get("enabled", cfg.get("enabled")))
+    start = body.get("window_start", cfg["window_start"])
+    end = body.get("window_end", cfg["window_end"])
     try:
-        cfg["hour"] = max(0, min(23, int(body.get("hour", cfg.get("hour", 3)))))
+        if _parse_hhmm(start) >= _parse_hhmm(end):
+            return JSONResponse({"error": "window_start must be before window_end"},
+                                status_code=400)
     except (TypeError, ValueError):
-        return JSONResponse({"error": "hour must be 0-23"}, status_code=400)
+        return JSONResponse({"error": "window_start/window_end must be HH:MM"},
+                            status_code=400)
+    cfg["window_start"], cfg["window_end"] = _parse_hhmm(start).strftime("%H:%M"), \
+        _parse_hhmm(end).strftime("%H:%M")
     _save_cleanup_cfg(cfg)
     return JSONResponse({"status": "ok", **cfg})
 
@@ -3889,6 +3897,20 @@ CLEANUP_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "cleanup")
 _CLEANUP_CONFIG = os.path.join(BACKUP_DIR, "cleanup.config.json")
 _CLEANUP_PENDING = os.path.join(CLEANUP_DIR, "pending.json")
 _cleanup_lock = threading.Lock()
+# Zeitfenster des Nightly-Cleanups, in Lokalzeit. Der Container läuft in UTC; die
+# frühere feste "Stunde 7" hiess deshalb 09:00 MESZ, und eine verpasste Stunde fiel
+# ganz aus. Das Fenster richtet sich nach dem LLM-Host (myai schläft 23:00-06:00):
+# Start frühestens window_start, Nachholen bis window_end.
+try:
+    CLEANUP_TZ = ZoneInfo(os.getenv("AI_REM_TZ", "Europe/Berlin"))
+except (ZoneInfoNotFoundError, ValueError):
+    log.warning("AI_REM_TZ unbekannt, Cleanup-Fenster laeuft in UTC")
+    CLEANUP_TZ = timezone.utc
+CLEANUP_WINDOW_DEFAULT = ("06:15", "22:30")
+# LLM nicht erreichbar → alle RETRY Minuten neu prüfen; in den letzten GRACE Minuten
+# des Fensters trotzdem laufen (unklare Fälle landen dann in der Review-Queue).
+CLEANUP_LLM_RETRY_MIN = 15
+CLEANUP_LLM_GRACE_MIN = 30
 
 _STOPWORDS = {"der", "die", "das", "und", "the", "a", "an", "von", "fuer", "für",
               "mit", "im", "in", "of", "for", "to", "ai", "rem"}
@@ -3989,11 +4011,58 @@ def _load_cleanup_cfg() -> dict:
         with open(_CLEANUP_CONFIG) as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_SH)
             try:
-                return json.load(f)
+                return _normalize_cleanup_cfg(json.load(f))
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"enabled": True, "hour": 3, "last_run": None}
+        return _normalize_cleanup_cfg({"enabled": True, "last_run": None})
+
+
+def _parse_hhmm(value: str) -> dtime:
+    h, m = str(value).split(":")
+    return dtime(int(h), int(m))
+
+
+def _normalize_cleanup_cfg(cfg: dict) -> dict:
+    """Fehlendes oder ungültiges Fenster → Default. Die alte "hour" galt in UTC und war
+    nur ein Workaround für dasselbe Problem; sie wird verworfen statt umgerechnet."""
+    cfg.pop("hour", None)
+    cfg.setdefault("window_start", CLEANUP_WINDOW_DEFAULT[0])
+    cfg.setdefault("window_end", CLEANUP_WINDOW_DEFAULT[1])
+    try:
+        if _parse_hhmm(cfg["window_start"]) >= _parse_hhmm(cfg["window_end"]):
+            raise ValueError
+    except (TypeError, ValueError):
+        cfg["window_start"], cfg["window_end"] = CLEANUP_WINDOW_DEFAULT
+    cfg["tz"] = str(CLEANUP_TZ)
+    return cfg
+
+
+def _cleanup_due(now: datetime, cfg: dict) -> bool:
+    """Soll der Scheduler jetzt laufen? now ist zonen-bewusst (CLEANUP_TZ)."""
+    if not cfg.get("enabled"):
+        return False
+    start, end = _parse_hhmm(cfg["window_start"]), _parse_hhmm(cfg["window_end"])
+    if not start <= now.time() < end:
+        return False
+    last = cfg.get("last_run")
+    if last:
+        try:
+            # last_run ist naiv in Systemzeit (_now()); astimezone deutet das korrekt.
+            if datetime.fromisoformat(last).astimezone(now.tzinfo).date() == now.date():
+                return False
+        except ValueError:
+            pass
+    return True
+
+
+def _cleanup_llm_ready(now: datetime, cfg: dict) -> bool:
+    """LLM erreichbar oder Fensterende so nah, dass nicht mehr gewartet wird."""
+    if _ollama_up():
+        return True
+    end = _parse_hhmm(cfg["window_end"])
+    end_dt = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+    return end_dt - now <= timedelta(minutes=CLEANUP_LLM_GRACE_MIN)
 
 
 def _save_cleanup_cfg(cfg: dict) -> None:
@@ -4003,7 +4072,7 @@ def _save_cleanup_cfg(cfg: dict) -> None:
         fcntl.flock(fd, fcntl.LOCK_EX)
         tmp = _CLEANUP_CONFIG + ".tmp"
         with open(tmp, "w") as f:
-            json.dump(cfg, f, indent=2)
+            json.dump({k: v for k, v in cfg.items() if k != "tz"}, f, indent=2)
         os.replace(tmp, _CLEANUP_CONFIG)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
@@ -4491,24 +4560,21 @@ def _cleanup_scheduler_loop() -> None:
     # Trägt den Reconcile mit: der Thread tickt ohnehin jede Minute, und der
     # Backfill im selben Thread kann nicht mit dem des Cleanups kollidieren.
     naechster_reconcile = time.monotonic() + EMBED_RECONCILE_SEC
+    naechster_llm_versuch = 0.0
     while not _shutdown.wait(60):
         try:
             if EMBED_RECONCILE_SEC and time.monotonic() >= naechster_reconcile:
                 naechster_reconcile = time.monotonic() + EMBED_RECONCILE_SEC
                 _embed_backfill()  # verlorene Vektoren nachziehen, No-op wenn keine offen
             cfg = _load_cleanup_cfg()
-            if not cfg.get("enabled"):
+            now = datetime.now(CLEANUP_TZ)
+            if not _cleanup_due(now, cfg) or time.monotonic() < naechster_llm_versuch:
                 continue
-            now = datetime.now()
-            if now.hour != int(cfg.get("hour", 3)):
+            if not _cleanup_llm_ready(now, cfg):
+                naechster_llm_versuch = time.monotonic() + CLEANUP_LLM_RETRY_MIN * 60
+                log.info("Nightly cleanup deferred: LLM unreachable, retry in %d min",
+                         CLEANUP_LLM_RETRY_MIN)
                 continue
-            last = cfg.get("last_run")
-            if last:
-                try:
-                    if datetime.fromisoformat(last).date() == now.date():
-                        continue
-                except ValueError:
-                    pass
             log.info("Nightly cleanup starting")
             _cleanup_run(triggered_by="scheduler")
         except Exception as e:
