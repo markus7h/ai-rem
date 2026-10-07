@@ -13,6 +13,24 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.4.0] – 2026-10-07
+
+### Changed
+- **Nightly cleanup runs in a time window instead of a fixed hour.** The scheduler
+  compared `datetime.now().hour` against the configured hour — in the container's UTC,
+  so "7" meant 09:00 CEST, and a run missed in that hour was skipped for the day. It
+  now runs once per day inside `window_start`–`window_end` (default 06:15–22:30) in
+  the new `AI_REM_TZ` (default `Europe/Berlin`), matching the LLM host's waking hours
+  (myai sleeps 23:00–06:00). A run missed by a restart is caught up later in the window.
+- **The run waits for the LLM.** If `AI_REM_OLLAMA_URL` is unreachable at the start of
+  the window it retries every 15 min and only runs without the judge in the last 30
+  minutes of the window.
+- `/cleanup` web UI and `POST /api/cleanup/config` take `window_start` / `window_end`
+  (`HH:MM`). The old `hour` setting is dropped on load; the default window applies.
+
+### Added
+- `tzdata` dependency (the slim image has no zoneinfo database).
+
 ## [1.3.2] – 2026-10-06
 
 ### Fixed
@@ -783,7 +801,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/markus7h/ai-rem/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/markus7h/ai-rem/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/markus7h/ai-rem/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/markus7h/ai-rem/compare/v1.2.7...v1.3.0
