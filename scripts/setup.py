@@ -144,8 +144,10 @@ def hook_command(path):
 
 
 def run(cmd, timeout=120, capture=True, cwd=None):
+    # stdin=DEVNULL: ssh liest sonst vom Terminal und schluckt Zeilen, die der User
+    # nach dem Setup-Befehl gleich mit eingefuegt hat (die liefen dann nie).
     return subprocess.run(cmd, capture_output=capture, text=True,
-                          timeout=timeout, cwd=cwd)
+                          timeout=timeout, cwd=cwd, stdin=subprocess.DEVNULL)
 
 
 # ── Preflight: claude CLI ─────────────────────────────────────────────────────
@@ -259,10 +261,8 @@ def pull_secrets(setup_cfg):
                           ssh_host, 'true'], timeout=20).returncode == 0
         except Exception:
             ssh_ok = False
-    if not ssh_ok:
-        extra = '' if ssh else ' (ssh-Client fehlt)'
-        print('⚠ SSH zu %s nicht erreichbar%s — Secrets nur aus Env' % (ssh_host, extra))
-        print('  SSH-Key-Anleitung (Schritt fuer Schritt): %s/install' % KG_URL)
+    # Kein SSH ist kein Fehler mehr: die Geraete-Kopplung (pair_device) holt die
+    # Tokens dann ueber den Browser. Darum hier keine Warnung.
 
     def remote_env(remote_file, key):
         try:
@@ -282,6 +282,217 @@ def pull_secrets(setup_cfg):
     return ssh_host, ai_rem_token, vault_token
 
 
+# ── Voraussetzungen selbst installieren ──────────────────────────────────────
+# Frueher: "Node fehlt — brew install node, danach erneut ausfuehren". Jetzt fragt
+# das Setup einmal und installiert selbst; der Build laeuft im selben Lauf weiter.
+
+REPORT = []          # (Bestandteil, ok, Befehl zur Behebung) fuer den Abschlussbericht
+ASSUME_YES = False   # --yes
+NODE_MIN = 18
+
+
+def _node_major():
+    node = shutil.which('node')
+    if not node:
+        return 0
+    try:
+        return int(run([node, '-v'], timeout=20).stdout.strip().lstrip('v').split('.')[0])
+    except Exception:
+        return 0
+
+
+def missing_deps():
+    miss = [c for c in ('git', 'npm') if not shutil.which(c)]
+    if _node_major() < NODE_MIN:
+        miss.insert(0, 'node')
+    return miss
+
+
+def _brew():
+    for p in (shutil.which('brew'), '/opt/homebrew/bin/brew', '/usr/local/bin/brew'):
+        if p and os.path.isfile(p):
+            return p
+    return ''
+
+
+def dep_install_cmds(miss):
+    """Befehle, die die fehlenden Pakete nachinstallieren — None, wenn es auf dieser
+    Plattform keinen Weg ohne Handarbeit gibt (dann steht der Hinweis im Bericht)."""
+    want_node = 'node' in miss or 'npm' in miss
+    want_git = 'git' in miss
+    if PLATFORM == 'macos':
+        brew = _brew()
+        if not brew:
+            return None
+        return [[brew, 'install'] + (['node'] if want_node else []) + (['git'] if want_git else [])]
+    if PLATFORM in ('linux', 'wsl') and shutil.which('apt-get'):
+        cmds = []
+        if want_node:
+            # apt liefert oft ein zu altes Node — NodeSource hat das aktuelle LTS.
+            cmds.append(['bash', '-c', 'curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -'])
+        pkgs = (['nodejs'] if want_node else []) + (['git'] if want_git else [])
+        cmds.append(['sudo', 'apt-get', 'install', '-y'] + pkgs)
+        return cmds
+    if PLATFORM == 'windows' and shutil.which('winget'):
+        cmds = []
+        if want_node:
+            cmds.append(['winget', 'install', '-e', '--id', 'OpenJS.NodeJS.LTS'])
+        if want_git:
+            cmds.append(['winget', 'install', '-e', '--id', 'Git.Git'])
+        return cmds
+    return None
+
+
+def confirm(question):
+    if ASSUME_YES:
+        return True
+    if not sys.stdin.isatty():
+        return False
+    try:
+        return input('%s [J/n] ' % question).strip().lower() in ('', 'j', 'ja', 'y', 'yes')
+    except EOFError:
+        return False
+
+
+def ensure_deps():
+    """node >= 18, npm, git sicherstellen. True, wenn danach alles da ist."""
+    miss = missing_deps()
+    if not miss:
+        return True
+    cmds = dep_install_cmds(miss)
+    if cmds is None:
+        if PLATFORM == 'macos':
+            fix = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+            print('⚠ Es fehlen %s, und Homebrew ist nicht installiert (braucht einmal das Admin-Passwort):'
+                  % ', '.join(miss))
+            print('    ' + fix)
+        else:
+            fix = 'node >= %d, npm und git installieren' % NODE_MIN
+            print('⚠ Es fehlen %s — kein unterstuetzter Paketmanager gefunden.' % ', '.join(miss))
+        REPORT.append(('node/npm/git', False, fix))
+        return False
+    print('Es fehlen: %s (fuer mykeyvault und tools).' % ', '.join(miss))
+    for c in cmds:
+        print('    ' + ' '.join(c))
+    if not confirm('Jetzt installieren?'):
+        REPORT.append(('node/npm/git', False, 'ai-rem install --yes'))
+        return False
+    for c in cmds:
+        # Interaktiv (sudo/winget fragen ggf. nach Passwort bzw. Zustimmung).
+        if subprocess.call(c) != 0:
+            print('✗ fehlgeschlagen: %s' % ' '.join(c))
+            break
+    # Frisch installierte Programme sind im PATH dieses Prozesses noch nicht bekannt.
+    extra = ['/opt/homebrew/bin', '/usr/local/bin'] if PLATFORM == 'macos' else []
+    if PLATFORM == 'windows':
+        extra = [os.path.join(os.environ.get('ProgramFiles', r'C:\Program Files'), d)
+                 for d in ('nodejs', os.path.join('Git', 'cmd'))]
+    os.environ['PATH'] = os.pathsep.join(extra + [os.environ.get('PATH', '')])
+    still = missing_deps()
+    if still:
+        REPORT.append(('node/npm/git', False, 'fehlt weiterhin: ' + ', '.join(still)))
+        return False
+    print('✓ node, npm, git vorhanden')
+    return True
+
+
+# ── Geraete-Kopplung: Token ohne SSH ─────────────────────────────────────────
+
+def _post_json(url, body, timeout=10):
+    req = urllib.request.Request(url, data=json.dumps(body).encode('utf-8'), method='POST',
+                                 headers={'Content-Type': 'application/json',
+                                          'User-Agent': 'ai-rem-setup'})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+
+def pair_device():
+    """Token per Freigabe in der Web-UI holen (wie `gh auth login`). Gibt
+    {'ai_rem_token', 'vault_token', 'vault_url'} zurueck oder {} bei Abbruch."""
+    import platform as _pf
+    import socket
+    import time
+    import webbrowser
+    try:
+        start = _post_json(KG_URL + '/api/pair/start',
+                           {'device': socket.gethostname(),
+                            'platform': '%s %s' % (PLATFORM, _pf.release())})
+    except Exception as ex:
+        print('⚠ Kopplung nicht moeglich (%s) — Server zu alt oder nicht erreichbar.' % ex)
+        return {}
+    print('')
+    print('┌─ Geraet koppeln ─────────────────────────────────────────')
+    print('│  Code:  %s' % start['code'])
+    print('│  Im Browser freigeben (eingeloggt in der ai-rem-Web-UI, geht auch am Handy):')
+    print('│  %s' % start['verify_url'])
+    print('└──────────────────────────────────────────────────────────')
+    try:
+        webbrowser.open(start['verify_url'])
+    except Exception:
+        pass
+    deadline = time.time() + int(start.get('expires_in', 600))
+    try:
+        while time.time() < deadline:
+            time.sleep(3)
+            try:
+                r = _post_json(KG_URL + '/api/pair/poll', {'pair_id': start['pair_id']})
+            except Exception:
+                continue
+            if r.get('state') == 'approved':
+                print('✓ Geraet freigegeben')
+                return r
+            if r.get('state') in ('denied', 'expired'):
+                print('✗ Kopplung %s' % ('abgelehnt' if r['state'] == 'denied' else 'abgelaufen'))
+                return {}
+    except KeyboardInterrupt:
+        print('')
+        print('✗ Kopplung abgebrochen')
+        return {}
+    print('✗ Kopplung abgelaufen')
+    return {}
+
+
+def ask_token():
+    """Letzter Ausweg ohne Browser: Token einfuegen (z.B. aus `ai-rem token`)."""
+    if not sys.stdin.isatty():
+        return ''
+    import getpass
+    try:
+        return getpass.getpass('ai-rem-Token einfuegen (leer = abbrechen): ').strip()
+    except (EOFError, KeyboardInterrupt):
+        return ''
+
+
+def obtain_tokens(ai_rem_token, vault_token, vault_url, force_pair=False):
+    """Token-Kette: Env/SSH (pull_secrets) > gespeicherte Dateien > Kopplung > Eingabe."""
+    if force_pair:
+        ai_rem_token = ''
+    ai_rem_token = ai_rem_token or ('' if force_pair else read_secret(TOKEN_FILE))
+    vault_token = vault_token or read_secret(VAULT_TOKEN_FILE)
+    if not ai_rem_token:
+        paired = pair_device()
+        ai_rem_token = paired.get('ai_rem_token', '')
+        vault_token = paired.get('vault_token') or vault_token
+        vault_url = paired.get('vault_url') or vault_url
+    if not ai_rem_token:
+        ai_rem_token = ask_token()
+    REPORT.append(('ai-rem-Token', bool(ai_rem_token), 'ai-rem pair'))
+    return ai_rem_token, vault_token, vault_url
+
+
+def print_report():
+    if not REPORT:
+        return
+    print('')
+    print('── Ergebnis ──────────────────────────────────────────────')
+    seen = set()
+    for name, ok, fix in REPORT:
+        if name in seen:
+            continue
+        seen.add(name)
+        print(('  ✓ %s' % name) if ok else ('  ✗ %-20s → %s' % (name, fix)))
+
+
 # ── tools-registry (stdio) klonen+bauen, falls in setup-config ────────────────────
 
 def _build_node_mcp(repo, install_dir, entry, subdir, label):
@@ -289,36 +500,11 @@ def _build_node_mcp(repo, install_dir, entry, subdir, label):
     # entry ist install_dir-relativ (z.B. dist/index.js oder mcp/dist/index.js);
     # subdir ist der Ordner mit package.json als npm-cwd ('' = install_dir selbst).
     # Gibt den Entry-Pfad zurueck oder '' bei fehlenden Tools / Build-Fehler.
-    miss = [c for c in ('node', 'npm', 'git') if not shutil.which(c)]
-    node_major = 0
-    if shutil.which('node'):
-        try:
-            v = run(['node', '-v'], timeout=20).stdout.strip().lstrip('v')
-            node_major = int(v.split('.')[0])
-        except Exception:
-            node_major = 0
-    if miss or node_major < 18:
-        print('')
-        print('================================================================')
-        print('!!  %s NICHT eingerichtet - Node.js >= 18 inkl. npm + git wird benoetigt.' % label)
-        if miss:
-            print('    Fehlende Programme: %s' % ' '.join(miss))
-        elif node_major < 18:
-            print('    Node.js v%s ist zu alt (mindestens v18 noetig).' % node_major)
-        if PLATFORM == 'macos':
-            print('    Installieren:  brew install node git')
-        elif PLATFORM == 'windows':
-            print('    Installieren:  winget install OpenJS.NodeJS.LTS Git.Git')
-        elif PLATFORM in ('wsl', 'linux'):
-            print('    Ubuntu/Debian-apt liefert oft ein zu altes Node - aktuelles Node via NodeSource:')
-            print('      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs git')
-            print('    Alternativ nvm:  https://github.com/nvm-sh/nvm  (nvm install --lts)')
-            if PLATFORM == 'wsl':
-                print('    Hinweis WSL: Node IN der WSL-Distribution installieren; nicht unter /mnt/c ablegen (langsam, exec-Probleme).')
-        else:
-            print('    Installieren:  Node.js >= 18 inkl. npm + git')
-        print('    Danach erneut ausfuehren:  %s' % rerun_hint())
-        print('================================================================')
+    # Fehlende Pakete installiert ensure_deps() vorab (einmal, mit Rueckfrage).
+    # Kommt der Build trotzdem hier ohne sie an, hat der User abgelehnt.
+    if missing_deps():
+        print('⚠ %s uebersprungen — es fehlen: %s' % (label, ', '.join(missing_deps())))
+        REPORT.append((label, False, 'ai-rem install --yes'))
         return ''
 
     tdir = os.path.expanduser(install_dir)
@@ -1008,7 +1194,9 @@ def detect_targets():
 
 
 def parse_args(argv):
-    args = {'update': '--update' in argv, 'uninstall': '--uninstall' in argv, 'targets': []}
+    args = {'update': '--update' in argv, 'uninstall': '--uninstall' in argv, 'targets': [],
+            'yes': '--yes' in argv or '-y' in argv, 'pair': '--pair' in argv,
+            'pair_only': '--pair-only' in argv}
     for i, a in enumerate(argv):
         val = ''
         if a == '--client' and i + 1 < len(argv):
@@ -1355,6 +1543,31 @@ def update_only(targets):
     print('Fertig. Clients neu starten - Hooks und Plugins werden nur beim Start geladen.')
 
 
+def pair_only():
+    """`ai-rem pair`: nur den Token neu holen (z.B. nach Rotation ohne Vault)."""
+    paired = pair_device() or {}
+    tok = paired.get('ai_rem_token') or ask_token()
+    if not tok:
+        sys.exit(1)
+    cfg = load_client_cfg()
+    record_client(cfg.get('endpoint', ''), [], {}, token=tok,
+                  vault_token=paired.get('vault_token', ''), vault_url=paired.get('vault_url', ''))
+    # Claude Code liest den Bearer aus ~/.claude.json — dort mitziehen, falls registriert.
+    try:
+        with open(CLAUDE_JSON, encoding='utf-8') as f:
+            cj = json.load(f)
+        srv = cj.get('mcpServers', {}).get('ai-rem')
+        if srv is not None:
+            srv.setdefault('headers', {})['Authorization'] = 'Bearer ' + tok
+            tmp = CLAUDE_JSON + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(cj, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, CLAUDE_JSON)
+    except (OSError, ValueError):
+        pass
+    print('✓ Token gespeichert (%s)' % TOKEN_FILE)
+
+
 def install_claude(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token, vault_token,
                    tools_entry, tools_reg_url, vault_entry):
     print('--- Claude Code ---')
@@ -1411,7 +1624,11 @@ def main():
             'ai-rem: KG_URL ist ein nicht ersetzter Platzhalter (%s).\n'
             'Setup ueber den Server starten: bash <(curl -s <kg-url>/setup)\n' % KG_URL)
         sys.exit(2)
+    global ASSUME_YES
     args = parse_args(sys.argv[1:])
+    ASSUME_YES = args['yes']
+    if args['pair_only']:
+        return pair_only()
     if args['uninstall']:
         return uninstall(args['targets'])
     if args['update']:
@@ -1424,10 +1641,19 @@ def main():
     ssh_host, ai_rem_token, vault_token = pull_secrets(setup_cfg)
     vault_url = (os.environ.get('VAULT_API_URL')
                  or setup_cfg.get('mcp_register', {}).get('mykeyvault', {}).get('vault_url', 'http://mystorage:8223'))
+    # Tokens VOR allem anderen: ohne SSH/Env laeuft hier die Kopplung im Browser.
+    ai_rem_token, vault_token, vault_url = obtain_tokens(ai_rem_token, vault_token, vault_url,
+                                                         force_pair=args['pair'])
     tools_entry, tools_reg_url, vault_entry = '', '', ''
-    if 'claude' in targets or 'opencode' in targets:
+    if ('claude' in targets or 'opencode' in targets) and setup_cfg.get('mcp_register'):
+        ensure_deps()
         tools_entry, tools_reg_url = build_tools_mcp(setup_cfg)
         vault_entry = build_mykeyvault_mcp(setup_cfg)
+        if tools_reg_url:
+            REPORT.append(('tools', bool(tools_entry), 'ai-rem install --yes'))
+        if setup_cfg['mcp_register'].get('mykeyvault'):
+            REPORT.append(('mykeyvault', bool(vault_entry and vault_token),
+                           'ai-rem pair' if vault_entry else 'ai-rem install --yes'))
 
     # CLI zuerst: die Hooks und das opencode-Plugin rufen sie auf.
     link_cli(install_cli())
@@ -1437,9 +1663,6 @@ def main():
         tok = install_claude(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token, vault_token,
                              tools_entry, tools_reg_url, vault_entry)
     tok = tok or resolve_token(ai_rem_token, vault_url, vault_token)
-    if not tok and 'claude' not in targets:  # Claude-Pfad meldet das selbst
-        print('✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:' % ssh_host)
-        print('  AI_REM_TOKEN=<token> %s' % rerun_hint())
     record_client(mcp_endpoint, targets, setup_cfg, token=tok,
                   vault_token=vault_token, vault_url=vault_url)
 
@@ -1447,8 +1670,17 @@ def main():
         install_opencode(mcp_endpoint, vault_url, vault_entry, tools_entry, tools_reg_url)
     if 'generic' in targets:
         install_generic(mcp_endpoint)
-    create_entities(setup_cfg, tok)
+    for t in targets:
+        REPORT.append(('Frontend ' + t, True, ''))
+    if tok:
+        create_entities(setup_cfg, tok)
 
+    print_report()
+    if tok and os.path.isfile(LOCAL_CLI):
+        print('')
+        sys.stdout.flush()
+        subprocess.call([sys.executable, LOCAL_CLI, 'doctor'], env=dict(os.environ, KG_URL=KG_URL),
+                        stdin=subprocess.DEVNULL)
     print('')
     print('Fertig. Clients neu starten - dann ist ai-rem aktiv.')
     print('Weiteres Frontend nachruesten:  ai-rem install --client <claude|opencode|generic>')

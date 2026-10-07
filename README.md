@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for AI coding agents
 
-> This documentation describes **[v1.5.0](https://github.com/markus7h/ai-rem/releases/tag/v1.5.0)**.
+> This documentation describes **[v1.6.0](https://github.com/markus7h/ai-rem/releases/tag/v1.6.0)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -308,13 +308,20 @@ bash <(curl -s http://<SERVER_IP>:3456/setup)
 
 On **native Windows** (PowerShell, no WSL needed): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
 
-The setup installs the `ai-rem` CLI and then sets up every frontend it finds (`claude`, `opencode`; neither → `generic` snippets). It is idempotent. To pick targets explicitly or add one later:
+The setup installs the `ai-rem` CLI and then sets up every frontend it finds (`claude`, `opencode`; neither → `generic` snippets). It is idempotent and needs no preparation on the machine:
+
+- **No SSH key needed.** Without one the setup shows a code and opens `/pair` in the browser; approve it there (logged into the web UI, works from your phone too) and the setup continues with the ai-rem token — and the mykeyvault token if `AI_REM_PAIR_VAULT_TOKEN` is set on the server. ([How pairing works](docs/authentication.md#pairing-a-new-machine-no-ssh-needed))
+- **Missing node/npm/git** (for mykeyvault and tools) are installed after one prompt via brew, apt (NodeSource) or winget; `--yes` skips the prompt.
+- It ends with a ✓/✗ summary, one fix command per ✗, and runs `ai-rem doctor`.
+
+To pick targets explicitly or add one later:
 
 ```bash
 ai-rem install --client opencode     # add opencode to an existing setup
 ai-rem install --client generic      # snippets for Codex, Gemini CLI, Cursor in ~/.config/ai-rem/snippets
 ai-rem uninstall --client opencode   # remove one frontend again
-ai-rem doctor                        # server version, installed targets, drift, token source
+ai-rem doctor [--fix]                # server version, installed targets, drift, token source
+ai-rem pair                          # renew just the token (browser approval)
 ```
 
 - **Claude Code:** registers the MCP server, deploys the hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.

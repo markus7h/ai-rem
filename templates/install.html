@@ -70,8 +70,8 @@ li{margin-bottom:4px}
   </div>
 
   <div class="card">
-    <h2>SSH-Zugang einrichten (Secret-Pull)</h2>
-    <p class="hint" style="margin:0 0 12px">Das Setup zieht die Tokens per <code>ssh __SSH_HOST__</code> vom Server — einmal pro Maschine einrichten:</p>
+    <h2>Optional: SSH-Zugang (Secret-Pull ohne Kopplung)</h2>
+    <p class="hint" style="margin:0 0 12px">Nicht nötig: Ohne SSH zeigt das Setup einen Code und öffnet die Freigabe-Seite im Browser (Geräte-Kopplung). Wer die Tokens lieber per <code>ssh __SSH_HOST__</code> ziehen lässt, richtet es einmal pro Maschine ein:</p>
     <div class="step">1 · Key erzeugen (alle Plattformen, Enter-Defaults sind ok)</div>
     <div class="cmd"><code id="s1">ssh-keygen -t ed25519</code><button onclick="copyCmd('s1')">Kopieren</button></div>
     <div class="step">2 · Host-Eintrag in <code>~/.ssh/config</code> (Windows: <code>C:\Users\&lt;name&gt;\.ssh\config</code>)</div>
@@ -85,7 +85,7 @@ li{margin-bottom:4px}
     <div class="cmd"><code id="s4">type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh __SSH_HOST__ "cat >> ~/.ssh/authorized_keys"</code><button onclick="copyCmd('s4')">Kopieren</button></div>
     <div class="step">4 · Testen (muss ohne Passwort-Abfrage durchlaufen)</div>
     <div class="cmd"><code id="s5">ssh __SSH_HOST__ true && echo OK</code><button onclick="copyCmd('s5')">Kopieren</button></div>
-    <p class="hint">Ohne SSH-Zugang läuft das Setup trotzdem — dann Token manuell mitgeben: <code>AI_REM_TOKEN=&lt;token&gt;</code> bzw. <code>$env:AI_REM_TOKEN</code>.</p>
+    <p class="hint">Ohne SSH-Zugang koppelt das Setup das Gerät über den Browser; ohne Browser kann der Token auch eingefügt werden.</p>
   </div>
 
   <div class="card">
@@ -93,7 +93,7 @@ li{margin-bottom:4px}
     <ul>
       <li><b>Pflicht:</b> <code>python3</code> + mindestens ein Frontend: <code>claude</code> oder <code>opencode</code> (alle anderen: Snippets unter <code>~/.config/ai-rem/snippets</code>). Ziel wählen: Setup-Befehl mit <code>--client claude|opencode|generic</code> ergänzen, später <code>ai-rem install --client …</code></li>
       <li><b>Optional (nur tools-registry):</b> <code>git</code>, Node.js &ge; 18 inkl. <code>npm</code></li>
-      <li><b>Secrets:</b> per SSH vom Server gezogen (SSH-Key vorausgesetzt) — alternativ Token im Env: <code>AI_REM_TOKEN=&lt;token&gt;</code> bzw. <code>$env:AI_REM_TOKEN</code></li>
+      <li><b>Secrets:</b> Geräte-Kopplung — Code im Terminal, Freigabe im Browser (eingeloggt, geht auch am Handy). Alternativ SSH-Pull oder <code>AI_REM_TOKEN=&lt;token&gt;</code>.</li><li><b>Pakete:</b> fehlen node/npm/git, installiert das Setup sie nach einer Rückfrage selbst (brew / apt / winget; <code>--yes</code> ohne Rückfrage).</li>
     </ul>
     <p class="hint">Beide Wrapper laden dieselbe plattformneutrale Logik (<a href="/setup.py">setup.py</a>) — Verhalten auf allen Plattformen identisch. Details: <a href="/cmd">/setup-ai-rem Anleitung</a></p>
   </div>

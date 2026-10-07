@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für KI-Coding-Agenten
 
-> Diese Dokumentation bezieht sich auf **[v1.5.0](https://github.com/markus7h/ai-rem/releases/tag/v1.5.0)**.
+> Diese Dokumentation bezieht sich auf **[v1.6.0](https://github.com/markus7h/ai-rem/releases/tag/v1.6.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -313,13 +313,20 @@ bash <(curl -s http://<SERVER_IP>:3456/setup)
 
 Auf **nativem Windows** (PowerShell, kein WSL nötig): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
 
-Das Setup installiert die `ai-rem`-CLI und richtet danach jedes gefundene Frontend ein (`claude`, `opencode`; keins von beiden → `generic`-Snippets). Es ist idempotent. Ziele explizit wählen oder später nachrüsten:
+Das Setup installiert die `ai-rem`-CLI und richtet danach jedes gefundene Frontend ein (`claude`, `opencode`; keins von beiden → `generic`-Snippets). Es ist idempotent und braucht auf dem Rechner keine Vorbereitung:
+
+- **Kein SSH-Key nötig.** Ohne ihn zeigt das Setup einen Code und öffnet `/pair` im Browser; dort freigeben (eingeloggt in der Web-UI, geht auch am Handy), und das Setup läuft mit dem ai-rem-Token weiter — und dem mykeyvault-Token, falls auf dem Server `AI_REM_PAIR_VAULT_TOKEN` gesetzt ist. ([So funktioniert die Kopplung](docs/authentication.de.md#neuen-rechner-koppeln-ohne-ssh))
+- **Fehlende node/npm/git** (für mykeyvault und tools) installiert es nach einer Rückfrage per brew, apt (NodeSource) oder winget; `--yes` überspringt die Rückfrage.
+- Am Ende steht eine ✓/✗-Übersicht mit genau einem Befehl je ✗, danach läuft `ai-rem doctor`.
+
+Ziele explizit wählen oder später nachrüsten:
 
 ```bash
 ai-rem install --client opencode     # opencode zu einem bestehenden Setup hinzufügen
 ai-rem install --client generic      # Snippets für Codex, Gemini CLI, Cursor in ~/.config/ai-rem/snippets
 ai-rem uninstall --client opencode   # ein Frontend wieder entfernen
-ai-rem doctor                        # Server-Version, installierte Ziele, Drift, Token-Quelle
+ai-rem doctor [--fix]                # Server-Version, installierte Ziele, Drift, Token-Quelle
+ai-rem pair                          # nur den Token erneuern (Freigabe im Browser)
 ```
 
 - **Claude Code:** registriert den MCP-Server, deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.

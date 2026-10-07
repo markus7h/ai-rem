@@ -13,6 +13,27 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.6.0] – 2026-10-07
+
+### Added
+- **Device pairing — set up a machine without SSH.** The installer starts a pairing,
+  shows a code and opens `/pair` in the browser; approving it in the logged-in web UI
+  (phone works too) hands the ai-rem token — and `AI_REM_PAIR_VAULT_TOKEN` plus the
+  vault URL, if set — to the installer exactly once. Pairings expire after 10 minutes,
+  starts are rate-limited per IP, approval needs the UI login, every decision is logged
+  (`/pair`, `backups/paired-devices.json`). `/login` now returns to `?next=`.
+- **The installer installs missing packages itself.** node ≥ 18, npm and git (for
+  mykeyvault and tools) come via brew, apt/NodeSource or winget after one prompt
+  (`--yes` skips it); the build continues in the same run instead of "install X, then
+  run again".
+- `ai-rem pair` (renew just the token), `ai-rem doctor --fix` (re-runs install),
+  `ai-rem install --yes/--pair`. The setup ends with a ✓/✗ summary and `ai-rem doctor`.
+
+### Fixed
+- Commands pasted after the setup line were swallowed: `ssh` inherited the terminal's
+  stdin. Subprocesses now get `stdin=DEVNULL`.
+- No more SSH warning when SSH is simply not set up — pairing takes over.
+
 ## [1.5.0] – 2026-10-07
 
 ### Added
@@ -836,7 +857,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/markus7h/ai-rem/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/markus7h/ai-rem/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/markus7h/ai-rem/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/markus7h/ai-rem/compare/v1.3.1...v1.3.2

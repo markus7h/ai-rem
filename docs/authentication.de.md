@@ -24,6 +24,25 @@ Cookie `Secure` ist, muss die UI über HTTPS erreicht werden (z. B. ein Caddy-`t
 internal`-vHost). Lebensdauer standardmäßig 30 Tage (`AI_REM_UI_SESSION_TTL`, in
 Sekunden).
 
+## Neuen Rechner koppeln (ohne SSH)
+
+Der Installer holt seine Tokens wie `gh auth login`: Er startet eine Kopplung
+(`POST /api/pair/start`), zeigt einen Code wie `K7QF-2M9X` und öffnet
+`https://<server>/pair?code=…`. Du gibst sie in der Web-UI frei — eingeloggt, von jedem
+Gerät, auch vom Handy — und der Installer holt die Tokens genau einmal ab
+(`POST /api/pair/poll`). Eine Kopplung läuft nach 10 Minuten ab, Starts sind je IP
+begrenzt, die Freigabe verlangt den UI-Login, und jede Entscheidung wird protokolliert
+(`/pair` „Zuletzt gekoppelte Geräte“, `backups/paired-devices.json`).
+
+Was übergeben wird: der ai-rem-Token, dazu `AI_REM_PAIR_VAULT_TOKEN` und die Vault-URL,
+falls die Variable gesetzt ist — dann richtet der Installer auch mykeyvault ein. Damit
+verteilt ai-rem Secrets, bewusst abgesichert durch die explizite Freigabe. Variable leer
+lassen, um nur den ai-rem-Token herauszugeben.
+
+Reihenfolge im Installer: Env `AI_REM_TOKEN`/`VAULT_API_TOKEN` → gespeichertes
+`~/.config/ai-rem/token` → SSH-Pull von `ssh_host` (still) → Kopplung → Eingabe.
+`ai-rem pair` erneuert auf einem eingerichteten Rechner nur den Token.
+
 ## Token-Quelle — [mykeyvault](https://github.com/markus7h/mykeyvault)
 
 Der Token liegt einmalig im Vault als Item `ai-rem-api-token` (Single Source of Truth).
