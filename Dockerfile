@@ -46,6 +46,7 @@ COPY assets/favicon.png assets/favicon-dark.png assets/logo.png ./assets/
 # gar nicht erst (statt spaeter einzelne Routen zu verlieren).
 COPY bin/ ./bin/
 COPY hooks/ ./hooks/
+COPY clients/ ./clients/
 COPY scripts/ ./scripts/
 COPY templates/ ./templates/
 

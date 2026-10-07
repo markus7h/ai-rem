@@ -1,6 +1,6 @@
-# ai-rem — Knowledge Graph Memory for Claude
+# ai-rem — Knowledge Graph Memory for AI coding agents
 
-> This documentation describes **[v1.4.0](https://github.com/markus7h/ai-rem/releases/tag/v1.4.0)**.
+> This documentation describes **[v1.5.0](https://github.com/markus7h/ai-rem/releases/tag/v1.5.0)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -8,7 +8,7 @@
 
 > Release notes are kept in [CHANGELOG.md](CHANGELOG.md) and published to the [GitHub Releases](https://github.com/markus7h/ai-rem/releases) and the Docker Hub description on every tag; notes for early versions (≤ v0.1.5) are archived in [docs/release-history.md](docs/release-history.md).
 
-**ai-rem** is a persistent long-term memory for Claude Code, running as an MCP server on your home server.
+**ai-rem** is a persistent long-term memory for AI coding agents — **Claude Code**, **opencode** and any other MCP-capable frontend (Codex, Gemini CLI, Cursor …) — running as an MCP server on your home server. All frontends share the same graph, so what one agent learns the next one knows.
 Static memory files like `CLAUDE.md` sit in context in full and are tied to individual projects and machines. ai-rem takes a more efficient approach: relevant information — open tasks, decisions made, solved problems, projects, tools used — lives in a knowledge graph on your home server, is loaded selectively instead of wholesale, and is available from any machine, independent of where you work.
 
 Docker Hub: `docker pull magic3arkus/ai-rem`
@@ -29,7 +29,7 @@ Technically:
 
 ## How it works
 
-At the start of each session, Claude loads the relevant context from the graph via `memory_get_context()` and saves new insights proactively with `memory_add` / `memory_relate`. The graph holds typed **entities** — `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic` — and **relations** between them. Each entity can carry a `context` tag (`work` / `private` / global) so work and private knowledge stay separated per repo.
+At the start of each session, the agent loads the relevant context from the graph via `memory_get_context()` and saves new insights proactively with `memory_add` / `memory_relate`. The graph holds typed **entities** — `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic` — and **relations** between them. Each entity can carry a `context` tag (`work` / `private` / global) so work and private knowledge stay separated per repo.
 
 **Project context.** A project's working context — local dev dir, deployment dir/host, relevant skills and project-specific rules — lives in a `Project` entity's `extra`. Write it with `memory_set_project_context(...)` (field-wise merge, so you can add `skills` later without wiping `dev_dir`/`rules`) and load it whole in one call with `memory_project_context(name)` — the untruncated record plus every related entity. Use it to start a session "in the context of project X".
 
@@ -73,9 +73,21 @@ Every page shows the running server version at the right end of the navigation.
 
 ---
 
+## Supported frontends
+
+| | Claude Code | opencode | Other MCP frontends (Codex, Gemini CLI, Cursor …) |
+|---|---|---|---|
+| MCP tools + server instructions | ✓ | ✓ | ✓ |
+| Context at session start | SessionStart hook | `AGENTS.md` pointer | `AGENTS.md`/`GEMINI.md` pointer (snippet) |
+| Auto-memory from transcripts | `PreCompact`/`SessionEnd` hook | plugin (`session.idle`/`session.compacted`) | — |
+| Slash commands | ✓ | ✓ (without `/migrate-claude-md`) | — |
+| Set up by | `ai-rem install --client claude` | `ai-rem install --client opencode` | `ai-rem install --client generic` (writes snippets only) |
+
+Every new entry records which frontend created it in `extra.client` (`claude-code`, `opencode`, `ai-rem-cli`, …).
+
 ## Automation (hooks)
 
-Four Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy:
+Four Claude Code hooks — all deployed by the client setup — keep the graph fed and tidy (opencode gets the auto-memory part as a plugin):
 
 - **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via an OpenAI-compatible LLM endpoint (`AI_REM_LLAMA_URL`, by default a LiteLLM router rather than a single GPU host), with an md-fallback + catch-up when it is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. The setup installs the CLI to `~/.local/share/ai-rem/bin/ai-rem` and points `AI_REM_CLI` at it, so the hook does not depend on where the repo was cloned; `~/.local/bin/ai-rem` links to the same copy, which is what makes `ai-rem` a plain shell command.
 - **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue. Finished tasks are archived 14 days after `extra.status` reached `erledigt` (the status is normalised against the enum `offen | laufend | blockiert | erledigt`, common synonyms mapped, free text kept in `extra.status_note`). A completion marker that only shows up in the description text ("ERLEDIGT: …") never archives on its own - it lands in the review queue. Plus a **staleness check** that flags entries with perishable infrastructure facts (IPs, ports, services, devices) for a reality check — never automatically.
@@ -89,7 +101,7 @@ Four Claude Code hooks — all deployed by the client setup — keep the graph f
 ## Requirements
 
 - Docker on the target server
-- Claude Code CLI and **Python 3** on the client machine (the setup and the hooks run on Python)
+- **Python 3** on the client machine (the setup, the CLI and the hooks run on Python), plus at least one frontend: Claude Code, opencode or another MCP client
 - Network access to `<SERVER_IP>:<PORT>`
 - Optional (only for the `tools` companion MCP): git, Node.js ≥ 18 incl. npm
 
@@ -288,15 +300,25 @@ docker compose pull && docker compose up -d
 
 ### Client — setting up a new machine
 
-**On every new machine** — say this to Claude:
+**On every new machine**, in your own shell:
 
 ```
-Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
+bash <(curl -s http://<SERVER_IP>:3456/setup)
 ```
 
 On **native Windows** (PowerShell, no WSL needed): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
 
-The script is idempotent and registers the MCP server, deploys the three hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.
+The setup installs the `ai-rem` CLI and then sets up every frontend it finds (`claude`, `opencode`; neither → `generic` snippets). It is idempotent. To pick targets explicitly or add one later:
+
+```bash
+ai-rem install --client opencode     # add opencode to an existing setup
+ai-rem install --client generic      # snippets for Codex, Gemini CLI, Cursor in ~/.config/ai-rem/snippets
+ai-rem uninstall --client opencode   # remove one frontend again
+ai-rem doctor                        # server version, installed targets, drift, token source
+```
+
+- **Claude Code:** registers the MCP server, deploys the hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.
+- **opencode:** merges `ai-rem` (plus `mykeyvault`/`tools` if configured) into the `mcp` block of `~/.config/opencode/opencode.json` — providers and other servers stay untouched, a JSONC file with comments is left alone and a snippet is written instead — adds an `AGENTS.md` pointer, the plugin and the commands. Tokens are referenced as `{file:~/.config/ai-rem/token}`, never written into the config.
 
 → **[What the setup does, repo layout & CLAUDE.md strategy](docs/installation.md)**
 
@@ -313,11 +335,12 @@ with every release that touches one of them:
 
 ```bash
 ai-rem update --check   # report only, exit 1 if anything is behind
-ai-rem update           # pull the new files, then restart Claude Code
+ai-rem update           # pull the new files for every installed frontend, then restart them
 ```
 
-The session-start hook compares the local copies against `/manifest` and says so on
-its own, so you normally learn about it before you have to ask. `settings.json` is
+The Claude session-start hook and the opencode plugin compare the local copies
+against `/manifest` and say so on their own, so you normally learn about it before
+you have to ask. `settings.json` is
 only ever added to, never trimmed; the template it merges from belongs to the server
 and is rewritten wholesale.
 

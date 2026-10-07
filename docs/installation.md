@@ -29,6 +29,51 @@ The script automatically handles:
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`. The script is idempotent — running it multiple times on the same machine is safe.
 
+## Frontends (targets)
+
+The steps above are the **`claude`** target. The setup picks targets with `--client`
+(`bash <(curl -s …/setup) --client opencode`, or later `ai-rem install --client …`); the
+default `auto` takes every frontend whose binary is on `PATH` and falls back to `generic`.
+Installed targets are recorded in `~/.config/ai-rem/client.json`, together with the endpoint
+and the token file `~/.config/ai-rem/token` (mode 0600) that the CLI and opencode read.
+
+**`opencode`** — the differences to Claude Code:
+
+| | Claude Code | opencode |
+|---|---|---|
+| Config | `~/.claude.json` → `mcpServers` | `~/.config/opencode/opencode.json` → `mcp` |
+| stdio server | `"type": "stdio"`, `command` + `args` | `"type": "local"`, `command` as **one array** |
+| http server | `"type": "http"`, `url` + `headers` | `"type": "remote"`, `url` + `headers` |
+| Env per server | `env` | `environment` |
+| Instructions | `~/.claude/CLAUDE.md` | `~/.config/opencode/AGENTS.md` + `instructions[]` |
+| Secrets | plain text in the 0600 config | `{file:~/.config/ai-rem/token}` |
+| Session hooks | SessionStart / PreCompact / SessionEnd | plugin events `session.created` / `session.idle` / `session.compacted` |
+
+What the target writes:
+1. `opencode.json`: merges `mcp.ai-rem` (remote, bearer from the token file) and — if
+   node and the builds are available — `mykeyvault` and `tools` as `local` servers, with
+   `node` resolved from `PATH` (Homebrew: `/opt/homebrew/bin/node`). Providers, models and
+   other servers stay untouched; a one-time `opencode.json.pre-airem.bak` is kept. A JSONC
+   file with comments is **not** rewritten — the block lands in
+   `~/.config/ai-rem/snippets/opencode-mcp.json` instead. The auto-memory `fallback.md`
+   goes into `instructions[]` (opencode has no `@` import).
+2. `AGENTS.md`: a marked `<!-- ai-rem:begin/end -->` block telling the agent to call
+   `memory_get_context()` at the start of every session — opencode has no session-start hook.
+3. `plugin/ai-rem.ts`: exports the session via the SDK and runs `ai-rem ingest` detached,
+   10 minutes after the last `session.idle` (only if new messages arrived) and immediately
+   on `session.compacted`; on `session.created` it runs `ai-rem catchup` and, once per
+   process, `ai-rem update --check` (toast on drift).
+4. `command/*.md`: `/setup-ai-rem`, `/memory-cleanup`, `/ai-rem-update`.
+
+**`generic`** — writes nothing outside `~/.config/ai-rem/snippets/`: ready-to-paste blocks
+for Codex (`config.toml`, token via `AI_REM_TOKEN`), Gemini CLI (`settings.json`), Cursor
+(`mcp.json`) and an `AGENTS.md` pointer. These frontends get the tools and the server
+instructions, but no auto-memory.
+
+`ai-rem uninstall --client <target>` removes what the target added (for opencode the
+`ai-rem` server, the `instructions` entry, the `AGENTS.md` block, plugin and commands;
+`mykeyvault`/`tools` stay).
+
 ## Keeping an existing installation current
 
 Steps 3–9 above ship files that change with almost every other release. Re-running the
@@ -37,7 +82,7 @@ and the `npm` builds — so an installed client uses the CLI instead:
 
 ```bash
 ai-rem update --check   # report only, exit 1 if anything is behind
-ai-rem update           # pull the new files, then restart Claude Code
+ai-rem update           # pull the new files for every installed target, then restart the frontends
 ```
 
 `GET /manifest` lists a SHA-256 for every file the server ships; the CLI hashes the local

@@ -108,9 +108,21 @@ def _sync_ai_rem_header(token):
     """Bearer-Header in ~/.claude.json mcpServers."ai-rem".headers schreiben —
     die einzige Mechanik, über die Claudes primärer /mcp-Tool-Kanal den Token
     erhält (Header werden aus der Config gelesen). Atomar via temp + os.replace.
-    No-op, wenn kein Token oder ai-rem nicht registriert ist."""
+    No-op, wenn kein Token oder ai-rem nicht registriert ist.
+
+    Liegt daneben die client-neutrale Token-Datei (opencode liest sie per {file:…}),
+    wird sie mitgezogen — sonst bliebe opencode nach einer Rotation auf dem alten."""
     if not token:
         return
+    tf = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"),
+                      "ai-rem", "token")
+    try:
+        with open(tf) as f:
+            if f.read().strip() != token:
+                with open(tf, "w") as w:
+                    w.write(token + "\n")
+    except OSError:
+        pass
     try:
         with open(CLAUDE_JSON) as f:
             cfg = json.load(f)
@@ -621,9 +633,21 @@ def check_client_artifacts():
     if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict):
         return ""
     share = os.path.join(os.path.expanduser("~"), ".local", "share", "ai-rem")
+    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    # opencode-Artefakte nur pruefen, wenn das Ziel eingerichtet ist (client.json).
+    try:
+        with open(os.path.join(config_home, "ai-rem", "client.json"), encoding="utf-8") as f:
+            opencode = "opencode" in (json.load(f).get("targets") or [])
+    except (OSError, ValueError, AttributeError):
+        opencode = False
     stale = []
     for rel, want in sorted(manifest["files"].items()):
-        root = share if rel.startswith(("bin/", "lib/")) else CLAUDE_DIR
+        if rel.startswith("opencode/"):
+            if not opencode:
+                continue
+            root = config_home
+        else:
+            root = share if rel.startswith(("bin/", "lib/")) else CLAUDE_DIR
         try:
             with open(os.path.join(root, *rel.split("/")), "rb") as f:
                 have = hashlib.sha256(f.read()).hexdigest()

@@ -3,7 +3,15 @@
 # Wird von den Wrappern geholt+gestartet:
 #   bash <(curl -s __KG_URL__/setup)          (macOS/Linux/WSL)
 #   irm __KG_URL__/setup.ps1 | iex            (Windows PowerShell)
-# Harte Abhaengigkeiten: python3, claude CLI. Optional (nur tools-registry): git, node >= 18, npm.
+# Harte Abhaengigkeit: python3. Ziele (--client, Default auto = was installiert ist):
+#   claude    Claude Code (claude CLI): MCP, Hooks, CLAUDE.md-Pointer, Slash-Commands
+#   opencode  opencode: opencode.json-mcp, AGENTS.md-Pointer, Plugin, Commands
+#   generic   andere Frontends (Codex, Gemini CLI, Cursor …): nur Snippets zum Einfuegen
+# Optional (mykeyvault/tools-registry als stdio-MCP): git, node >= 18, npm.
+#
+#   setup.py [--client claude,opencode]   einrichten (idempotent, auch zum Nachruesten)
+#   setup.py --update [--client …]        nur ausgelieferte Dateien auffrischen
+#   setup.py --uninstall --client X       ein Ziel wieder entfernen
 import glob
 import json
 import os
@@ -25,6 +33,17 @@ if _CC:
 CLAUDE_HOME = _CC or os.path.join(HOME, '.claude')
 CLAUDE_JSON = os.path.join(_CC, '.claude.json') if _CC else os.path.join(HOME, '.claude.json')
 IS_WIN = sys.platform == 'win32'
+
+# Client-neutrale Ablage (XDG): client.json + Token-Dateien. opencode liest die
+# Tokens per {file:…} von hier; lib/mcp_client.py ebenso.
+CONFIG_HOME = os.environ.get('XDG_CONFIG_HOME') or os.path.join(HOME, '.config')
+AIREM_CFG_DIR = os.path.join(CONFIG_HOME, 'ai-rem')
+CLIENT_JSON = os.path.join(AIREM_CFG_DIR, 'client.json')
+TOKEN_FILE = os.path.join(AIREM_CFG_DIR, 'token')
+VAULT_TOKEN_FILE = os.path.join(AIREM_CFG_DIR, 'vault.token')
+SNIPPET_DIR = os.path.join(AIREM_CFG_DIR, 'snippets')
+OPENCODE_DIR = os.path.join(CONFIG_HOME, 'opencode')
+TARGETS = ('claude', 'opencode', 'generic')
 
 # Windows-Konsole (cp850/cp1252) wuerde sonst an ✓/✗ scheitern.
 for _stream in (sys.stdout, sys.stderr):
@@ -923,9 +942,394 @@ def create_entities(setup_cfg, ai_rem_token):
         print('⚠ Entities: %s' % ex)
 
 
+
+# ── Ziele (claude / opencode / generic) + client.json ────────────────────────
+
+def state_dir():
+    # Muss lib/extractor.py LOG_DIR entsprechen: dort liegen fallback.md & Co.
+    if os.environ.get('AI_REM_STATE_DIR'):
+        return os.environ['AI_REM_STATE_DIR']
+    if os.path.isdir(CLAUDE_HOME):
+        return os.path.join(CLAUDE_HOME, 'auto-memory')
+    return os.path.join(HOME, '.local', 'share', 'ai-rem', 'state')
+
+
+def load_client_cfg():
+    try:
+        with open(CLIENT_JSON, encoding='utf-8') as f:
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_client_cfg(cfg):
+    os.makedirs(AIREM_CFG_DIR, exist_ok=True)
+    tmp = CLIENT_JSON + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, CLIENT_JSON)
+
+
+def write_secret(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(value.strip() + '\n')
+    if not IS_WIN:
+        os.chmod(path, 0o600)  # bestehende Datei mit lockereren Rechten nachziehen
+
+
+def read_secret(path):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def installed_targets():
+    """Eingerichtete Ziele: client.json, sonst an den installierten Dateien erkannt
+    (Installationen von vor client.json kennen nur Claude Code)."""
+    targets = [t for t in load_client_cfg().get('targets', []) if t in TARGETS]
+    if targets:
+        return targets
+    found = []
+    if os.path.isfile(os.path.join(CLAUDE_HOME, 'hooks', 'system-check.py')):
+        found.append('claude')
+    if os.path.isfile(os.path.join(OPENCODE_DIR, 'plugin', 'ai-rem.ts')):
+        found.append('opencode')
+    return found
+
+
+def detect_targets():
+    found = [t for t in ('claude', 'opencode') if shutil.which(t)]
+    return found or ['generic']
+
+
+def parse_args(argv):
+    args = {'update': '--update' in argv, 'uninstall': '--uninstall' in argv, 'targets': []}
+    for i, a in enumerate(argv):
+        val = ''
+        if a == '--client' and i + 1 < len(argv):
+            val = argv[i + 1]
+        elif a.startswith('--client='):
+            val = a.split('=', 1)[1]
+        for t in (x.strip() for x in val.split(',') if x.strip()):
+            if t == 'auto':
+                args['targets'] += detect_targets()
+            elif t in TARGETS:
+                args['targets'].append(t)
+            else:
+                print('✗ Unbekanntes Ziel: %s (erlaubt: %s, auto)' % (t, ', '.join(TARGETS)))
+                sys.exit(2)
+    args['targets'] = list(dict.fromkeys(args['targets']))
+    return args
+
+
+def record_client(mcp_endpoint, targets, setup_cfg, token='', vault_token='', vault_url=''):
+    """client.json + Token-Dateien schreiben. Ziele werden ergaenzt, nie verdraengt."""
+    cfg = load_client_cfg()
+    cfg['endpoint'] = mcp_endpoint or cfg.get('endpoint') or KG_URL + '/mcp'
+    cfg['targets'] = list(dict.fromkeys(cfg.get('targets', []) + list(targets)))
+    if setup_cfg.get('ollama_url'):
+        cfg['llm_url'] = setup_cfg['ollama_url']
+    if setup_cfg.get('llm_api_key'):
+        cfg['llm_api_key'] = setup_cfg['llm_api_key']
+    if token:
+        write_secret(TOKEN_FILE, token)
+    if os.path.isfile(TOKEN_FILE):
+        cfg['token_file'] = TOKEN_FILE
+    if vault_token:
+        write_secret(VAULT_TOKEN_FILE, vault_token)
+        cfg['vault_url'] = vault_url
+    save_client_cfg(cfg)
+    return cfg
+
+
+def resolve_token(ai_rem_token, vault_url, vault_token):
+    """Fuer Ziele ohne ~/.claude.json: SSH/Env > Vault > bereits gespeicherte Datei."""
+    if ai_rem_token:
+        return ai_rem_token
+    if vault_token:
+        try:
+            req = urllib.request.Request(vault_url.rstrip('/') + '/secret/ai-rem-api-token',
+                                         headers={'Authorization': 'Bearer ' + vault_token})
+            tok = json.loads(urllib.request.urlopen(req, timeout=10).read().decode('utf-8')).get('password', '')
+            if tok:
+                return tok
+        except Exception:
+            pass
+    return read_secret(TOKEN_FILE)
+
+
+# ── opencode ─────────────────────────────────────────────────────────────────
+
+AGENTS_BEGIN = '<!-- ai-rem:begin -->'
+AGENTS_END = '<!-- ai-rem:end -->'
+AGENTS_BLOCK = AGENTS_BEGIN + """
+## ai-rem
+ai-rem ist die einzige Wissensquelle für persistenten Kontext (MCP-Server `ai-rem`).
+Zu Beginn jeder Session einmal `memory_get_context()` aufrufen — opencode hat keinen
+Session-Start-Hook. Nutzungsregeln kommen über die MCP Server Instructions,
+Verhaltensregeln aus den ai-rem Preferences („Routinen & Anweisungen“).
+""" + AGENTS_END
+
+
+def opencode_config_path():
+    for name in ('opencode.json', 'opencode.jsonc'):
+        p = os.path.join(OPENCODE_DIR, name)
+        if os.path.isfile(p):
+            return p
+    return os.path.join(OPENCODE_DIR, 'opencode.json')
+
+
+def opencode_mcp_entries(mcp_endpoint, vault_url, vault_entry, tools_entry, tools_reg_url):
+    """mcp-Block fuer opencode. stdio heisst dort "local" (command als EIN Array),
+    http "remote", env "environment"; Secrets per {file:…} statt Klartext."""
+    entries = {'ai-rem': {'type': 'remote', 'url': mcp_endpoint, 'enabled': True,
+                          'headers': {'Authorization': 'Bearer {file:%s}' % TOKEN_FILE}}}
+    node = shutil.which('node')  # Homebrew: /opt/homebrew/bin/node, nicht /usr/bin/node
+    if vault_entry and node and os.path.isfile(VAULT_TOKEN_FILE):
+        env = {'VAULT_API_URL': vault_url, 'VAULT_API_TOKEN': '{file:%s}' % VAULT_TOKEN_FILE}
+        if os.environ.get('NODE_EXTRA_CA_CERTS'):
+            env['NODE_EXTRA_CA_CERTS'] = os.environ['NODE_EXTRA_CA_CERTS']
+        entries['mykeyvault'] = {'type': 'local', 'command': [node, vault_entry],
+                                 'enabled': True, 'environment': env}
+    elif vault_entry:
+        print('⚠ opencode: mykeyvault uebersprungen (node oder Vault-Token fehlt)')
+    if tools_entry and node:
+        entries['tools'] = {'type': 'local', 'command': [node, tools_entry], 'enabled': True,
+                            'environment': {'TOOLS_REGISTRY_URL': tools_reg_url}}
+    return entries
+
+
+def merge_opencode_json(entries, only_ai_rem=False):
+    """mcp-Eintraege und den Fallback-Pfad in opencode.json mergen. Provider, Modelle
+    und fremde MCP-Server bleiben unberuehrt. JSONC mit Kommentaren wird nicht
+    umgeschrieben (Kommentare gingen verloren) — dann liegt ein Snippet bereit."""
+    path = opencode_config_path()
+    fallback = os.path.join(state_dir(), 'fallback.md')
+    data = {}
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8') as f:
+            raw = f.read()
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            os.makedirs(SNIPPET_DIR, exist_ok=True)
+            snip = os.path.join(SNIPPET_DIR, 'opencode-mcp.json')
+            with open(snip, 'w', encoding='utf-8') as f:
+                json.dump({'mcp': entries, 'instructions': [fallback]}, f, indent=2, ensure_ascii=False)
+            print('⚠ %s ist kein reines JSON (Kommentare?) — nicht angefasst.' % path)
+            print('  Den Block aus %s von Hand einfuegen.' % snip)
+            return False
+        bak = path + '.pre-airem.bak'
+        if not os.path.exists(bak):
+            shutil.copy2(path, bak)
+    data.setdefault('$schema', 'https://opencode.ai/config.json')
+    mcp = data.setdefault('mcp', {})
+    for name, entry in entries.items():
+        if only_ai_rem and name != 'ai-rem':
+            continue
+        mcp[name] = entry
+    instr = [i for i in data.get('instructions', [])
+             if not (isinstance(i, str) and i.endswith('fallback.md')
+                     and ('ai-rem' in i or 'auto-memory' in i))]
+    data['instructions'] = instr + [fallback]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+    print('✓ %s: mcp %s' % (path, ', '.join(sorted(n for n in entries if n in mcp))))
+    return True
+
+
+def replace_marked_block(path, block):
+    """Markierten ai-rem-Block ersetzen/anhaengen (block='' entfernt ihn)."""
+    text = ''
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+    text = re.sub(re.escape(AGENTS_BEGIN) + r'[\s\S]*?' + re.escape(AGENTS_END), '', text).strip()
+    if block:
+        text = (text + '\n\n' if text else '') + block
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text + '\n' if text else '')
+
+
+OPENCODE_COMMANDS = ('setup-ai-rem', 'memory-cleanup', 'ai-rem-update')
+
+
+def install_opencode_files():
+    ok = fetch_to(KG_URL + '/clients/opencode/ai-rem.ts', os.path.join(OPENCODE_DIR, 'plugin', 'ai-rem.ts'))
+    for name in OPENCODE_COMMANDS:
+        ok = fetch_to(KG_URL + '/cmd/opencode/' + name,
+                      os.path.join(OPENCODE_DIR, 'command', name + '.md')) and ok
+    replace_marked_block(os.path.join(OPENCODE_DIR, 'AGENTS.md'), AGENTS_BLOCK)
+    fb = os.path.join(state_dir(), 'fallback.md')
+    os.makedirs(os.path.dirname(fb), exist_ok=True)
+    if not os.path.exists(fb):
+        open(fb, 'w', encoding='utf-8').close()
+    if ok:
+        print('✓ opencode: Plugin, Commands (%s), AGENTS.md-Pointer'
+              % ', '.join('/' + c for c in OPENCODE_COMMANDS))
+
+
+def install_opencode(mcp_endpoint, vault_url, vault_entry, tools_entry, tools_reg_url):
+    print('--- opencode ---')
+    if not shutil.which('opencode'):
+        print('ℹ opencode nicht im PATH — Konfiguration wird trotzdem geschrieben.')
+    merge_opencode_json(opencode_mcp_entries(mcp_endpoint, vault_url, vault_entry,
+                                             tools_entry, tools_reg_url))
+    install_opencode_files()
+
+
+def update_opencode(mcp_endpoint):
+    # Nur ai-rem selbst nachziehen; mykeyvault/tools brauchen git+npm und bleiben
+    # beim Update wie sie sind (Neu-Einrichtung: ai-rem install --client opencode).
+    merge_opencode_json(opencode_mcp_entries(mcp_endpoint, '', '', '', ''), only_ai_rem=True)
+    install_opencode_files()
+
+
+def uninstall_opencode():
+    path = opencode_config_path()
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        data.get('mcp', {}).pop('ai-rem', None)
+        instr = [i for i in data.get('instructions', [])
+                 if not (isinstance(i, str) and i.endswith('fallback.md'))]
+        if instr:
+            data['instructions'] = instr
+        else:
+            data.pop('instructions', None)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print('✓ %s: ai-rem entfernt (mykeyvault/tools bleiben stehen)' % path)
+    except (OSError, ValueError):
+        print('⚠ %s nicht lesbar — mcp-Eintrag ggf. von Hand entfernen' % path)
+    replace_marked_block(os.path.join(OPENCODE_DIR, 'AGENTS.md'), '')
+    rels = [os.path.join('plugin', 'ai-rem.ts')] + [os.path.join('command', c + '.md') for c in OPENCODE_COMMANDS]
+    for rel in rels:
+        try:
+            os.unlink(os.path.join(OPENCODE_DIR, rel))
+        except OSError:
+            pass
+    print('✓ opencode: Plugin, Commands und AGENTS.md-Block entfernt')
+
+
+# ── generic: Snippets fuer weitere Frontends ─────────────────────────────────
+
+def install_generic(mcp_endpoint):
+    """Schreibt KEINE fremden Configs — nur Vorlagen. Auto-Ingest gibt es dort nicht;
+    MCP + Instruktionen + Pointer-Text reichen fuer Lesen/Schreiben ins Gedaechtnis."""
+    print('--- generic ---')
+    os.makedirs(SNIPPET_DIR, exist_ok=True)
+    hdr = 'Bearer <Token: ai-rem token>'
+    files = {
+        'codex-config.toml': (
+            '# ~/.codex/config.toml — Token per Env: export AI_REM_TOKEN="$(ai-rem token)"\n'
+            '[mcp_servers.ai-rem]\nurl = "%s"\nbearer_token_env_var = "AI_REM_TOKEN"\n' % mcp_endpoint),
+        'gemini-settings.json': json.dumps(
+            {'mcpServers': {'ai-rem': {'httpUrl': mcp_endpoint, 'headers': {'Authorization': hdr}}}},
+            indent=2) + '\n',
+        'cursor-mcp.json': json.dumps(
+            {'mcpServers': {'ai-rem': {'url': mcp_endpoint, 'headers': {'Authorization': hdr}}}},
+            indent=2) + '\n',
+        'AGENTS.md': AGENTS_BLOCK.replace('opencode hat keinen', 'die meisten Frontends haben keinen') + '\n',
+    }
+    for name, body in files.items():
+        with open(os.path.join(SNIPPET_DIR, name), 'w', encoding='utf-8') as f:
+            f.write(body)
+    print('✓ Snippets: %s (%s)' % (SNIPPET_DIR, ', '.join(sorted(files))))
+    print('  AGENTS.md-Block in die globale Instruktionsdatei des Frontends kopieren')
+    print('  (Codex: ~/.codex/AGENTS.md, Gemini CLI: ~/.gemini/GEMINI.md).')
+
+
+def uninstall_generic():
+    shutil.rmtree(SNIPPET_DIR, ignore_errors=True)
+    print('✓ Snippets entfernt')
+
+
+# ── Claude Code entfernen ────────────────────────────────────────────────────
+
+CLAUDE_HOOK_FILES = ('system-check.py', 'auto-memory.py', 'claude-md-guard.py',
+                     'save-plan.py', 'vault-secret-reminder.py')
+CLAUDE_COMMAND_FILES = ('setup-ai-rem.md', 'memory-cleanup.md', 'migrate-claude-md.md',
+                        'ai-rem-update.md')
+
+
+def uninstall_claude():
+    claude = shutil.which('claude')
+    if claude:
+        run([claude, 'mcp', 'remove', '--scope', 'user', 'ai-rem'], timeout=60)
+        print('✓ MCP-Registrierung ai-rem entfernt')
+    path = os.path.join(CLAUDE_HOME, 'settings.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        hooks = data.get('hooks', {})
+        for event, groups in list(hooks.items()):
+            for g in groups:
+                g['hooks'] = [h for h in g.get('hooks', [])
+                              if not any(n in h.get('command', '') for n in CLAUDE_HOOK_FILES)]
+            hooks[event] = [g for g in groups if g.get('hooks')]
+            if not hooks[event]:
+                del hooks[event]
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print('✓ settings.json: ai-rem-Hooks ausgetragen')
+    except (OSError, ValueError):
+        pass
+    cm = os.path.join(CLAUDE_HOME, 'CLAUDE.md')
+    if os.path.isfile(cm):
+        with open(cm, encoding='utf-8') as f:
+            text = f.read()
+        text = re.sub(r'(?:^|\n)## ai-rem[\s\S]*?(?=\n## |\Z)', '', text).strip()
+        with open(cm, 'w', encoding='utf-8') as f:
+            f.write(text + '\n' if text else '')
+    for d, names in (('hooks', CLAUDE_HOOK_FILES), ('commands', CLAUDE_COMMAND_FILES)):
+        for n in names:
+            try:
+                os.unlink(os.path.join(CLAUDE_HOME, d, n))
+            except OSError:
+                pass
+    print('✓ Claude Code: Hooks, Commands und CLAUDE.md-Pointer entfernt')
+
+
+def uninstall(targets):
+    if not targets:
+        print('✗ --uninstall braucht --client <claude|opencode|generic>')
+        sys.exit(2)
+    for t in targets:
+        {'claude': uninstall_claude, 'opencode': uninstall_opencode,
+         'generic': uninstall_generic}[t]()
+    cfg = load_client_cfg()
+    cfg['targets'] = [t for t in cfg.get('targets', []) if t not in targets]
+    save_client_cfg(cfg)
+    print('Fertig. Verbleibende Ziele: %s' % (', '.join(cfg['targets']) or '—'))
+
+
 # ── Ablauf ────────────────────────────────────────────────────────────────────
 
-def update_only():
+def update_claude(setup_cfg, mcp_endpoint):
+    """Claude-Teil des Updates. write_settings_template() holt Neues vom Server ins
+    Template, update_settings() merged es additiv in die settings.json. Das Template
+    gehoert dem Server und wird komplett neu geschrieben; Handaenderungen gehoeren in
+    die settings.json."""
+    print('--- Claude Code ---')
+    os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
+    os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
+    write_settings_template(setup_cfg, mcp_endpoint)
+    hook_paths = install_hooks()
+    update_settings(setup_cfg, mcp_endpoint, hook_paths)
+    install_commands()
+
+
+def update_only(targets):
     """Nur die ausgelieferten Dateien auffrischen — kein Bootstrap.
 
     Uebersprungen: register_mcp (laengst registriert), pull_secrets (SSH),
@@ -933,51 +1337,31 @@ def update_only():
     create_entities (brauchen den Token), update_claude_md. Alles, was hier laeuft,
     ist idempotent, und fetch_to() schreibt atomar — ein Serverfehler laesst die
     bestehende Datei stehen.
-
-    write_settings_template() holt Neues vom Server ins Template, update_settings()
-    merged es additiv in die settings.json. Das Template gehoert dem Server und wird
-    komplett neu geschrieben; Handaenderungen gehoeren in die settings.json.
     """
-    print('=== ai-rem Update (%s) ===' % PLATFORM)
-    os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
-    os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
-
+    targets = targets or installed_targets() or ['claude']
+    print('=== ai-rem Update (%s; %s) ===' % (PLATFORM, ', '.join(targets)))
     setup_cfg = load_setup_config()
     mcp_endpoint = choose_mcp_endpoint(setup_cfg)
-    write_settings_template(setup_cfg, mcp_endpoint)
-    hook_paths = install_hooks()
     link_cli(install_cli())
-    update_settings(setup_cfg, mcp_endpoint, hook_paths)
-    install_commands()
+    if 'claude' in targets:
+        update_claude(setup_cfg, mcp_endpoint)
+    if 'opencode' in targets:
+        print('--- opencode ---')
+        update_opencode(mcp_endpoint)
+    if 'generic' in targets:
+        install_generic(mcp_endpoint)
+    record_client(mcp_endpoint, targets, setup_cfg)
     print('')
-    print('Fertig. Claude Code neu starten - Hooks werden nur beim Start geladen.')
+    print('Fertig. Clients neu starten - Hooks und Plugins werden nur beim Start geladen.')
 
 
-def main():
-    # ponytail: KG_URL wird erst beim Ausliefern ersetzt (server.py). Aus einem
-    # lokalen Checkout gestartet bliebe der Platzhalter stehen und landete als
-    # kaputte MCP-URL in ~/.claude.json. Lieber hier abbrechen als still falsch
-    # konfigurieren. Lokal testen: KG_URL per Env ueberschreiben.
-    if KG_URL.startswith('__'):
-        sys.stderr.write(
-            'ai-rem: KG_URL ist ein nicht ersetzter Platzhalter (%s).\n'
-            'Setup ueber den Server starten: bash <(curl -s <kg-url>/setup)\n' % KG_URL)
-        sys.exit(2)
-    if '--update' in sys.argv[1:]:
-        return update_only()
-    print('=== ai-rem Setup (%s) ===' % PLATFORM)
+def install_claude(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token, vault_token,
+                   tools_entry, tools_reg_url, vault_entry):
+    print('--- Claude Code ---')
     claude = find_claude()
     register_mcp(claude)
-
     os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
     os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
-
-    setup_cfg = load_setup_config()
-    mcp_endpoint = choose_mcp_endpoint(setup_cfg)
-    ssh_host, ai_rem_token, vault_token = pull_secrets(setup_cfg)
-    tools_entry, tools_reg_url = build_tools_mcp(setup_cfg)
-    vault_entry = build_mykeyvault_mcp(setup_cfg)
-
     try:
         tok = update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
                                  vault_token, tools_entry, tools_reg_url, vault_entry)
@@ -987,7 +1371,6 @@ def main():
 
     write_settings_template(setup_cfg, mcp_endpoint)
     hook_paths = install_hooks()
-    link_cli(install_cli())
     update_settings(setup_cfg, mcp_endpoint, hook_paths)
 
     # Auto-Memory md-Fallback: leere Datei (wird via @import in CLAUDE.md geladen)
@@ -998,7 +1381,6 @@ def main():
 
     update_claude_md()
     install_commands()
-    create_entities(setup_cfg, tok or ai_rem_token)
 
     # Bestehende CLAUDE.md mit Fremdwissen? Einmalige Migration anbieten (opt-in).
     try:
@@ -1016,9 +1398,60 @@ def main():
             print('  Claude Code starten und  /migrate-claude-md  ausführen.')
     except Exception:
         pass
+    return tok
+
+
+def main():
+    # ponytail: KG_URL wird erst beim Ausliefern ersetzt (server.py). Aus einem
+    # lokalen Checkout gestartet bliebe der Platzhalter stehen und landete als
+    # kaputte MCP-URL in ~/.claude.json. Lieber hier abbrechen als still falsch
+    # konfigurieren. Lokal testen: KG_URL per Env ueberschreiben.
+    if KG_URL.startswith('__'):
+        sys.stderr.write(
+            'ai-rem: KG_URL ist ein nicht ersetzter Platzhalter (%s).\n'
+            'Setup ueber den Server starten: bash <(curl -s <kg-url>/setup)\n' % KG_URL)
+        sys.exit(2)
+    args = parse_args(sys.argv[1:])
+    if args['uninstall']:
+        return uninstall(args['targets'])
+    if args['update']:
+        return update_only(args['targets'])
+    targets = args['targets'] or detect_targets()
+    print('=== ai-rem Setup (%s; Ziele: %s) ===' % (PLATFORM, ', '.join(targets)))
+
+    setup_cfg = load_setup_config()
+    mcp_endpoint = choose_mcp_endpoint(setup_cfg)
+    ssh_host, ai_rem_token, vault_token = pull_secrets(setup_cfg)
+    vault_url = (os.environ.get('VAULT_API_URL')
+                 or setup_cfg.get('mcp_register', {}).get('mykeyvault', {}).get('vault_url', 'http://mystorage:8223'))
+    tools_entry, tools_reg_url, vault_entry = '', '', ''
+    if 'claude' in targets or 'opencode' in targets:
+        tools_entry, tools_reg_url = build_tools_mcp(setup_cfg)
+        vault_entry = build_mykeyvault_mcp(setup_cfg)
+
+    # CLI zuerst: die Hooks und das opencode-Plugin rufen sie auf.
+    link_cli(install_cli())
+
+    tok = ''
+    if 'claude' in targets:
+        tok = install_claude(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token, vault_token,
+                             tools_entry, tools_reg_url, vault_entry)
+    tok = tok or resolve_token(ai_rem_token, vault_url, vault_token)
+    if not tok and 'claude' not in targets:  # Claude-Pfad meldet das selbst
+        print('✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:' % ssh_host)
+        print('  AI_REM_TOKEN=<token> %s' % rerun_hint())
+    record_client(mcp_endpoint, targets, setup_cfg, token=tok,
+                  vault_token=vault_token, vault_url=vault_url)
+
+    if 'opencode' in targets:
+        install_opencode(mcp_endpoint, vault_url, vault_entry, tools_entry, tools_reg_url)
+    if 'generic' in targets:
+        install_generic(mcp_endpoint)
+    create_entities(setup_cfg, tok)
 
     print('')
-    print('Fertig. Claude Code neu starten - dann ist ai-rem aktiv.')
+    print('Fertig. Clients neu starten - dann ist ai-rem aktiv.')
+    print('Weiteres Frontend nachruesten:  ai-rem install --client <claude|opencode|generic>')
     print('Auf jeder neuen Maschine:')
     print('  macOS/Linux/WSL:  bash <(curl -s %s/setup)' % KG_URL)
     print('  Windows:          irm %s/setup.ps1 | iex' % KG_URL)

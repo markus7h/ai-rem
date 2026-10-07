@@ -66,7 +66,7 @@ li{margin-bottom:4px}
   <div class="card">
     <h2>Windows (PowerShell, nativ)</h2>
     <div class="cmd"><code id="c2">irm __KG_URL__/setup.ps1 | iex</code><button onclick="copyCmd('c2')">Kopieren</button></div>
-    <p class="hint">Kein WSL nötig — claude CLI nativ. Fehlt Python: <code>winget install Python.Python.3.12</code>, fehlt claude: <code>irm https://claude.ai/install.ps1 | iex</code></p>
+    <p class="hint">Kein WSL nötig — Frontends nativ. Fehlt Python: <code>winget install Python.Python.3.12</code>, fehlt claude: <code>irm https://claude.ai/install.ps1 | iex</code></p>
   </div>
 
   <div class="card">
@@ -91,7 +91,7 @@ li{margin-bottom:4px}
   <div class="card">
     <h2>Voraussetzungen</h2>
     <ul>
-      <li><b>Pflicht:</b> <code>python3</code> + <code>claude</code> CLI — fehlt etwas, bricht das Setup mit plattformspezifischem Install-Hinweis ab</li>
+      <li><b>Pflicht:</b> <code>python3</code> + mindestens ein Frontend: <code>claude</code> oder <code>opencode</code> (alle anderen: Snippets unter <code>~/.config/ai-rem/snippets</code>). Ziel wählen: Setup-Befehl mit <code>--client claude|opencode|generic</code> ergänzen, später <code>ai-rem install --client …</code></li>
       <li><b>Optional (nur tools-registry):</b> <code>git</code>, Node.js &ge; 18 inkl. <code>npm</code></li>
       <li><b>Secrets:</b> per SSH vom Server gezogen (SSH-Key vorausgesetzt) — alternativ Token im Env: <code>AI_REM_TOKEN=&lt;token&gt;</code> bzw. <code>$env:AI_REM_TOKEN</code></li>
     </ul>

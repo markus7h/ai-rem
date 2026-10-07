@@ -25,14 +25,20 @@ import urllib.request
 from pathlib import Path
 from typing import Any, List, Optional
 
-from .mcp_client import MCPClient
+from .mcp_client import MCPClient, load_client_cfg
 
 # Muss demselben Config-Dir folgen wie hooks/auto-memory.py und hooks/system-check.py:
 # der Hook schreibt errors.log nach $CLAUDE_CONFIG_DIR/auto-memory, der Extraktor
 # schrieb last-run.json hart nach ~/.claude — in einer Session mit eigenem Config-Dir
 # sah der Sessionstart-Check dort nur Fehler und nie einen Erfolg ("Auto-Memory gestört").
+# Ohne Claude Code (nur opencode o.a.) gibt es kein ~/.claude — dann liegt der State
+# client-neutral unter ~/.local/share/ai-rem/state. AI_REM_STATE_DIR uebersteuert;
+# scripts/setup.py rechnet denselben Pfad fuer opencodes instructions[] aus.
 _CC = os.environ.get("CLAUDE_CONFIG_DIR", "").split(os.pathsep)[0].strip()
-LOG_DIR = Path(_CC or os.path.expanduser("~/.claude")) / "auto-memory"
+_CLAUDE_HOME = Path(_CC or os.path.expanduser("~/.claude"))
+LOG_DIR = Path(os.environ.get("AI_REM_STATE_DIR") or (
+    _CLAUDE_HOME / "auto-memory" if _CLAUDE_HOME.is_dir()
+    else Path.home() / ".local" / "share" / "ai-rem" / "state"))
 LOCK_FILE = Path("/tmp/ai-rem-ingest.lock")
 FALLBACK_MD = LOG_DIR / "fallback.md"        # klassisches md-Auto-Memory wenn Ollama down
 PENDING_JSONL = LOG_DIR / "pending.jsonl"    # verpasste Sessions → vom catchup nachgezogen
@@ -52,11 +58,14 @@ MIN_TRANSCRIPT_CHARS = 500
 # Workstation, und myai schläft 23:00-06:00 — direkt adressiert fiel die
 # Extraktion nachts stumm auf die Markdown-Notiz zurück. Der Router hat für
 # genau den Fall den Kimi-Fallback.
-LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL",
-                           os.environ.get("AI_REM_OLLAMA_URL", "http://mystorage.lan:11437"))
+# Claude Code setzt die Werte per settings.json-env; andere Clients (opencode-Plugin)
+# haben keinen solchen Kanal — fuer sie traegt scripts/setup.py sie in client.json ein.
+_CLIENT_CFG = load_client_cfg()
+LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL", os.environ.get(
+    "AI_REM_OLLAMA_URL", _CLIENT_CFG.get("llm_url") or "http://mystorage.lan:11437"))
 # Der Router verlangt einen Key. Leer = kein Authorization-Header, dann geht es
 # weiter direkt gegen einen llama-server ohne --api-key.
-LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
+LLM_API_KEY = (os.environ.get("AI_REM_LLM_API_KEY") or _CLIENT_CFG.get("llm_api_key") or "").strip()
 # Modellgruppe am Router (zwei GPU-Deployments + Kimi-Fallback), nicht ein Host.
 LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "qwen").strip()
 # Ein 45k-Transcript braucht auf dem 24b-Q4 real ~5 min. Der Hook laeuft detached,
@@ -108,42 +117,87 @@ def _content_to_text(content: Any) -> str:
     return ""
 
 
+def _opencode_chunks(doc: dict) -> List[tuple]:
+    """opencode-Export des ai-rem-Plugins: {"format": "opencode", "messages": [
+    {"info": {"role": ...}, "parts": [{"type": "text", "text": ...}, ...]}]}.
+    Tool-Aufrufe und vom Client eingeschobene (synthetic) Texte fliegen raus —
+    wie tool_result im Claude-Format."""
+    chunks = []
+    for m in doc.get("messages", []):
+        if not isinstance(m, dict):
+            continue
+        role = (m.get("info") or {}).get("role")
+        if role not in ("user", "assistant"):
+            continue
+        parts = []
+        for p in m.get("parts") or []:
+            if not isinstance(p, dict) or p.get("synthetic") or p.get("ignored"):
+                continue
+            if p.get("type") == "text":
+                parts.append(p.get("text", ""))
+            elif p.get("type") == "reasoning" and p.get("text"):
+                parts.append(f"[thinking] {p['text']}")
+        chunks.append(("USER" if role == "user" else "ASSISTANT", "\n".join(x for x in parts if x)))
+    return chunks
+
+
+def _claude_chunks(f) -> List[tuple]:
+    chunks = []
+    for raw in f:
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        t = rec.get("type")
+        msg = rec.get("message")
+        if t == "user" and isinstance(msg, dict):
+            content = msg.get("content", "")
+            if isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+            ):
+                continue
+            chunks.append(("USER", _content_to_text(content)))
+        elif t in ("assistant", "message") and isinstance(msg, dict):
+            chunks.append(("ASSISTANT", _content_to_text(msg.get("content", ""))))
+    return chunks
+
+
+def _load_opencode(path: Path) -> Optional[dict]:
+    """Ganzes JSON-Dokument im opencode-Format, sonst None (= Claude-JSONL)."""
+    try:
+        with path.open(encoding="utf-8") as f:
+            if f.read(1) != "{":
+                return None
+            f.seek(0)
+            doc = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return doc if isinstance(doc, dict) and doc.get("format") == "opencode" else None
+
+
 def flatten_transcript(path: Path) -> str:
-    """Reduce a JSONL session to a USER/ASSISTANT text dialogue.
+    """Reduce a session (Claude-JSONL oder opencode-Export) to a USER/ASSISTANT
+    text dialogue.
 
     Passt das Ergebnis nicht in MAX_TOTAL_CHARS, wird die MITTE verworfen, nicht
     das Ende: Entscheidungen, Loesungen und Erkenntnisse stehen am Session-Ende.
     Die erste USER-Message bleibt immer erhalten — sie ist die Aufgabenstellung
     und erklaert den Rest.
     """
+    doc = _load_opencode(path)
+    if doc is not None:
+        raw_chunks = _opencode_chunks(doc)
+    else:
+        with path.open(encoding="utf-8") as f:
+            raw_chunks = _claude_chunks(f)
     chunks = []
-    with path.open(encoding="utf-8") as f:
-        for raw in f:
-            try:
-                rec = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            t = rec.get("type")
-            msg = rec.get("message")
-            if t == "user" and isinstance(msg, dict):
-                content = msg.get("content", "")
-                if isinstance(content, list) and any(
-                    isinstance(b, dict) and b.get("type") == "tool_result" for b in content
-                ):
-                    continue
-                text = _content_to_text(content)
-                role = "USER"
-            elif t in ("assistant", "message") and isinstance(msg, dict):
-                text = _content_to_text(msg.get("content", ""))
-                role = "ASSISTANT"
-            else:
-                continue
-            text = text.strip()
-            if not text:
-                continue
-            if len(text) > MAX_CHARS_PER_MSG:
-                text = text[:MAX_CHARS_PER_MSG] + "…[truncated]"
-            chunks.append(f"{role}: {text}")
+    for role, text in raw_chunks:
+        text = text.strip()
+        if not text:
+            continue
+        if len(text) > MAX_CHARS_PER_MSG:
+            text = text[:MAX_CHARS_PER_MSG] + "…[truncated]"
+        chunks.append(f"{role}: {text}")
 
     if sum(len(c) for c in chunks) <= MAX_TOTAL_CHARS:
         return "\n\n".join(chunks)

@@ -162,6 +162,8 @@ def _detach(raw):
 def main():
     if os.environ.get("AUTO_MEMORY_EXTRACTING"):
         return
+    # Herkunft fuer extra.client: die CLI erbt das, auch ueber den Detach hinweg.
+    os.environ.setdefault("AI_REM_CLIENT", "claude-code")
     try:
         raw = sys.stdin.read()
         if not raw.strip():

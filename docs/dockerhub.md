@@ -1,11 +1,12 @@
-# ai-rem — Knowledge Graph Memory for Claude
+# ai-rem — Knowledge Graph Memory for AI coding agents
 
-**Persistent knowledge-graph memory for Claude Code — self-hosted MCP server.**
+**Persistent knowledge-graph memory for Claude Code, opencode & any MCP agent — self-hosted MCP server.**
 
-ai-rem gives Claude Code a long-term memory that lives on **your** home server: open tasks,
-decisions, solved problems, projects and tools are stored in a knowledge graph and loaded
-*selectively* per session, instead of stuffing everything into `CLAUDE.md` on every machine.
-Available from any machine, independent of where you work.
+ai-rem gives your AI coding agents — **Claude Code**, **opencode**, and any other MCP
+frontend (Codex, Gemini CLI, Cursor …) — one shared long-term memory that lives on **your**
+home server: open tasks, decisions, solved problems, projects and tools are stored in a
+knowledge graph and loaded *selectively* per session, instead of stuffing everything into
+`CLAUDE.md`/`AGENTS.md` on every machine. Available from any machine and any frontend.
 
 ```bash
 docker pull magic3arkus/ai-rem
@@ -57,15 +58,18 @@ authenticate with `Authorization: Bearer <token>`; the browser Web UI uses a der
 HttpOnly cookie set at `/login`.
 ([Auth model](https://github.com/markus7h/ai-rem/blob/main/docs/authentication.md))
 
-### 2. Client (each machine) — say this to Claude Code
+### 2. Client (each machine)
 
 ```
-Run: bash <(curl -s http://<SERVER_IP>:3456/setup)
+bash <(curl -s http://<SERVER_IP>:3456/setup)
 ```
 
 On native Windows (PowerShell, no WSL): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
-The idempotent setup registers the MCP server, deploys the hooks, writes a minimal
-`CLAUDE.md` pointer and installs the slash commands.
+The idempotent setup installs the `ai-rem` CLI and sets up every frontend it finds:
+Claude Code (MCP, hooks, `CLAUDE.md` pointer, slash commands) and opencode (`opencode.json`
+MCP block, `AGENTS.md` pointer, auto-memory plugin, commands). Other MCP frontends get
+ready-to-paste snippets (`--client generic`). Later: `ai-rem install --client …`,
+`ai-rem update`, `ai-rem doctor`.
 ([Setup details](https://github.com/markus7h/ai-rem/blob/main/docs/installation.md))
 
 ---
@@ -93,8 +97,9 @@ python3 migrate.py import --url http://localhost:3456 --in dump.json
 - **Cross-machine** — one server, available from every client; no per-repo `CLAUDE.md` ballast.
 - **Web UI** — `/ui` backups (manual/scheduled/restore), `/browse` interactive content browser, `/tasks` task list with archive action, `/graph` node-link visualization, `/prefs` preferences manager, `/cleanup` maintenance + archive purge, `/install` onboarding.
 - **OKF interop** — export/import the whole graph as an [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/) v0.1 bundle (`/export/okf`, `/api/import/okf`); imported entries are indexed for semantic search.
-- **Auto-Memory** — a session-end hook extracts structured entities/relations from each transcript via llama-server (with an offline md-fallback + catch-up).
-- **Nightly cleanup** — non-destructive dedup/archive (never deletes; preferences & pinned untouched), ambiguous cases go to a review queue.
+- **Multi-frontend** — Claude Code and opencode set up by one command, any other MCP client via snippets; `extra.client` records which frontend created an entry.
+- **Auto-Memory** — a Claude Code hook or the opencode plugin extracts structured entities/relations from each session transcript via an OpenAI-compatible LLM (with an offline md-fallback + catch-up).
+- **Nightly cleanup** — non-destructive dedup/archive (never deletes; preferences & pinned untouched) inside a configurable time window that matches your LLM host's waking hours; ambiguous cases go to a review queue.
 - **Plan saving** — finalized plans become open `Task`s, a central cross-machine to-do list.
 - **Slim attack surface** — no compiler and no `pip` in the image (wheels only, nothing installed at runtime); rebuilt weekly against the current base image.
 

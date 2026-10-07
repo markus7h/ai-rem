@@ -1,6 +1,6 @@
-# ai-rem — Knowledge Graph Memory für Claude
+# ai-rem — Knowledge Graph Memory für KI-Coding-Agenten
 
-> Diese Dokumentation bezieht sich auf **[v1.4.0](https://github.com/markus7h/ai-rem/releases/tag/v1.4.0)**.
+> Diese Dokumentation bezieht sich auf **[v1.5.0](https://github.com/markus7h/ai-rem/releases/tag/v1.5.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -9,7 +9,7 @@
 
 > Release-Notes werden im [CHANGELOG.md](CHANGELOG.md) gepflegt und bei jedem Tag in die [GitHub Releases](https://github.com/markus7h/ai-rem/releases) und die Docker-Hub-Beschreibung veröffentlicht; frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
 
-**ai-rem** ist ein persistentes Langzeit-Gedächtnis für Claude Code, das als MCP-Server auf dem Heimserver läuft.
+**ai-rem** ist ein persistentes Langzeit-Gedächtnis für KI-Coding-Agenten — **Claude Code**, **opencode** und jedes andere MCP-fähige Frontend (Codex, Gemini CLI, Cursor …) —, das als MCP-Server auf dem Heimserver läuft. Alle Frontends teilen sich denselben Graph: Was ein Agent lernt, weiß der nächste.
 Statische Memory-Dateien wie `CLAUDE.md` liegen vollständig im Kontext und sind an einzelne Projekte und Rechner gebunden. ai-rem geht effizienter vor: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – liegen in einem Knowledge Graph auf dem Heimserver, werden gezielt statt komplett geladen und sind rechnerunabhängig von jeder Maschine aus verfügbar.
 
 Docker Hub: `docker pull magic3arkus/ai-rem`
@@ -30,7 +30,7 @@ Technisch:
 
 ## Wie es funktioniert
 
-Claude lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontext aus dem Graph und speichert neue Erkenntnisse proaktiv mit `memory_add` / `memory_relate`. Der Graph hält typisierte **Entities** — `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic` — und **Relations** dazwischen. Jede Entity kann ein `context`-Tag tragen (`work` / `private` / global), sodass Arbeits- und Privat-Wissen pro Repo getrennt bleiben.
+Der Agent lädt beim Sitzungsstart via `memory_get_context()` den relevanten Kontext aus dem Graph und speichert neue Erkenntnisse proaktiv mit `memory_add` / `memory_relate`. Der Graph hält typisierte **Entities** — `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic` — und **Relations** dazwischen. Jede Entity kann ein `context`-Tag tragen (`work` / `private` / global), sodass Arbeits- und Privat-Wissen pro Repo getrennt bleiben.
 
 **Projektkontext.** Der Arbeitskontext eines Projekts — lokales Dev-Verzeichnis, Deploy-Verzeichnis/-Host, relevante Skills und projektspezifische Regeln — liegt im `extra` einer `Project`-Entity. Schreiben mit `memory_set_project_context(...)` (feldweises Merge, d. h. `skills` später ergänzen ohne `dev_dir`/`rules` zu verlieren), in einem Aufruf vollständig laden mit `memory_project_context(name)` — ungekürzter Record plus alle verknüpften Entities. Damit lässt sich eine Sitzung „im Kontext von Projekt X" starten.
 
@@ -72,9 +72,21 @@ Jede Seite zeigt die laufende Server-Version rechts in der Navigation.
 
 ---
 
+## Unterstützte Frontends
+
+| | Claude Code | opencode | Andere MCP-Frontends (Codex, Gemini CLI, Cursor …) |
+|---|---|---|---|
+| MCP-Tools + Server-Instruktionen | ✓ | ✓ | ✓ |
+| Kontext beim Sitzungsstart | SessionStart-Hook | `AGENTS.md`-Pointer | `AGENTS.md`/`GEMINI.md`-Pointer (Snippet) |
+| Auto-Memory aus Transcripts | `PreCompact`/`SessionEnd`-Hook | Plugin (`session.idle`/`session.compacted`) | — |
+| Slash-Commands | ✓ | ✓ (ohne `/migrate-claude-md`) | — |
+| Eingerichtet von | `ai-rem install --client claude` | `ai-rem install --client opencode` | `ai-rem install --client generic` (nur Snippets) |
+
+Jeder neue Eintrag hält in `extra.client` fest, welches Frontend ihn angelegt hat (`claude-code`, `opencode`, `ai-rem-cli`, …).
+
 ## Automatisierung (Hooks)
 
-Vier Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph befüllt und sauber:
+Vier Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph befüllt und sauber (opencode bekommt den Auto-Memory-Teil als Plugin):
 
 - **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via OpenAI-kompatiblem LLM-Endpoint (`AI_REM_LLAMA_URL`, per Default ein LiteLLM-Router statt eines einzelnen GPU-Hosts), mit md-Fallback + Catch-up, wenn er down ist. Er läuft detached (die Extraktion dauert Minuten) und meldet beim nächsten Sessionstart, wenn er gestört ist. Das Setup legt die CLI nach `~/.local/share/ai-rem/bin/ai-rem` und richtet `AI_REM_CLI` darauf aus — der Hook hängt damit nicht daran, wohin das Repo geklont wurde. `~/.local/bin/ai-rem` verlinkt auf dieselbe Kopie, damit `ai-rem` in der Shell als normaler Befehl verfügbar ist.
 - **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Erledigte Tasks werden 14 Tage, nachdem `extra.status` auf `erledigt` stand, archiviert (der Status wird gegen das Enum `offen | laufend | blockiert | erledigt` normalisiert, gängige Synonyme gemappt, nicht mappbarer Freitext bleibt in `extra.status_note`). Ein Erledigt-Marker, der nur im Beschreibungstext steht („ERLEDIGT: …"), archiviert nie von selbst - er landet in der Review-Queue. Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
@@ -88,7 +100,7 @@ Vier Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph be
 ## Voraussetzungen
 
 - Docker auf dem Zielserver
-- Claude Code CLI und **Python 3** auf dem Client-Rechner (Setup und Hooks laufen auf Python)
+- **Python 3** auf dem Client-Rechner (Setup, CLI und Hooks laufen auf Python), dazu mindestens ein Frontend: Claude Code, opencode oder ein anderer MCP-Client
 - Netzwerkzugang zu `<SERVER_IP>:<PORT>`
 - Optional (nur für den tools-Begleit-MCP): git, Node.js ≥ 18 inkl. npm
 
@@ -293,15 +305,25 @@ docker compose pull && docker compose up -d
 
 ### Client — neuer Rechner einrichten
 
-**Auf jeder neuen Maschine** — einen Satz zu Claude:
+**Auf jeder neuen Maschine**, in der eigenen Shell:
 
 ```
-Führe aus: bash <(curl -s http://<SERVER_IP>:3456/setup)
+bash <(curl -s http://<SERVER_IP>:3456/setup)
 ```
 
 Auf **nativem Windows** (PowerShell, kein WSL nötig): `irm http://<SERVER_IP>:3456/setup.ps1 | iex`.
 
-Das Skript ist idempotent und registriert den MCP-Server, deployt die drei Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.
+Das Setup installiert die `ai-rem`-CLI und richtet danach jedes gefundene Frontend ein (`claude`, `opencode`; keins von beiden → `generic`-Snippets). Es ist idempotent. Ziele explizit wählen oder später nachrüsten:
+
+```bash
+ai-rem install --client opencode     # opencode zu einem bestehenden Setup hinzufügen
+ai-rem install --client generic      # Snippets für Codex, Gemini CLI, Cursor in ~/.config/ai-rem/snippets
+ai-rem uninstall --client opencode   # ein Frontend wieder entfernen
+ai-rem doctor                        # Server-Version, installierte Ziele, Drift, Token-Quelle
+```
+
+- **Claude Code:** registriert den MCP-Server, deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.
+- **opencode:** mergt `ai-rem` (plus `mykeyvault`/`tools`, falls konfiguriert) in den `mcp`-Block von `~/.config/opencode/opencode.json` — Provider und fremde Server bleiben unberührt, eine JSONC-Datei mit Kommentaren wird nicht angefasst, stattdessen liegt ein Snippet bereit —, ergänzt einen `AGENTS.md`-Pointer, das Plugin und die Commands. Tokens stehen als `{file:~/.config/ai-rem/token}` drin, nie im Klartext in der Config.
 
 → **[Was das Setup tut, Repo-Layout & CLAUDE.md-Strategie](docs/installation.de.md)**
 
@@ -318,11 +340,11 @@ mit jedem Release, das eine davon anfasst:
 
 ```bash
 ai-rem update --check   # nur berichten, Exit 1 wenn etwas hinterherhinkt
-ai-rem update           # Dateien nachziehen, danach Claude Code neu starten
+ai-rem update           # Dateien aller installierten Frontends nachziehen, danach neu starten
 ```
 
-Der SessionStart-Hook vergleicht die lokalen Kopien gegen `/manifest` und meldet den
-Rückstand von selbst — man erfährt es also normalerweise, bevor man fragen muss. Die
+Der Claude-SessionStart-Hook und das opencode-Plugin vergleichen die lokalen Kopien
+gegen `/manifest` und melden den Rückstand von selbst — man erfährt es also normalerweise, bevor man fragen muss. Die
 `settings.json` wird dabei nur ergänzt, nie beschnitten; das Template, aus dem sie
 mergt, gehört dem Server und wird komplett neu geschrieben.
 

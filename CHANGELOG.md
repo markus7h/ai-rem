@@ -13,6 +13,41 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.5.0] – 2026-10-07
+
+### Added
+- **opencode as a first-class client** (#121). `ai-rem install --client opencode`
+  merges `ai-rem` (plus `mykeyvault`/`tools`, if built) into the `mcp` block of
+  `~/.config/opencode/opencode.json` without touching providers or other servers,
+  adds an `AGENTS.md` pointer (call `memory_get_context()` at session start), puts the
+  auto-memory `fallback.md` into `instructions[]` and installs the commands and a
+  plugin. The plugin exports the session after 10 minutes of `session.idle` (and on
+  `session.compacted`) and runs `ai-rem ingest`; the extractor reads the opencode
+  export next to Claude's JSONL. Tokens are referenced as `{file:…}`, never written
+  into the config; a JSONC file with comments is left alone and a snippet is written.
+- **Generic target** for other MCP frontends: `--client generic` writes ready-to-paste
+  snippets for Codex, Gemini CLI and Cursor plus an `AGENTS.md` pointer to
+  `~/.config/ai-rem/snippets/`.
+- **The CLI installs and maintains clients:** `ai-rem install [--client …]`,
+  `ai-rem uninstall --client …`, `ai-rem doctor` (server version, targets, drift, token
+  source). `ai-rem update` covers every installed target. The setup one-liner passes
+  arguments through (`bash <(curl -s …/setup) --client opencode`) and defaults to every
+  frontend found on `PATH`; the `claude` CLI is no longer a hard requirement.
+- **`extra.client`** records which frontend created an entry — from MCP
+  `clientInfo.name` or the `X-AI-REM-Client` header the CLI sends (`claude-code`,
+  `opencode`, `ai-rem-cli`). Set on create only, never overwritten.
+- Client-neutral config `~/.config/ai-rem/client.json` with the token file
+  `~/.config/ai-rem/token` (0600). The CLI looks there before `~/.claude.json`; the
+  SessionStart hook keeps the file in step with a vault token rotation.
+
+### Changed
+- MCP server instructions no longer assume Claude Code; they ask every client to call
+  `memory_get_context()` once per session.
+- `/manifest` also lists the opencode artifacts (`opencode/…`); the SessionStart hook and
+  `ai-rem update` only check targets that are actually installed.
+- `lib/mcp_client.py` honours `CLAUDE_CONFIG_DIR` when reading `~/.claude.json`.
+- Without `~/.claude`, the extractor keeps its state in `~/.local/share/ai-rem/state`.
+
 ## [1.4.0] – 2026-10-07
 
 ### Changed
@@ -801,7 +836,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/markus7h/ai-rem/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/markus7h/ai-rem/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/markus7h/ai-rem/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/markus7h/ai-rem/compare/v1.3.0...v1.3.1
