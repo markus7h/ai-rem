@@ -35,9 +35,18 @@ def test_log_dir_nimmt_ersten_pfad_der_liste(monkeypatch, tmp_path):
     assert _log_dir_with(monkeypatch, joined) == tmp_path / "auto-memory"
 
 
-def test_log_dir_faellt_auf_home_zurueck(monkeypatch):
-    expected = os.path.join(os.path.expanduser("~/.claude"), "auto-memory")
-    assert str(_log_dir_with(monkeypatch, None)) == expected
+def test_log_dir_faellt_auf_home_zurueck(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("AI_REM_STATE_DIR", raising=False)
+    (tmp_path / ".claude").mkdir()
+    assert _log_dir_with(monkeypatch, None) == tmp_path / ".claude" / "auto-memory"
+
+
+def test_ohne_claude_liegt_der_state_client_neutral(monkeypatch, tmp_path):
+    # Nur opencode o.a. installiert: kein ~/.claude anlegen, nur weil der Extraktor laeuft.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("AI_REM_STATE_DIR", raising=False)
+    assert _log_dir_with(monkeypatch, None) == tmp_path / ".local" / "share" / "ai-rem" / "state"
 
 
 def test_abgeleitete_pfade_ziehen_mit(monkeypatch, tmp_path):
