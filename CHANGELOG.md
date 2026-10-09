@@ -34,6 +34,8 @@ German).
 ### Changed
 - The "client outdated" toast is gone on opencode 2.x (plugins have no toast API there);
   the hint goes to the log. 1.x keeps the toast.
+- Sample files (`.env.example`, `setup-config.example.json`, compose comments) no longer name
+  a specific host; they use `<ai-rem-host>` as the placeholder for the machine ai-rem runs on.
 
 ## [1.6.0] – 2026-10-07
 
