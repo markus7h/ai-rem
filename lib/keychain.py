@@ -23,6 +23,8 @@ from typing import Callable, Optional
 SERVICE = "ai-rem"
 # Account überschreibbar, damit Selbsttests nicht den echten Token anfassen.
 ACCOUNT = os.environ.get("AI_REM_KEYCHAIN_ACCOUNT", "device-token")
+# Reißleine für security/secret-tool: normal antworten beide in Millisekunden.
+TIMEOUT_S = 15
 
 
 class KeychainError(RuntimeError):
@@ -53,8 +55,10 @@ class _MacBackend:
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     def _security(self, cmd: str):
+        # ponytail: ohne Timeout bliebe der synchrone SessionStart-Hook bei
+        # gesperrtem Keychain (SSH ohne GUI) am Unlock-Prompt hängen.
         return self.run(["security", "-i"], input=cmd + "\n",
-                        capture_output=True, text=True)
+                        capture_output=True, text=True, timeout=TIMEOUT_S)
 
     def get(self) -> str:
         p = self._security("find-generic-password -a %s -s %s -w"
@@ -146,7 +150,8 @@ class _LibsecretBackend:
     def get(self) -> str:
         if self.degraded:
             return self.fallback.get()
-        p = self.run(self._args("lookup"), capture_output=True, text=True)
+        p = self.run(self._args("lookup"), capture_output=True, text=True,
+                     timeout=TIMEOUT_S)
         if p.returncode != 0:
             # Fehlt das Item, liefert lookup rc 1; ein früherer Datei-Fallback
             # (neuer Prozess kennt degraded nicht) muss trotzdem gefunden werden.
@@ -156,7 +161,8 @@ class _LibsecretBackend:
     def set(self, value: str) -> None:
         if not self.degraded:
             p = self.run(self._args("store", "--label=ai-rem device token"),
-                         input=value, capture_output=True, text=True)
+                         input=value, capture_output=True, text=True,
+                         timeout=TIMEOUT_S)
             if p.returncode == 0:
                 self.fallback.delete()  # veralteten Datei-Fallback nicht liegen lassen
                 return
@@ -165,7 +171,8 @@ class _LibsecretBackend:
 
     def delete(self) -> None:
         if not self.degraded:
-            self.run(self._args("clear"), capture_output=True, text=True)
+            self.run(self._args("clear"), capture_output=True, text=True,
+                     timeout=TIMEOUT_S)
         self.fallback.delete()
 
     @property
