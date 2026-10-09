@@ -232,12 +232,24 @@ def store_token(tok):
 
 
 def report_keychain():
+    try:
+        keychain_get()  # erst nach get() weiss libsecret, ob der Token in der Datei liegt
+    except Exception:
+        pass
     backend = keychain_backend()
     REPORT.append(('Keychain (%s)' % backend, True, ''))
-    if backend.startswith('Datei'):
-        print('⚠ Kein OS-Keychain gefunden — der Token liegt als Datei (0600) unter %s.'
-              % os.path.join(AIREM_CFG_DIR, 'keyring'))
+    if not backend.startswith('Datei'):
+        return
+    path = os.path.join(AIREM_CFG_DIR, 'keyring')
+    if backend == _keychain()._FileBackend.name:
+        print('⚠ Kein OS-Keychain gefunden — der Token liegt als Datei (0600) unter %s.' % path)
         print('  Besser: libsecret installieren (apt install libsecret-tools), dann  ai-rem pair')
+    else:
+        # secret-tool ist da, der Keyring nimmt aber nichts an — typisch fuer einen
+        # Server ohne Desktop-Login. Nachinstallieren hilft nicht, die Datei ist hier richtig.
+        reason = backend.split(' — ', 1)[-1].replace(', Fallback', '')
+        print('ℹ Token als Datei (0600) unter %s — %s.' % (path, reason))
+        print('  Auf einem Server ohne Desktop-Login ist das so vorgesehen.')
 
 
 def run(cmd, timeout=120, capture=True, cwd=None):

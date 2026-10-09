@@ -181,3 +181,20 @@ def test_help_und_unbekannte_option_starten_kein_setup(setup, capsys):
         setup.parse_args(["--dry-run"])
     assert e.value.code == 2 and "Unbekannte Option" in capsys.readouterr().out
     assert setup.parse_args(["--client=claude", "-y"])["yes"] is True
+
+
+def test_report_keychain_ohne_secret_tool_empfiehlt_libsecret(setup, monkeypatch, capsys):
+    monkeypatch.setattr(setup, "keychain_backend", lambda: setup._keychain()._FileBackend.name)
+    setup.report_keychain()
+    assert "libsecret installieren" in capsys.readouterr().out
+
+
+def test_report_keychain_gesperrt_empfiehlt_nichts(setup, monkeypatch, capsys):
+    # secret-tool vorhanden, Keyring gesperrt (SSH/headless): kein Rat, libsecret zu
+    # installieren — das ist ja schon da.
+    monkeypatch.setattr(setup, "keychain_backend",
+                        lambda: "Datei (0600) — Schlüsselbund gesperrt (SSH/headless), Fallback")
+    setup.report_keychain()
+    out = capsys.readouterr().out
+    assert "libsecret installieren" not in out
+    assert "Schlüsselbund gesperrt (SSH/headless)." in out and "so vorgesehen" in out

@@ -13,6 +13,19 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.7.1] – 2026-10-09
+
+### Fixed
+- **Keychain hint on headless servers.** On a server without a desktop login (SSH) the
+  login keyring stays locked, so `secret-tool store` fails and the token goes to the 0600
+  file fallback — which is the intended behavior there. Setup still told the user to
+  "install libsecret, then `ai-rem pair`", although `secret-tool` was already installed and
+  re-pairing could not help. The libsecret advice now only appears when `secret-tool` is
+  actually missing; with a locked keyring setup prints a short note naming the reason
+  ("Schlüsselbund gesperrt (SSH/headless)").
+- **`ai-rem doctor` shows where the token really is.** A fresh process that found the token
+  only in the file fallback still reported `Keychain (libsecret)`; it now reports the file.
+
 ## [1.7.0] – 2026-10-09
 
 ### Added
@@ -970,7 +983,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/markus7h/ai-rem/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/markus7h/ai-rem/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/markus7h/ai-rem/compare/v1.5.0...v1.6.0
