@@ -75,3 +75,23 @@ if __name__ == "__main__":
     test_ohne_sektion_leer()
     test_fehler_marker_ist_rotes_x()
     print("OK")
+
+
+def test_auto_memory_frisch_installiert_kein_fehlalarm(tmp_path, monkeypatch):
+    """Frisch angelegtes auto-memory ohne jeden Lauf: noch keine Session geendet,
+    also kein Grund zur Warnung. Nach der Gnadenfrist schon."""
+    base = tmp_path / "auto-memory"
+    base.mkdir()
+    assert sc._auto_memory_fault(str(base)) == ""
+
+    real = sc.time.time()
+    monkeypatch.setattr(sc.time, "time", lambda: real + 2 * 86400)
+    assert "noch nie" in sc._auto_memory_fault(str(base))
+
+
+def test_auto_memory_frisch_mit_fehlern_meldet_trotzdem(tmp_path):
+    """Die Gnadenfrist gilt nur ohne Fehler — Fehlschlaege bleiben sichtbar."""
+    base = tmp_path / "auto-memory"
+    base.mkdir()
+    (base / "errors.log").write_text("2026-10-09T10:00:00\tSessionEnd rc=1\n")
+    assert "noch nie" in sc._auto_memory_fault(str(base))

@@ -559,6 +559,17 @@ def _auto_memory_fault(base):
                 f"Letzter Eintrag: {tail[:200]}{hint} "
                 f"Voll: {err_path}")
     if not last_ok:
+        # ponytail: frisch installiert und noch kein einziger Lauf (auch kein Fehler) —
+        # solange keine Session geendet hat, hatte der Hook nie Anlass zu feuern.
+        # Erst nach der Gnadenfrist ist "nie gespeichert" ein echtes Symptom.
+        if not last_err:
+            try:
+                st = os.stat(base)
+                born = getattr(st, "st_birthtime", st.st_mtime)
+            except OSError:
+                born = 0
+            if born and time.time() - born < 86400:
+                return ""
         return ("⚠️ Auto-Memory hat noch nie erfolgreich gespeichert "
                 "(kein last-run.json) — nichts aus bisherigen Sessions ist im Graph gelandet.")
     age_days = (time.time() - last_ok) / 86400
