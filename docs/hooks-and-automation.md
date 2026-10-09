@@ -111,4 +111,4 @@ A `PostToolUse` hook on `Bash` (`hooks/vault-secret-reminder.py`, timeout 5) sca
 
 **Fail-silent:** it never blocks a Bash call. A false positive costs one superfluous context line; a missed vault lookup costs one avoidable question back to the user. A built-in self-test is available via `python3 hooks/vault-secret-reminder.py --selftest`.
 
-**Install:** deployed automatically by the client setup like the other hooks — `install_hooks()` fetches `vault-secret-reminder.py` to `~/.claude/hooks/` (chmod +x) and registers the `PostToolUse: Bash` hook in `~/.claude/settings.json`.
+**Install:** deployed automatically by the client setup like the other hooks — `install_hooks()` fetches `vault-secret-reminder.py` to `~/.claude/hooks/` (chmod +x) and registers the `PostToolUse: Bash` hook in `~/.claude/settings.json` — but only when mykeyvault is registered in `~/.claude.json` or enabled as a plugin. In an ai-rem-only setup the hook is not deployed and an entry from an earlier run is removed, since its advice would point at a vault that does not exist.

@@ -312,7 +312,7 @@ The setup installs the `ai-rem` CLI and then sets up every frontend it finds (`c
 
 - **No SSH key needed.** Without one the setup shows a code and opens `/pair` in the browser; approve it there (logged into the web UI, works from your phone too) and the setup continues with the ai-rem token. ([How pairing works](docs/authentication.md#pairing-a-new-machine-no-ssh-needed))
 - **One secret per device.** The ai-rem token goes into the OS keychain (macOS Keychain, Linux libsecret, Windows Credential Manager) — nothing else is stored on the machine. The LLM-router key and the mykeyvault access are fetched per run from the server (`/api/client-config`), so rotating them is a server-side change only.
-- **Missing node/npm/git** (for mykeyvault and tools) are installed after one prompt via brew, apt (NodeSource) or winget; `--yes` skips the prompt.
+- **Missing node/npm/git** (only needed when mykeyvault or tools are built from `mcp_register`) are installed after one prompt via brew, apt (NodeSource) or winget; `--yes` skips the prompt.
 - It ends with a ✓/✗ summary, one fix command per ✗, and runs `ai-rem doctor`.
 
 To pick targets explicitly or add one later:

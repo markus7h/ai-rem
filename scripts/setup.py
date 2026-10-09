@@ -265,7 +265,71 @@ def find_claude():
     sys.exit(1)
 
 
+# ── Plugins: MCP-Server, die ein Claude-Code-Plugin mitbringt ────────────────
+# Der tools-registry-Marketplace liefert ai-rem ({command: ai-rem, args: [mcp-proxy]})
+# und mykeyvault ({command: ai-rem, args: [vault-mcp]}) auch als Plugin. Ist eines
+# aktiv, waere ein gleichnamiger Eintrag in ~/.claude.json ein zweiter Server mit
+# demselben Namen — das Setup legt ihn dann nicht an bzw. entfernt ihn.
+
+PLUGIN_SERVERS = ('ai-rem', 'mykeyvault')
+
+
+def plugin_enabled(name):
+    """True, wenn in settings.json → enabledPlugins ein Plugin "<name>@<marketplace>"
+    aktiv (true) ist. Der Marketplace-Name ist bewusst egal (Fork/Umbenennung)."""
+    try:
+        with open(os.path.join(CLAUDE_HOME, 'settings.json'), encoding='utf-8') as f:
+            plugins = json.load(f).get('enabledPlugins') or {}
+        return any(isinstance(k, str) and k.split('@', 1)[0] == name and v is True
+                   for k, v in plugins.items())
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def drop_plugin_duplicates(servers):
+    """Eintraege entfernen, die ein aktives Plugin selbst liefert. Gibt die
+    Namen der Server zurueck, die vom Plugin kommen."""
+    from_plugin = [n for n in PLUGIN_SERVERS if plugin_enabled(n)]
+    for name in from_plugin:
+        if name in servers:
+            del servers[name]
+            print('✓ %s aus ~/.claude.json entfernt - das Plugin %s@… liefert den Server' % (name, name))
+    return from_plugin
+
+
+def dedupe_claude_json():
+    """Fuer --update (ohne update_claude_json): Plugin-Duplikate austragen."""
+    try:
+        with open(CLAUDE_JSON, encoding='utf-8') as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return
+    servers = cfg.get('mcpServers') if isinstance(cfg, dict) else None
+    if not isinstance(servers, dict):
+        return
+    before = len(servers)
+    drop_plugin_duplicates(servers)
+    if len(servers) != before:
+        write_json_atomic(CLAUDE_JSON, cfg)
+
+
+def mykeyvault_registered():
+    """mykeyvault laeuft in Claude Code — als Eintrag in ~/.claude.json oder per Plugin.
+    Davon haengt der vault-secret-reminder-Hook ab: ohne Vault waere sein Rat
+    ("Secret aus mykeyvault holen") in einem Nur-ai-rem-Setup falsch."""
+    if plugin_enabled('mykeyvault'):
+        return True
+    try:
+        with open(CLAUDE_JSON, encoding='utf-8') as f:
+            return 'mykeyvault' in (json.load(f).get('mcpServers') or {})
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def register_mcp(claude):
+    if plugin_enabled('ai-rem'):
+        print('✓ ai-rem-MCP kommt vom Plugin ai-rem@… - keine eigene Registrierung')
+        return
     try:
         listed = run([claude, 'mcp', 'list'], timeout=60).stdout or ''
     except Exception:
@@ -654,6 +718,15 @@ def _build_node_mcp(repo, install_dir, entry, subdir, label):
     return ''
 
 
+def needs_node_builds(setup_cfg):
+    """True, wenn mcp_register einen Build verlangt: mykeyvault.stdio (lokaler
+    Vault-MCP) oder tools.stdio.registry_url (tools-registry). Nur dann braucht
+    das Setup node/npm/git."""
+    reg = setup_cfg.get('mcp_register') or {}
+    return bool(((reg.get('mykeyvault') or {}).get('stdio'))
+                or ((reg.get('tools') or {}).get('stdio') or {}).get('registry_url'))
+
+
 def build_tools_mcp(setup_cfg):
     stdio = setup_cfg.get('mcp_register', {}).get('tools', {}).get('stdio', {})
     reg_url = stdio.get('registry_url', '')
@@ -690,23 +763,29 @@ def update_claude_json(setup_cfg, mcp_endpoint, tools_entry, tools_reg_url, vaul
     with open(cj, encoding='utf-8') as f:
         cfg = json.load(f)
     servers = cfg.setdefault('mcpServers', {})
-    if 'ai-rem' not in servers:
-        print('⚠ ai-rem nicht in ~/.claude.json registriert - MCP-Eintraege uebersprungen')
-        return False
+    # Aktive Plugins liefern ai-rem/mykeyvault selbst: keine Doppel-Eintraege.
+    from_plugin = drop_plugin_duplicates(servers)
 
     cmd, cargs = cli_invocation()
 
     # (1) ai-rem: stdio-Proxy. url/headers einer alten http-Registrierung fallen weg.
-    old = servers['ai-rem'] if isinstance(servers['ai-rem'], dict) else {}
-    was_http = 'url' in old or 'headers' in old
-    servers['ai-rem'] = {'type': 'stdio', 'command': cmd, 'args': cargs + ['mcp-proxy']}
-    print('✓ ai-rem ' + ('von http auf stdio-Proxy migriert' if was_http else 'als stdio-Proxy eingetragen'))
+    # Fehlt der Eintrag (Plugin oder abweichender Config-Pfad), laufen Hooks und
+    # Settings trotzdem weiter — der Aufrufer bricht hier nicht mehr ab.
+    if 'ai-rem' in from_plugin:
+        print('✓ ai-rem-MCP kommt vom Plugin - kein Eintrag in ~/.claude.json')
+    else:
+        old = servers.get('ai-rem') if isinstance(servers.get('ai-rem'), dict) else {}
+        was_http = 'url' in old or 'headers' in old
+        servers['ai-rem'] = {'type': 'stdio', 'command': cmd, 'args': cargs + ['mcp-proxy']}
+        print('✓ ai-rem ' + ('von http auf stdio-Proxy migriert' if was_http else 'als stdio-Proxy eingetragen'))
 
     # (2) mykeyvault: bevorzugt lokaler stdio-MCP via `ai-rem vault-mcp` (voller
     # Funktionsumfang inkl. exec/file-Tools), sonst HTTP-Fallback ueber den Proxy
     # (nur list/create) — beides ohne Token in der Datei.
     reg = setup_cfg.get('mcp_register', {}).get('mykeyvault', {})
-    if vault_entry:
+    if 'mykeyvault' in from_plugin:
+        print('✓ mykeyvault-MCP kommt vom Plugin - kein Eintrag in ~/.claude.json')
+    elif vault_entry:
         existed = 'mykeyvault' in servers
         servers['mykeyvault'] = {'type': 'stdio', 'command': cmd, 'args': cargs + ['vault-mcp']}
         print('✓ mykeyvault ' + ('migriert' if existed else 'registriert') + ' (stdio via ai-rem vault-mcp)')
@@ -800,13 +879,17 @@ def write_settings_template(setup_cfg, mcp_endpoint):
 
 # ── Hooks deployen ────────────────────────────────────────────────────────────
 
-def install_hooks():
+def install_hooks(vault_reminder=True):
+    """vault_reminder=False: Nur-ai-rem-Setup ohne mykeyvault — der Hook wuerde bei
+    jedem Auth-Fehler auf einen Vault verweisen, den es nicht gibt."""
     paths = {}
-    for fname, label in (('system-check.py', 'SessionStart-Hook'),
-                         ('auto-memory.py', 'Auto-Memory-Hook'),
-                         ('claude-md-guard.py', 'CLAUDE.md-Guard-Hook'),
-                         ('save-plan.py', 'Plan-Saving-Hook'),
-                         ('vault-secret-reminder.py', 'Vault-Secret-Reminder-Hook')):
+    hooks = [('system-check.py', 'SessionStart-Hook'),
+             ('auto-memory.py', 'Auto-Memory-Hook'),
+             ('claude-md-guard.py', 'CLAUDE.md-Guard-Hook'),
+             ('save-plan.py', 'Plan-Saving-Hook')]
+    if vault_reminder:
+        hooks.append(('vault-secret-reminder.py', 'Vault-Secret-Reminder-Hook'))
+    for fname, label in hooks:
         dst = os.path.join(CLAUDE_HOME, 'hooks', fname)
         if fetch_to(KG_URL + '/hooks/' + fname, dst):
             if not IS_WIN:
@@ -898,7 +981,7 @@ def link_cli(cli_path):
 
 # ── settings.json: Permissions, Hooks registrieren, alte Hooks entfernen ─────
 
-def update_settings(setup_cfg, mcp_endpoint, hook_paths):
+def update_settings(setup_cfg, mcp_endpoint, hook_paths, vault_reminder=True):
     path = os.path.join(CLAUDE_HOME, 'settings.json')
     tmpl_path = os.path.join(CLAUDE_HOME, 'settings-template.json')
     data = {}
@@ -1003,13 +1086,27 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
     # Erinnert bei Auth-/401-Fehlern daran, das Secret aus dem Vault zu holen statt
     # den User um Token/Login zu bitten (Bash-Matcher, gleiche Gruppe wie andere
     # Bash-PostToolUse-Hooks).
-    vault_reminder = hook_paths.get('vault-secret-reminder.py', '')
+    # Ohne mykeyvault (vault_reminder=False) einen Eintrag frueherer Laeufe austragen.
+    vault_reminder_path = hook_paths.get('vault-secret-reminder.py', '')
     vault_reminder_added = False
-    if vault_reminder:
+    vault_reminder_removed = False
+    if vault_reminder and vault_reminder_path:
         g = hook_group('PostToolUse', 'Bash')
-        if not has_hook(g, vault_reminder):
-            g['hooks'].append({'type': 'command', 'command': hook_command(vault_reminder), 'timeout': 5})
+        if not has_hook(g, vault_reminder_path):
+            g['hooks'].append({'type': 'command', 'command': hook_command(vault_reminder_path), 'timeout': 5})
             vault_reminder_added = True
+    elif not vault_reminder:
+        groups = hooks.get('PostToolUse', [])
+        for g in groups:
+            kept = [h for h in g.get('hooks', [])
+                    if 'vault-secret-reminder.py' not in h.get('command', '')]
+            if len(kept) != len(g.get('hooks', [])):
+                g['hooks'] = kept
+                vault_reminder_removed = True
+        if vault_reminder_removed:
+            hooks['PostToolUse'] = [g for g in groups if g.get('hooks')]
+            if not hooks['PostToolUse']:
+                del hooks['PostToolUse']
 
     # Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
     # - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
@@ -1059,6 +1156,7 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
                  '  CLAUDE.md-Guard-Hook' if guard_added else '',
                  '  Plan-Saving-Hook' if save_plan_added else '',
                  '  Vault-Secret-Reminder-Hook' if vault_reminder_added else '',
+                 '  Vault-Secret-Reminder-Hook ausgetragen (kein mykeyvault)' if vault_reminder_removed else '',
                  '  autoMemoryEnabled=false'):
         if line:
             print(line)
@@ -1723,9 +1821,11 @@ def update_claude(setup_cfg, mcp_endpoint):
     print('--- Claude Code ---')
     os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
     os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
+    dedupe_claude_json()
     write_settings_template(setup_cfg, mcp_endpoint)
-    hook_paths = install_hooks()
-    update_settings(setup_cfg, mcp_endpoint, hook_paths)
+    vault = mykeyvault_registered()
+    hook_paths = install_hooks(vault_reminder=vault)
+    update_settings(setup_cfg, mcp_endpoint, hook_paths, vault_reminder=vault)
     install_commands()
 
 
@@ -1785,8 +1885,10 @@ def install_claude(setup_cfg, mcp_endpoint, tools_entry, tools_reg_url, vault_en
         print('⚠ ~/.claude.json-Update fehlgeschlagen: %s' % ex)
 
     write_settings_template(setup_cfg, mcp_endpoint)
-    hook_paths = install_hooks()
-    update_settings(setup_cfg, mcp_endpoint, hook_paths)
+    # Nach update_claude_json: erst jetzt steht fest, ob mykeyvault registriert ist.
+    vault = mykeyvault_registered()
+    hook_paths = install_hooks(vault_reminder=vault)
+    update_settings(setup_cfg, mcp_endpoint, hook_paths, vault_reminder=vault)
 
     # Auto-Memory md-Fallback: leere Datei (wird via @import in CLAUDE.md geladen)
     fb = os.path.join(CLAUDE_HOME, 'auto-memory', 'fallback.md')
@@ -1854,7 +1956,11 @@ def main():
     # ueberschrieben zu werden; migrate_secrets() hat ihn ggf. gerade erst gerettet.
     tools_entry, tools_reg_url, vault_entry = '', '', None
     if ('claude' in targets or 'opencode' in targets) and setup_cfg.get('mcp_register'):
-        ensure_deps()
+        # node/npm/git nur, wenn wirklich ein Build ansteht — ein Nur-ai-rem-Setup
+        # (mcp_register ohne stdio-Bloecke) braucht sie nicht und soll auch nicht
+        # nach ihnen fragen.
+        if needs_node_builds(setup_cfg):
+            ensure_deps()
         tools_entry, tools_reg_url = build_tools_mcp(setup_cfg)
         vault_entry = build_mykeyvault_mcp(setup_cfg)
         if tools_reg_url:

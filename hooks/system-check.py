@@ -318,8 +318,33 @@ def _check_one_stdio(name, path):
         return False
 
 
+def _active_mcp_names():
+    """Namen der MCP-Server, die Claude Code tatsaechlich startet: Eintraege in
+    ~/.claude.json mcpServers plus aktive Plugins (settings.json enabledPlugins
+    "<name>@<marketplace>": true — z.B. ai-rem@tools-registry, das den Server
+    selbst mitbringt)."""
+    names = set()
+    try:
+        with open(CLAUDE_JSON) as f:
+            names.update((json.load(f).get("mcpServers") or {}).keys())
+    except Exception:
+        pass
+    try:
+        with open(SETTINGS) as f:
+            plugins = json.load(f).get("enabledPlugins") or {}
+        names.update(k.split("@", 1)[0] for k, v in plugins.items() if v is True)
+    except Exception:
+        pass
+    return names
+
+
 def check_mcp_servers():
-    if not MCP_STDIO_SERVERS:
+    # Nur pruefen, was auch registriert ist: ein Nur-ai-rem-Setup (ohne
+    # mykeyvault/tools) erbt mcp_stdio_servers aus der setup-config und meldete
+    # sonst bei jedem Start "❌ mykeyvault, tools" fuer Server, die es gar nicht gibt.
+    active = _active_mcp_names()
+    servers = {n: p for n, p in MCP_STDIO_SERVERS.items() if n in active}
+    if not servers:
         return
 
     server_results = {}
@@ -328,7 +353,7 @@ def check_mcp_servers():
         server_results[name] = _check_one_stdio(name, path)
 
     threads = []
-    for name, path in MCP_STDIO_SERVERS.items():
+    for name, path in servers.items():
         t = threading.Thread(target=check_one, args=(name, path))
         threads.append(t)
         t.start()
@@ -337,8 +362,8 @@ def check_mcp_servers():
         t.join(timeout=MCP_STDIO_TIMEOUT + 2)
 
     ok = [n for n, v in server_results.items() if v]
-    fail = [n for n in MCP_STDIO_SERVERS if not server_results.get(n)]
-    total = len(MCP_STDIO_SERVERS)
+    fail = [n for n in servers if not server_results.get(n)]
+    total = len(servers)
 
     if fail:
         results.append(f"MCP: {len(ok)}/{total}, ❌ {', '.join(fail)}")

@@ -317,7 +317,7 @@ Das Setup installiert die `ai-rem`-CLI und richtet danach jedes gefundene Fronte
 
 - **Kein SSH-Key nötig.** Ohne ihn zeigt das Setup einen Code und öffnet `/pair` im Browser; dort freigeben (eingeloggt in der Web-UI, geht auch am Handy), und das Setup läuft mit dem ai-rem-Token weiter. ([So funktioniert die Kopplung](docs/authentication.de.md#neuen-rechner-koppeln-ohne-ssh))
 - **Ein Secret pro Gerät.** Der ai-rem-Token landet im OS-Keychain (macOS Keychain, Linux libsecret, Windows Credential Manager) — sonst wird auf dem Rechner nichts gespeichert. LLM-Router-Key und mykeyvault-Zugang holen sich die Clients pro Lauf vom Server (`/api/client-config`); eine Rotation ist damit nur noch eine Änderung am Server.
-- **Fehlende node/npm/git** (für mykeyvault und tools) installiert es nach einer Rückfrage per brew, apt (NodeSource) oder winget; `--yes` überspringt die Rückfrage.
+- **Fehlende node/npm/git** (nur nötig, wenn mykeyvault oder tools aus `mcp_register` gebaut werden) installiert es nach einer Rückfrage per brew, apt (NodeSource) oder winget; `--yes` überspringt die Rückfrage.
 - Am Ende steht eine ✓/✗-Übersicht mit genau einem Befehl je ✗, danach läuft `ai-rem doctor`.
 
 Ziele explizit wählen oder später nachrüsten:

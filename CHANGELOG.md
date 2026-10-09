@@ -58,12 +58,31 @@ German).
   override only — the source is `/api/client-config`.
 - Generic snippets (Gemini CLI, Cursor) use the stdio proxy
   `{"command": "ai-rem", "args": ["mcp-proxy"]}`; Codex keeps `$(ai-rem token)`.
+- **Plugins take precedence over `~/.claude.json`.** With an `ai-rem@…` / `mykeyvault@…`
+  plugin enabled in `settings.json` → `enabledPlugins` (any marketplace, e.g. the
+  tools-registry plugins that start `ai-rem mcp-proxy` / `ai-rem vault-mcp`), the setup
+  does not create the same-named `mcpServers` entry and removes an existing one with a
+  notice (`ai-rem update` as well) — never two servers of the same name. A missing
+  `ai-rem` entry no longer aborts `update_claude_json`; hooks and settings are installed
+  either way.
+- `node`/`npm`/`git` are only checked for and installed when `mcp_register` actually asks
+  for a build (`mykeyvault.stdio` or `tools.stdio.registry_url`), not for every
+  `mcp_register`.
 
 ### Removed
 - Plain-text token files `~/.config/ai-rem/token` and `~/.config/ai-rem/vault.token`,
   `~/.claude/ai-rem-vault.env`, and `AI_REM_LLM_API_KEY` in `~/.claude/settings.json` →
   `env` (the 1.2.0 note below describes that write; it no longer happens).
 - `--refresh` in `system-check.py` — there is no header left to refresh.
+
+### Fixed
+- **ai-rem-only setups (no mykeyvault/tools):** `vault-secret-reminder.py` is only deployed
+  and registered as a `PostToolUse` hook when mykeyvault is registered (in
+  `~/.claude.json` or as a plugin); otherwise an entry from an earlier run is removed —
+  its advice pointed at a vault that does not exist.
+- The SessionStart check (`system-check.py`) only tests the `mcp_stdio_servers` that are
+  registered in `~/.claude.json` or come from an enabled plugin, instead of reporting
+  `❌ mykeyvault, tools` for servers that were never set up.
 
 ### Security
 - `/setup-config` is public (onboarding runs before the first token) and handed out the
