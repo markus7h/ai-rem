@@ -204,6 +204,11 @@ def test_cli_drift_beachtet_ziele(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     cli = _load("ai_rem_cli_mc", ROOT / "bin" / "ai-rem")
+    # lib.mcp_client legt CLIENT_JSON beim ersten Import fest (echtes HOME, ggf.
+    # schon durch einen frueheren Test) — load_client_cfg() liest sonst die
+    # client.json der Workstation, und deren targets schlagen die Datei-Erkennung.
+    mc = sys.modules[cli.load_client_cfg.__module__]
+    monkeypatch.setattr(mc, "CLIENT_JSON", str(tmp_path / "cfg" / "ai-rem" / "client.json"))
     body = b"x"
     sha = hashlib.sha256(body).hexdigest()
     share = tmp_path / ".local" / "share" / "ai-rem" / "bin"
