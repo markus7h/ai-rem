@@ -25,7 +25,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, List, Optional
 
-from .mcp_client import MCPClient, load_client_cfg
+from .mcp_client import MCPClient
 
 # Muss demselben Config-Dir folgen wie hooks/auto-memory.py und hooks/system-check.py:
 # der Hook schreibt errors.log nach $CLAUDE_CONFIG_DIR/auto-memory, der Extraktor
@@ -58,14 +58,47 @@ MIN_TRANSCRIPT_CHARS = 500
 # Workstation, und myai schläft 23:00-06:00 — direkt adressiert fiel die
 # Extraktion nachts stumm auf die Markdown-Notiz zurück. Der Router hat für
 # genau den Fall den Kimi-Fallback.
-# Claude Code setzt die Werte per settings.json-env; andere Clients (opencode-Plugin)
-# haben keinen solchen Kanal — fuer sie traegt scripts/setup.py sie in client.json ein.
-_CLIENT_CFG = load_client_cfg()
-LLAMA_URL = os.environ.get("AI_REM_LLAMA_URL", os.environ.get(
-    "AI_REM_OLLAMA_URL", _CLIENT_CFG.get("llm_url") or "http://mystorage.lan:11437"))
+#
+# URL und Key sind hier nur noch Defaults (Env, sonst fest). Den Rest liefert der
+# Server pro Lauf ueber /api/client-config — siehe configure_llm(): so liegt der
+# Router-Key nicht mehr im Klartext in settings.json/client.json jeder Workstation.
+LLAMA_URL = (os.environ.get("AI_REM_LLAMA_URL") or os.environ.get("AI_REM_OLLAMA_URL")
+             or "http://mystorage.lan:11437")
 # Der Router verlangt einen Key. Leer = kein Authorization-Header, dann geht es
 # weiter direkt gegen einen llama-server ohne --api-key.
-LLM_API_KEY = (os.environ.get("AI_REM_LLM_API_KEY") or _CLIENT_CFG.get("llm_api_key") or "").strip()
+LLM_API_KEY = (os.environ.get("AI_REM_LLM_API_KEY") or "").strip()
+# Wirksame Werte; call_llm/_llama_up lesen nur hier. Ohne configure_llm gelten die Defaults.
+_LLM = {"url": LLAMA_URL, "key": LLM_API_KEY}
+_old_server_warned = False
+
+
+def configure_llm(client) -> dict:
+    """LLM-URL/-Key fuer diesen Lauf festlegen: Env > /api/client-config > Default.
+
+    Nur wenn Env nicht schon beides liefert, wird der Server gefragt — spart den
+    Roundtrip und laesst Installationen mit settings.json-env unveraendert laufen.
+    Server < 1.7 (kein /api/client-config) ohne Key: einmaliger Hinweis; der
+    Ingest laeuft weiter und landet ueber den llm_down-Fallback im Markdown."""
+    global _old_server_warned
+    url = os.environ.get("AI_REM_LLAMA_URL") or os.environ.get("AI_REM_OLLAMA_URL") or ""
+    key = (os.environ.get("AI_REM_LLM_API_KEY") or "").strip()
+    cfg: dict = {}
+    if not (url and key):
+        fetch = getattr(client, "client_config", None)
+        if callable(fetch):
+            try:
+                cfg = fetch() or {}
+            except Exception:
+                cfg = {}
+    url = url or cfg.get("llm_url") or "http://mystorage.lan:11437"
+    key = key or (cfg.get("llm_api_key") or "").strip()
+    _LLM["url"] = url.rstrip("/")
+    _LLM["key"] = key
+    if not key and getattr(client, "server_too_old", False) and not _old_server_warned:
+        _old_server_warned = True
+        print("Server < 1.7: LLM-Key nicht abrufbar — Server aktualisieren oder "
+              "AI_REM_LLM_API_KEY setzen", file=sys.stderr)
+    return dict(_LLM)
 # Modellgruppe am Router (zwei GPU-Deployments + Kimi-Fallback), nicht ein Host.
 LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "qwen").strip()
 # Ein 45k-Transcript braucht auf dem 24b-Q4 real ~5 min. Der Hook laeuft detached,
@@ -259,8 +292,8 @@ def _build_system_prompt(known_names: List[str]) -> str:
 
 def _llm_headers() -> dict:
     h = {"Content-Type": "application/json"}
-    if LLM_API_KEY:
-        h["Authorization"] = f"Bearer {LLM_API_KEY}"
+    if _LLM["key"]:
+        h["Authorization"] = f"Bearer {_LLM['key']}"
     return h
 
 
@@ -272,7 +305,7 @@ def _llama_up() -> bool:
     damit bezahlten OpenRouter-Traffic eingeschlossen. Bei jedem Session-Ende.
     """
     try:
-        req = urllib.request.Request(f"{LLAMA_URL}/v1/models", headers=_llm_headers())
+        req = urllib.request.Request(f"{_LLM['url']}/v1/models", headers=_llm_headers())
         with urllib.request.urlopen(req, timeout=3) as r:
             return getattr(r, "status", 200) == 200
     except Exception:
@@ -295,7 +328,7 @@ def call_llm(transcript: str, model: str, system_prompt: str) -> dict:
         }
     ).encode()
     req = urllib.request.Request(
-        f"{LLAMA_URL}/v1/chat/completions",
+        f"{_LLM['url']}/v1/chat/completions",
         data=body,
         headers=_llm_headers(),
         method="POST",
@@ -304,7 +337,7 @@ def call_llm(transcript: str, model: str, system_prompt: str) -> dict:
         with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as resp:
             envelope = json.loads(resp.read().decode())
     except urllib.error.URLError as e:
-        raise RuntimeError(f"llama-server unreachable ({LLAMA_URL}): {e}") from e
+        raise RuntimeError(f"llama-server unreachable ({_LLM['url']}): {e}") from e
 
     content = (envelope.get("choices", [{}])[0]
                .get("message", {}).get("content", "") or "").strip()
@@ -465,6 +498,7 @@ def catchup(client: MCPClient, log_dir: Optional[Path] = None) -> dict:
     llama-server wieder erreichbar ist — danach das md leeren. No-op wenn nichts ansteht."""
     if not PENDING_JSONL.exists():
         return {"skipped": "empty"}
+    configure_llm(client)
     if not _llama_up():
         return {"skipped": "llm_down"}
     log_dir = log_dir or LOG_DIR
@@ -522,6 +556,7 @@ def ingest_transcript(
     if not transcript_path.exists():
         raise FileNotFoundError(transcript_path)
 
+    configure_llm(client)
     model = model or LLM_MODEL
 
     log_dir = log_dir or LOG_DIR

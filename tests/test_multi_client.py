@@ -185,16 +185,45 @@ def test_cli_drift_beachtet_ziele(tmp_path, monkeypatch):
 
 # ── Token-Suche ───────────────────────────────────────────────────────────────
 
-def test_token_aus_client_json_vor_claude_json(tmp_path, monkeypatch):
+def test_token_reihenfolge_env_keychain_legacy(tmp_path, monkeypatch, capsys):
+    """Env > Keychain > Klartext-Altlasten (token_file, dann ~/.claude.json-Header).
+    Die Altlasten werden nur gelesen und einmal pro Prozess gemeldet; der alte
+    Vault-Fallback existiert nicht mehr."""
     import lib.mcp_client as mc
+    from lib import keychain
     tf = tmp_path / "token"
     tf.write_text("aus-datei\n")
     cj = tmp_path / "client.json"
     cj.write_text(json.dumps({"token_file": str(tf), "endpoint": "https://kg/mcp"}))
     monkeypatch.setattr(mc, "CLIENT_JSON", str(cj))
+    monkeypatch.setattr(mc, "_legacy_warned", False)
     monkeypatch.delenv("AI_REM_TOKEN", raising=False)
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "nix"))
-    assert mc._resolve_token() == "aus-datei"
+    cdir = tmp_path / "claude"
+    cdir.mkdir()
+    (cdir / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "ai-rem": {"headers": {"Authorization": "Bearer aus-header"}},  # pragma: allowlist secret
+        "mykeyvault": {"env": {"VAULT_API_URL": "http://vault", "VAULT_API_TOKEN": "vt"}}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cdir))
+    monkeypatch.setattr(keychain, "get", lambda: "")
+    monkeypatch.setattr(keychain, "backend_name", lambda: "Fake")
+
+    assert mc._resolve_token_with_source() == ("aus-datei", "Klartext-Legacy (%s)" % tf)
+    assert "Klartext" in capsys.readouterr().err
     assert mc._default_endpoint() == "https://kg/mcp"
+    tf.unlink()
+    assert mc._resolve_token_with_source() == ("aus-header", "Klartext-Legacy (~/.claude.json)")
+    assert capsys.readouterr().err == "", "Legacy-Hinweis nur einmal pro Prozess"
+
+    monkeypatch.setattr(keychain, "get", lambda: "aus-keychain")
+    assert mc._resolve_token_with_source() == ("aus-keychain", "Keychain (Fake)")
     monkeypatch.setenv("AI_REM_TOKEN", "env")
     assert mc._resolve_token() == "env", "Env muss gewinnen"
+
+    # Nichts gefunden: leer statt Vault-Roundtrip (zirkulaer seit 1.7).
+    monkeypatch.delenv("AI_REM_TOKEN")
+    monkeypatch.setattr(keychain, "get", lambda: "")
+    (cdir / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "mykeyvault": {"env": {"VAULT_API_URL": "http://vault", "VAULT_API_TOKEN": "vt"}}}}))
+    monkeypatch.setattr(mc.urllib.request, "urlopen",
+                        lambda *a, **kw: pytest.fail("kein Netz bei der Token-Suche"))
+    assert mc._resolve_token_with_source() == ("", "")

@@ -19,13 +19,20 @@ import argparse
 import hashlib
 import json
 import os
+import queue
+import shutil
 import subprocess
 import tempfile
+import threading
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(REPO))
 
-from lib.mcp_client import CLIENT_JSON, MCPClient, MCPError, load_client_cfg  # noqa: E402
+from lib import keychain  # noqa: E402
+from lib.mcp_client import (  # noqa: E402
+    CLIENT_JSON, MCPClient, MCPError, iter_sse_events, load_client_cfg,
+)
 
 
 def _print(out: str) -> None:
@@ -235,14 +242,273 @@ def cmd_catchup(c: MCPClient, a):
 
 
 def cmd_token(c: MCPClient, a):
-    # Token wird beim Client-Aufbau schon aufgeloest (Env AI_REM_TOKEN →
-    # ~/.claude.json header → Vault), siehe lib/mcp_client._resolve_token.
+    """Token ausgeben, oder mit --store/--forget den Keychain-Eintrag pflegen.
+
+    --store liest von stdin (nie aus argv — dort stuende der Token in der
+    Prozessliste und Shell-History); setup.py und `ai-rem pair` nutzen denselben Weg."""
+    if a.store:
+        tok = sys.stdin.read().strip()
+        if not tok:
+            sys.stderr.write("ai-rem: kein Token auf stdin (Aufruf: echo <token> | ai-rem token --store)\n")
+            sys.exit(2)
+        try:
+            keychain.set(tok)
+        except keychain.KeychainError as e:
+            sys.stderr.write(f"ai-rem: Keychain-Fehler: {e}\n")
+            sys.exit(1)
+        _print(f"✓ Token im {keychain.backend_name()} gespeichert")
+        return
+    if a.forget:
+        try:
+            keychain.delete()
+        except keychain.KeychainError as e:
+            sys.stderr.write(f"ai-rem: Keychain-Fehler: {e}\n")
+            sys.exit(1)
+        _print(f"✓ Token aus {keychain.backend_name()} entfernt")
+        return
+    # Token wird beim Client-Aufbau aufgeloest (Env → Keychain → Klartext-Altlasten),
+    # siehe lib/mcp_client._resolve_token_with_source.
     if not c.token:
         sys.stderr.write(
-            "ai-rem: kein Token gefunden (AI_REM_TOKEN, ~/.config/ai-rem/token, ~/.claude.json oder Vault)\n"
+            "ai-rem: kein Token gefunden — `ai-rem pair` koppelt dieses Geraet "
+            "(oder AI_REM_TOKEN setzen)\n"
         )
         sys.exit(1)
     _print(f"Bearer {c.token}" if a.header else c.token)
+
+
+# ── stdio-Proxys fuer MCP-Clients ───────────────────────────────────────────
+# Claude Code/opencode sprechen ai-rem und mykeyvault nicht mehr direkt (dafuer
+# muessten Token im Klartext in ihrer Config stehen), sondern starten die CLI als
+# stdio-Server. Die holt den ai-rem-Token aus dem Keychain und alles Weitere
+# ueber /api/client-config — auf der Platte bleibt nur der Keychain-Eintrag.
+
+class _McpProxy:
+    """stdio ↔ Streamable-HTTP-Bruecke: NDJSON auf stdin → POST <endpoint>,
+    Antworten (JSON oder SSE-Events) als je eine Zeile auf stdout.
+
+    Pro Nachricht ein Thread: Claude Code schickt nach `initialize` mehrere
+    Requests parallel, und ein langsamer tools/call darf tools/list nicht blockieren.
+    stdin liest ein eigener Thread in eine Queue, damit die Hauptschleife auch dann
+    aussteigen kann (Session verloren → Exit 1, Claude Code startet den Server neu),
+    wenn gerade keine Zeile ankommt. Alle Diagnosen gehen nach stderr; stdout ist
+    ausschliesslich Protokoll."""
+
+    def __init__(self, endpoint: str, token: str, client_name: str = "",
+                 stdin=None, stdout=None, timeout: float = 600.0):
+        self.endpoint = endpoint
+        self.token = token
+        self.client_name = client_name
+        self.stdin = stdin if stdin is not None else getattr(sys.stdin, "buffer", sys.stdin)
+        self.stdout = stdout if stdout is not None else getattr(sys.stdout, "buffer", sys.stdout)
+        # Tool-Calls (z.B. memory_get_context mit Embeddings) duerfen dauern; die
+        # 15 s des MCPClient sind fuer einen interaktiven Server zu knapp.
+        self.timeout = timeout
+        self._out_lock = threading.Lock()
+        self._sid = None
+        self._proto = None
+        self._stop = threading.Event()
+        self._exit_code = 0
+        self._threads = []
+
+    # -- Ausgabe ------------------------------------------------------------
+    def _write(self, text: str) -> None:
+        with self._out_lock:
+            self.stdout.write(text.encode("utf-8") + b"\n")
+            self.stdout.flush()
+
+    def _emit_json(self, obj) -> None:
+        self._write(json.dumps(obj, ensure_ascii=False))
+
+    def _emit_error(self, rid, code: int, message: str) -> None:
+        # Notifications (ohne id) bekommen laut JSON-RPC keine Antwort — nur stderr.
+        if rid is not None:
+            self._emit_json({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
+
+    def _emit_payload(self, text: str, is_init: bool) -> None:
+        """Ein Server-Event/-Body als NDJSON-Zeile. Re-serialisiert, weil ein SSE-
+        Event ueber mehrere data:-Zeilen gehen kann und stdout Zeilen braucht."""
+        text = text.strip()
+        if not text:
+            return
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            print(f"ai-rem mcp-proxy: unlesbares Server-Event verworfen: {text[:120]}", file=sys.stderr)
+            return
+        if is_init and isinstance(obj, dict):
+            pv = (obj.get("result") or {}).get("protocolVersion")
+            if pv:
+                self._proto = str(pv)
+        self._emit_json(obj)
+
+    # -- HTTP ---------------------------------------------------------------
+    def _headers(self) -> dict:
+        h = {"Content-Type": "application/json",
+             "Accept": "application/json, text/event-stream"}
+        if self.token:
+            h["Authorization"] = f"Bearer {self.token}"
+        if self.client_name:
+            h["X-AI-REM-Client"] = self.client_name
+        if self._sid:
+            h["mcp-session-id"] = self._sid
+        if self._proto:
+            h["MCP-Protocol-Version"] = self._proto
+        return h
+
+    def _handle(self, line: bytes, msg) -> None:
+        rid = msg.get("id") if isinstance(msg, dict) else None
+        is_init = isinstance(msg, dict) and msg.get("method") == "initialize"
+        req = urllib.request.Request(self.endpoint, data=line, headers=self._headers(), method="POST")
+        try:
+            resp = urllib.request.urlopen(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            self._http_error(e, rid)
+            return
+        except Exception as e:  # URLError, socket.timeout, …
+            print(f"ai-rem mcp-proxy: {self.endpoint} nicht erreichbar: {e}", file=sys.stderr)
+            self._emit_error(rid, -32000, f"ai-rem: Endpoint nicht erreichbar ({e})")
+            return
+        with resp:
+            if is_init:
+                sid = resp.headers.get("mcp-session-id")
+                if sid:
+                    self._sid = sid
+            status = getattr(resp, "status", None) or resp.getcode()
+            if status in (202, 204):
+                return  # Notification/Response angenommen — nichts zurueckzugeben
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype == "text/event-stream":
+                # Zeilenweise live lesen: der Server kann mehrere Events schicken
+                # (Progress-Notifications vor dem Result) — jedes wird sofort zur Zeile.
+                for event in iter_sse_events(iter(resp.readline, b"")):
+                    self._emit_payload(event, is_init)
+            else:
+                self._emit_payload(resp.read().decode("utf-8", "replace"), is_init)
+
+    def _http_error(self, e, rid) -> None:
+        body = b""
+        try:
+            body = e.read()
+        except Exception:
+            pass
+        if e.code == 401:
+            print("ai-rem mcp-proxy: Token ungueltig (HTTP 401) — `ai-rem pair` ausfuehren",
+                  file=sys.stderr)
+            self._emit_error(rid, -32001, "ai-rem: Token ungültig — `ai-rem pair` ausführen")
+            return
+        if e.code == 404 and self._sid:
+            # Server neu gestartet, Session weg: Fehler durchreichen und beenden —
+            # Claude Code startet den stdio-Server neu und initialisiert sauber.
+            print("ai-rem mcp-proxy: Session vom Server verworfen (HTTP 404) — beende, "
+                  "Client verbindet neu", file=sys.stderr)
+            self._emit_error(rid, -32000, "ai-rem: Session verloren (HTTP 404) — Reconnect")
+            self._exit_code = 1
+            self._stop.set()
+            return
+        # Sonst: hat der Server eine JSON-RPC-Antwort im Body (fastmcp antwortet bei
+        # Protokollfehlern mit 400 + Error-Objekt), geht die 1:1 durch.
+        try:
+            obj = json.loads(body.decode("utf-8", "replace"))
+            if isinstance(obj, dict) and obj.get("jsonrpc") == "2.0":
+                self._emit_json(obj)
+                return
+        except ValueError:
+            pass
+        print(f"ai-rem mcp-proxy: HTTP {e.code} vom Endpoint: {body[:200]!r}", file=sys.stderr)
+        self._emit_error(rid, -32000, f"ai-rem: HTTP {e.code} vom Endpoint")
+
+    def _delete_session(self) -> None:
+        if not self._sid:
+            return
+        hdr = {"mcp-session-id": self._sid}
+        if self.token:
+            hdr["Authorization"] = f"Bearer {self.token}"
+        try:
+            req = urllib.request.Request(self.endpoint, headers=hdr, method="DELETE")
+            with urllib.request.urlopen(req, timeout=3) as r:
+                r.read()
+        except Exception:
+            pass  # best effort — der Server raeumt verwaiste Sessions selbst ab
+
+    # -- Hauptschleife ------------------------------------------------------
+    def _reader(self, q: "queue.Queue") -> None:
+        try:
+            for raw in iter(self.stdin.readline, b""):
+                q.put(raw)
+        finally:
+            q.put(None)
+
+    def run(self) -> int:
+        q: "queue.Queue" = queue.Queue()
+        threading.Thread(target=self._reader, args=(q,), daemon=True).start()
+        while not self._stop.is_set():
+            try:
+                raw = q.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if raw is None:
+                break  # stdin-EOF: Client beendet uns
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                self._emit_json({"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32700, "message": "Parse error"}})
+                continue
+            if isinstance(msg, dict) and msg.get("method") == "initialize":
+                # Synchron: alles Weitere braucht die Session-ID aus dieser Antwort.
+                self._handle(line, msg)
+                continue
+            t = threading.Thread(target=self._handle, args=(line, msg), daemon=True)
+            t.start()
+            self._threads.append(t)
+        # Laufende Antworten noch kurz abwarten; danach interessiert sie keinen mehr
+        # (stdin ist zu, der Client liest nicht weiter).
+        for t in self._threads:
+            t.join(timeout=2)
+        self._delete_session()
+        return self._exit_code
+
+
+def cmd_mcp_proxy(c: MCPClient, a):
+    """`ai-rem mcp-proxy`: als stdio-MCP-Server von Claude Code/opencode gestartet."""
+    endpoint = a.proxy_endpoint or c.endpoint
+    if not c.token:
+        print("ai-rem mcp-proxy: kein Token (Keychain leer) — `ai-rem pair` ausfuehren; "
+              "Requests werden mit 401 scheitern", file=sys.stderr)
+    # X-AI-REM-Client nur, wenn explizit gesetzt (opencode-Plugin: AI_REM_CLIENT=opencode).
+    # Ohne Header nimmt der Server clientInfo.name aus dem initialize — der Default
+    # "ai-rem-cli" wuerde sonst alle von Claude angelegten Entities falsch attribuieren.
+    proxy = _McpProxy(endpoint, c.token, os.environ.get("AI_REM_CLIENT", ""))
+    sys.exit(proxy.run())
+
+
+def cmd_vault_mcp(c: MCPClient, a):
+    """`ai-rem vault-mcp`: mykeyvault-MCP (node, stdio) mit Vault-URL/-Token aus
+    /api/client-config starten. Der Vault-Token liegt damit nirgends mehr auf Platte;
+    exec statt Subprozess, damit der Client direkt mit node redet (Signale, Exit)."""
+    cfg = c.client_config()
+    url, tok = cfg.get("vault_url") or "", cfg.get("vault_token") or ""
+    if not url or not tok:
+        sys.stderr.write("ai-rem: Vault-Daten nicht verfügbar (Server < 1.7 oder Vault nicht konfiguriert)\n")
+        sys.exit(1)
+    entry = os.path.expanduser(load_client_cfg().get("vault_entry") or "")
+    if not entry or not os.path.isfile(entry):
+        sys.stderr.write("ai-rem: mykeyvault-MCP nicht gebaut (vault_entry fehlt in "
+                         f"{CLIENT_JSON}) — `ai-rem update` holt ihn nach\n")
+        sys.exit(1)
+    node = shutil.which("node")
+    if not node:
+        sys.stderr.write("ai-rem: node nicht im PATH — mykeyvault-MCP braucht node >= 18\n")
+        sys.exit(1)
+    # NODE_EXTRA_CA_CERTS u.a. bleiben aus os.environ erhalten.
+    env = dict(os.environ, VAULT_API_URL=url, VAULT_API_TOKEN=tok, MCP_TRANSPORT="stdio")
+    if os.name == "nt":
+        sys.exit(subprocess.call([node, entry], env=env))
+    os.execve(node, [node, entry], env)
 
 
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
@@ -390,18 +656,34 @@ def cmd_doctor(c: MCPClient, a):
     print(f"Endpoint:  {c.endpoint}")
     cfg = load_client_cfg()
     print(f"Config:    {CLIENT_JSON}" + ("" if cfg else " (fehlt — aelteres Setup, nur Claude Code)"))
-    if os.environ.get("AI_REM_TOKEN"):
-        src = "Env AI_REM_TOKEN"
-    elif cfg.get("token_file") and Path(os.path.expanduser(cfg["token_file"])).is_file():
-        src = cfg["token_file"]
+    # Quelle kommt aus _resolve_token_with_source: Env | Keychain (<backend>) |
+    # Klartext-Legacy (<quelle>). Legacy ist kein Fehler, aber ein Migrationshinweis.
+    if not c.token:
+        src = "— keiner gefunden → ai-rem pair"
+    elif c.token_source.startswith("Klartext-Legacy"):
+        src = c.token_source + " → ai-rem update"
     else:
-        src = "~/.claude.json bzw. Vault" if c.token else "— keiner gefunden"
+        src = c.token_source
     print(f"Token:     {src}")
     try:
         _print("Server:    " + c.call("memory_check_update").replace("\n", "\n           "))
     except MCPError as e:
         ok = False
         print(f"Server:    ✗ {e}")
+    rc = c.client_config()
+    if rc:
+        print("Config:    /api/client-config ✓ llm_url=%s key %s vault %s" % (
+            rc.get("llm_url") or "?",
+            "✓" if rc.get("llm_api_key") else "–",
+            "✓" if rc.get("vault_url") and rc.get("vault_token") else "–"))
+    elif c.server_too_old:
+        print("Config:    ✗ Server < 1.7 (kein /api/client-config) — LLM-Key/Vault nur per Env")
+    elif c.token_rejected:
+        ok = False
+        print("Config:    ✗ /api/client-config lehnt den Token ab (401) → ai-rem pair")
+    else:
+        ok = False
+        print("Config:    ✗ /api/client-config nicht erreichbar")
     targets = _installed_targets()
     print(f"Ziele:     {', '.join(targets) or '—'}")
     try:
@@ -565,14 +847,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser(
         "token",
-        help="API-Token ausgeben (Env/~/.claude.json/Vault) — fuer Web-UI-Login/curl",
+        help="API-Token ausgeben (Env/Keychain) — fuer Web-UI-Login/curl; --store/--forget pflegen den Keychain",
     )
-    s.add_argument(
+    g = s.add_mutually_exclusive_group()
+    g.add_argument(
         "--header",
         action="store_true",
         help='vollen Header \'Bearer <token>\' ausgeben (statt nur des Tokens)',
     )
+    g.add_argument("--store", action="store_true", help="Token von stdin lesen und im OS-Keychain ablegen")
+    g.add_argument("--forget", action="store_true", help="Token aus dem OS-Keychain entfernen")
     s.set_defaults(func=cmd_token)
+
+    s = sub.add_parser("mcp-proxy", help="stdio-MCP-Server fuer Claude Code/opencode (Bruecke zum HTTP-Endpoint)")
+    s.add_argument("--endpoint", dest="proxy_endpoint", default=None, metavar="URL",
+                   help="MCP-Endpoint (Default: client.json / $AI_REM_ENDPOINT)")
+    s.set_defaults(func=cmd_mcp_proxy)
+
+    s = sub.add_parser("vault-mcp", help="mykeyvault-MCP (stdio) mit Vault-Zugang vom Server starten")
+    s.set_defaults(func=cmd_vault_mcp)
 
     s = sub.add_parser("install", help="Frontend(s) einrichten/nachruesten (claude, opencode, generic)")
     s.add_argument("--client", action="append", choices=(*TARGETS, "auto"),

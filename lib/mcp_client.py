@@ -5,10 +5,15 @@ script, so the CLI behaves identically.
 """
 import json
 import os
-import re
+import sys
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import Iterable, Iterator, Optional, Tuple
+
+try:
+    from . import keychain
+except ImportError:  # altes Deployment ohne lib/keychain.py: Stufe wird uebersprungen
+    keychain = None  # type: ignore[assignment]
 
 
 class MCPError(RuntimeError):
@@ -22,7 +27,9 @@ def _claude_json_path() -> str:
 
 
 # Client-neutrale Konfiguration, von scripts/setup.py fuer jedes Ziel geschrieben:
-# {"endpoint": ".../mcp", "token_file": "...", "targets": ["claude", "opencode"]}.
+# {"endpoint": ".../mcp", "targets": ["claude", "opencode"], "vault_entry": "..."}.
+# token_file/llm_url/llm_api_key sind Altlasten (< 1.7): token_file wird nur noch
+# gelesen, die LLM-Felder gar nicht mehr (kommen per /api/client-config).
 CLIENT_JSON = os.path.join(
     os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "ai-rem", "client.json")
 
@@ -44,43 +51,61 @@ def _claude_servers() -> dict:
         return {}
 
 
-def _resolve_token(timeout: float = 15.0) -> str:
-    """ai-rem-API-Token beziehen: Env AI_REM_TOKEN → Token-Datei aus
-    ~/.config/ai-rem/client.json → Bearer-Header in ~/.claude.json (vom
-    system-check-Hook geschrieben) → Runtime-Fetch aus mykeyvault (Koordinaten aus
-    ~/.claude.json).
+# Einmal pro Prozess, sonst spammt jeder Hook-Aufruf stderr voll.
+_legacy_warned = False
 
-    Der Header in ~/.claude.json ist der einzige Kanal, über den Claudes built-in
-    /mcp-Tool den Token bekommt (statischer Config-Read — kann nicht selbst aus dem
-    Vault lesen). Vault = Rotationsquelle, Header = Session-Cache; darum bleibt der
-    Header-Sync tragend und nicht entfernbar (vgl. Issue #35). opencode liest den
-    Token per {file:…} aus derselben Token-Datei, die hier an zweiter Stelle steht."""
+
+def _warn_legacy() -> None:
+    global _legacy_warned
+    if not _legacy_warned:
+        _legacy_warned = True
+        print("ai-rem: Token liegt noch im Klartext — `ai-rem update` migriert ihn in den Keychain",
+              file=sys.stderr)
+
+
+def _resolve_token_with_source() -> Tuple[str, str]:
+    """ai-rem-API-Token plus Herkunft (fuer `ai-rem doctor`).
+
+    Reihenfolge: Env AI_REM_TOKEN → OS-Keychain (lib/keychain) → Klartext-Altlasten,
+    nur lesend: token_file aus client.json, dann der Bearer-Header in ~/.claude.json.
+    Die Altlasten bleiben, damit ein Client zwischen Server-Update und `ai-rem update`
+    nicht tokenlos dasteht; der Treffer wird einmalig gemeldet.
+
+    Der fruehere Vault-Fallback ist weg: seit 1.7 kommt der Vault-Token selbst nur
+    noch per ai-rem-Token ueber /api/client-config — ihn fuer den ai-rem-Token zu
+    befragen waere zirkulaer. Keychain-Backend-Fehler (gesperrter Keychain o.ae.)
+    zaehlen wie „kein Token“, damit die Legacy-Stufen noch greifen."""
     tok = os.environ.get("AI_REM_TOKEN", "")
     if tok:
-        return tok
+        return tok, "Env AI_REM_TOKEN"
+    if keychain is not None:
+        try:
+            tok = keychain.get()
+        except Exception:
+            tok = ""
+        if tok:
+            return tok, "Keychain (%s)" % keychain.backend_name()
     tf = load_client_cfg().get("token_file", "")
     if tf:
         try:
             with open(os.path.expanduser(tf), encoding="utf-8") as f:
                 tok = f.read().strip()
-            if tok:
-                return tok
         except OSError:
-            pass
-    servers = _claude_servers()
-    hdr = (servers.get("ai-rem", {}).get("headers", {}) or {}).get("Authorization", "")
-    if hdr.lower().startswith("bearer "):
-        return hdr[7:].strip()
-    try:
-        env = servers["mykeyvault"]["env"]
-        req = urllib.request.Request(
-            env["VAULT_API_URL"].rstrip("/") + "/secret/ai-rem-api-token",
-            headers={"Authorization": f"Bearer {env['VAULT_API_TOKEN']}"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode()).get("password", "")
-    except Exception:
-        return ""
+            tok = ""
+        if tok:
+            _warn_legacy()
+            return tok, "Klartext-Legacy (%s)" % tf
+    hdr = (_claude_servers().get("ai-rem", {}).get("headers", {}) or {}).get("Authorization", "")
+    if hdr.lower().startswith("bearer ") and hdr[7:].strip():
+        _warn_legacy()
+        return hdr[7:].strip(), "Klartext-Legacy (~/.claude.json)"
+    return "", ""
+
+
+def _resolve_token(timeout: float = 15.0) -> str:
+    # timeout bleibt in der Signatur fuer aeltere Aufrufer; seit dem Wegfall des
+    # Vault-Fallbacks geht hier kein Netz mehr raus.
+    return _resolve_token_with_source()[0]
 
 
 def _default_endpoint(server: str = "ai-rem") -> str:
@@ -89,6 +114,28 @@ def _default_endpoint(server: str = "ai-rem") -> str:
     gesetzt sein."""
     return (load_client_cfg().get("endpoint", "")
             or (_claude_servers().get(server, {}) or {}).get("url", "") or "")
+
+
+def iter_sse_events(lines: Iterable) -> Iterator[str]:
+    """text/event-stream → ein String pro Event: die data:-Zeilen eines Events mit
+    \\n gejoint, Kommentare (":…") und event:/id:-Felder verworfen. Nimmt bytes
+    oder str, damit sowohl ein gestreamter Response-Body als auch ein fertiger
+    Text zeilenweise durchlaufen kann (mcp-proxy liest live, _parse hinterher)."""
+    data = []
+    for raw in lines:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        line = raw.rstrip("\r\n")
+        if not line:
+            if data:
+                yield "\n".join(data)
+                data = []
+            continue
+        if line.startswith("data:"):
+            payload = line[5:]
+            data.append(payload[1:] if payload.startswith(" ") else payload)
+    if data:
+        yield "\n".join(data)
 
 
 class MCPClient:
@@ -100,10 +147,14 @@ class MCPClient:
             or "http://localhost:3456/mcp"
         )
         self.timeout = timeout
-        self.token = _resolve_token(timeout)
+        self.token, self.token_source = _resolve_token_with_source()
         # Herkunft fuer extra.client beim Anlegen (Server liest X-AI-REM-Client).
         self.client_name = os.environ.get("AI_REM_CLIENT", "") or "ai-rem-cli"
         self._sid: Optional[str] = None
+        # /api/client-config: Ergebnis-Cache plus Diagnose-Flags fuer doctor/extractor.
+        self._client_cfg: Optional[dict] = None
+        self.server_too_old = False
+        self.token_rejected = False
 
     def _auth_header(self) -> dict:
         h = {"X-AI-REM-Client": self.client_name}
@@ -133,8 +184,8 @@ class MCPClient:
     @staticmethod
     def _parse(resp) -> str:
         raw = resp.read().decode()
-        m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
-        payload = m.group(1) if m else raw
+        # Erstes SSE-Event ist die Antwort; ohne data:-Zeile ist der Body reines JSON.
+        payload = next(iter_sse_events(raw.splitlines()), raw)
         try:
             obj = json.loads(payload)
         except json.JSONDecodeError:
@@ -194,6 +245,37 @@ class MCPClient:
         except urllib.error.URLError as e:
             raise MCPError(f"export unreachable ({url}): {e}") from e
         return json.loads(resp.read().decode())
+
+    def client_config(self) -> dict:
+        """Laufzeit-Config vom Server (GET /api/client-config, Bearer):
+        {"version","llm_url","llm_api_key","vault_url","vault_token"}.
+
+        Ersetzt die Klartext-Kopien auf der Workstation (settings.json-env,
+        client.json, Vault-Token-Datei): der Client haelt nur den ai-rem-Token und
+        holt den Rest pro Lauf. Nie auf Platte schreiben. Fehler liefern {} —
+        Aufrufer fallen auf Env/Defaults zurueck; 404 heisst Server < 1.7
+        (server_too_old), 401 heisst Token ungueltig (token_rejected). Auch ein
+        Fehlschlag wird gecacht: innerhalb eines Laufs aendert sich nichts, und
+        ein Hook soll nicht bei jedem Zugriff erneut ins Timeout laufen."""
+        if self._client_cfg is not None:
+            return self._client_cfg
+        url = self.base_url + "/api/client-config"
+        cfg: dict = {}
+        try:
+            req = urllib.request.Request(url, headers=self._auth_header())
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                obj = json.loads(resp.read().decode())
+            if isinstance(obj, dict):
+                cfg = obj
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                self.server_too_old = True
+            elif e.code == 401:
+                self.token_rejected = True
+        except Exception:
+            pass
+        self._client_cfg = cfg
+        return cfg
 
     def call(self, tool: str, args: Optional[dict] = None) -> str:
         """memory_*-Op über die REST-Route POST /api/tool aufrufen.
