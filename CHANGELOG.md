@@ -13,6 +13,30 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.6.1] – 2026-10-09
+
+### Fixed
+- **opencode 2.x: the plugin did not load.** opencode 2 only accepts a default export
+  with an `id` and `setup(ctx)` ("Plugin must export a default definition…"); the
+  1.x-style named export was rejected, so nothing was ingested. The plugin now exports
+  `{ id, setup, server }` — `setup` for 2.x, `server` for 1.18.29+ — on one shared core,
+  still a single file without `node_modules`.
+- v2 events and messages: a finished turn is `session.execution.succeeded|failed|interrupted`
+  (the `session.idle` of 1.x is kept as well), the session ID comes from `event.data`, and
+  `{type:"user"|"assistant"}` messages are normalised to the existing export format, so
+  server and extractor are unchanged.
+- **Compaction no longer loses history:** `ctx.session.context()` only returns messages
+  since the last compaction, so the plugin exports on `session.compaction.started` and
+  continues in a new file (`opencode-<session>-c<N>.json`) instead of overwriting.
+- The v2 event stream is volatile (slow consumers get dropped); the plugin reconnects
+  with backoff.
+
+### Changed
+- The "client outdated" toast is gone on opencode 2.x (plugins have no toast API there);
+  the hint goes to the log. 1.x keeps the toast.
+- Sample files (`.env.example`, `setup-config.example.json`, compose comments) no longer name
+  a specific host; they use `<ai-rem-host>` as the placeholder for the machine ai-rem runs on.
+
 ## [1.6.0] – 2026-10-07
 
 ### Added
@@ -857,7 +881,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/markus7h/ai-rem/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/markus7h/ai-rem/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/markus7h/ai-rem/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/markus7h/ai-rem/compare/v1.3.2...v1.4.0
