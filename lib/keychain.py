@@ -133,7 +133,11 @@ class _LibsecretBackend:
     """`secret-tool` (libsecret/GNOME Keyring, KWallet via Portal). Secret geht bei
     store über stdin. Schlägt store fehl (kein DBus, keine Session, kein
     entsperrter Keyring), fällt das Backend auf _FileBackend zurück und meldet
-    das über backend_name(), damit es im Status sichtbar bleibt."""
+    das über backend_name(), damit es im Status sichtbar bleibt.
+
+    Auf einem Server ohne Desktop-Login (SSH/headless) ist der Login-Keyring
+    gesperrt und bleibt es — der Datei-Fallback ist dort der Normalfall, kein
+    Fehler, den man mit „libsecret installieren“ beheben könnte."""
 
     name = "libsecret"
 
@@ -143,19 +147,27 @@ class _LibsecretBackend:
         self.run = run
         self.fallback = fallback or _FileBackend(account)
         self.degraded = False  # True, sobald store einmal scheiterte
+        self.from_fallback = False  # True, wenn get() den Token aus der Datei las
+        self.reason = "Schlüsselbund nicht nutzbar"
 
     def _args(self, verb: str, *extra: str):
         return ["secret-tool", verb, *extra, "service", SERVICE, "account", self.account]
 
+    def _fallback_get(self) -> str:
+        tok = self.fallback.get()
+        self.from_fallback = bool(tok)
+        return tok
+
     def get(self) -> str:
         if self.degraded:
-            return self.fallback.get()
+            return self._fallback_get()
         p = self.run(self._args("lookup"), capture_output=True, text=True,
                      timeout=TIMEOUT_S)
         if p.returncode != 0:
             # Fehlt das Item, liefert lookup rc 1; ein früherer Datei-Fallback
             # (neuer Prozess kennt degraded nicht) muss trotzdem gefunden werden.
-            return self.fallback.get()
+            return self._fallback_get()
+        self.from_fallback = False
         return (p.stdout or "").rstrip("\r\n")
 
     def set(self, value: str) -> None:
@@ -165,8 +177,11 @@ class _LibsecretBackend:
                          timeout=TIMEOUT_S)
             if p.returncode == 0:
                 self.fallback.delete()  # veralteten Datei-Fallback nicht liegen lassen
+                self.from_fallback = False
                 return
             self.degraded = True
+            if "locked" in (p.stderr or "").lower():
+                self.reason = "Schlüsselbund gesperrt (SSH/headless)"
         self.fallback.set(value)
 
     def delete(self) -> None:
@@ -177,8 +192,10 @@ class _LibsecretBackend:
 
     @property
     def backend_name(self) -> str:
-        return ("Datei (0600) — secret-tool ohne Session, Fallback"
-                if self.degraded else self.name)
+        # Auch ein neuer Prozess, der den Token nur aus der Datei las, zeigt die
+        # Datei an — nicht „libsecret“, wo gar nichts liegt.
+        return ("Datei (0600) — %s, Fallback" % self.reason
+                if self.degraded or self.from_fallback else self.name)
 
 
 # --------------------------------------------------------------------------- Windows

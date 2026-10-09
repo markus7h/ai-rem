@@ -132,6 +132,34 @@ def test_libsecret_store_failure_falls_back_to_file(tmp_path):
     assert b.degraded and "Fallback" in b.backend_name  # sichtbar im Status
 
 
+def test_libsecret_locked_keyring_names_reason(tmp_path):
+    # SSH ohne Desktop-Login: secret-tool ist da, der Login-Keyring bleibt gesperrt.
+    run = FakeRun({"store": (1, "", "secret-tool: Cannot create an item in a locked collection"),
+                   "lookup": (1, "", "")})
+    b = kc._LibsecretBackend(ACCT, run=run, fallback=kc._FileBackend(ACCT, base_dir=str(tmp_path)))
+    b.set(SECRET)
+    assert b.backend_name == "Datei (0600) — Schlüsselbund gesperrt (SSH/headless), Fallback"
+    assert "secret-tool fehlt" not in b.backend_name
+
+
+def test_libsecret_fresh_process_reports_file_when_token_lives_there(tmp_path):
+    # Neuer Prozess (doctor): degraded ist unbekannt, der Token kommt aber aus der
+    # Datei — angezeigt wird die Datei, nicht „libsecret“.
+    fb = kc._FileBackend(ACCT, base_dir=str(tmp_path))
+    fb.set(SECRET)
+    b = kc._LibsecretBackend(ACCT, run=FakeRun({"lookup": (1, "", "")}), fallback=fb)
+    assert b.get() == SECRET
+    assert b.backend_name.startswith("Datei (0600)")
+
+
+def test_libsecret_lookup_hit_reports_libsecret(tmp_path):
+    fb = kc._FileBackend(ACCT, base_dir=str(tmp_path))
+    fb.set("alt")  # liegengebliebene Datei ändert nichts, solange lookup trifft
+    b = kc._LibsecretBackend(ACCT, run=FakeRun({"lookup": (0, SECRET + "\n", "")}), fallback=fb)
+    assert b.get() == SECRET
+    assert b.backend_name == "libsecret"
+
+
 # --------------------------------------------------------------------------- Windows
 
 class FakeAdvapi:

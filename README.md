@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for AI coding agents
 
-> This documentation describes **[v1.7.0](https://github.com/markus7h/ai-rem/releases/tag/v1.7.0)**.
+> This documentation describes **[v1.7.1](https://github.com/markus7h/ai-rem/releases/tag/v1.7.1)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
