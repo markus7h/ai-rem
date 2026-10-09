@@ -41,20 +41,47 @@ AI_REM_ENDPOINT = os.environ.get(
     "AI_REM_ENDPOINT", TMPL.get("ai_rem_endpoint", "")
 )
 AI_REM_TIMEOUT = 5
-# Gleicher Vorrang wie in lib/extractor.py: AI_REM_LLAMA_URL ist der aktuelle
-# Name, AI_REM_OLLAMA_URL bleibt als Alt-Name gueltig. Ohne die erste Variante
-# lief der Check gegen settings-template/Default weiter, obwohl die Umgebung
-# AI_REM_LLAMA_URL gesetzt hatte -> falsches "llm ❌" im SessionStart-Report.
-AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_LLAMA_URL",
-    os.environ.get("AI_REM_OLLAMA_URL", TMPL.get("ollama_url", "http://mystorage.lan:11437")),
-)
+# LLM-Router: URL und Key liefert seit Server 1.7 /api/client-config zur Laufzeit
+# (ein Secret pro Geraet, der Rest kommt vom Server). Env hat Vorrang — gleicher
+# Vorrang wie in lib/extractor.py: AI_REM_LLAMA_URL ist der aktuelle Name,
+# AI_REM_OLLAMA_URL bleibt als Alt-Name gueltig. Ohne die erste Variante lief der
+# Check gegen settings-template/Default weiter, obwohl die Umgebung AI_REM_LLAMA_URL
+# gesetzt hatte -> falsches "llm ❌" im SessionStart-Report. settings-template ist
+# nur noch der letzte Fallback fuer Server, die den Endpoint noch nicht haben.
+AI_REM_LLM_URL_ENV = (os.environ.get("AI_REM_LLAMA_URL") or os.environ.get("AI_REM_OLLAMA_URL") or "").strip()
+AI_REM_LLM_URL_TMPL = TMPL.get("ollama_url", "http://mystorage.lan:11437")
 AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
 
 
-def _header_token():
-    """Zuletzt gespeicherten Bearer-Token aus ~/.claude.json lesen — schnell, kein
-    Vault-Roundtrip. Das ist die Quelle fuer die laufende Session."""
+def _keychain_token():
+    """Geraete-Token aus dem OS-Keychain via lib/keychain.py. Das Modul liegt nach dem
+    Setup neben der CLI (nicht neben dem Hook), darum per Pfad laden: zuerst relativ
+    zu $AI_REM_CLI, sonst die Standard-Installation. Jeder Fehler -> "" — der
+    Sessionstart darf nie daran haengen, und Secrets werden nie geloggt."""
+    import importlib.util
+
+    cands = []
+    cli = os.environ.get("AI_REM_CLI", "")
+    if cli:
+        cands.append(os.path.join(os.path.dirname(os.path.dirname(cli)), "lib", "keychain.py"))
+    cands.append(os.path.expanduser("~/.local/share/ai-rem/lib/keychain.py"))
+    for p in cands:
+        if not os.path.isfile(p):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("ai_rem_keychain", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return (mod.get() or "").strip()
+        except Exception:
+            return ""
+    return ""
+
+
+def _legacy_header_token():
+    """Uebergang: Bearer aus ~/.claude.json mcpServers.ai-rem.headers — die alte
+    Klartext-Ablage. Nur lesen; geschrieben wird dort nicht mehr (der stdio-Proxy
+    holt den Token selbst), `ai-rem update` raeumt den Header weg."""
     try:
         with open(CLAUDE_JSON) as f:
             auth = json.load(f)["mcpServers"]["ai-rem"]["headers"]["Authorization"]
@@ -63,114 +90,24 @@ def _header_token():
         return ""
 
 
-def _vault_coords():
-    """vault-api-Koordinaten (URL, Token): 1) ~/.claude.json mcpServers.mykeyvault.env,
-    2) Fallback ~/.claude/ai-rem-vault.env — die legt das Setup auf node-losen Hosts an,
-    wo kein mykeyvault-MCP registriert wurde, damit der Token-Refresh trotzdem läuft."""
-    try:
-        with open(CLAUDE_JSON) as f:
-            env = json.load(f)["mcpServers"]["mykeyvault"]["env"]
-        return env["VAULT_API_URL"], env["VAULT_API_TOKEN"]
-    except Exception:
-        pass
-    try:
-        d = {}
-        with open(os.path.join(CLAUDE_DIR, "ai-rem-vault.env")) as f:
-            for line in f:
-                line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    k, v = line.split("=", 1)
-                    d[k] = v
-        return d["VAULT_API_URL"], d["VAULT_API_TOKEN"]
-    except Exception:
-        return "", ""
-
-
-def _vault_token(timeout):
-    """ai-rem-API-Token frisch aus mykeyvault holen (Koordinaten via _vault_coords,
-    Item 'ai-rem-api-token'). Das bw-Backend ist langsam — daher NICHT im synchronen
-    SessionStart-Pfad."""
-    url, vt = _vault_coords()
-    if not (url and vt):
-        return ""
-    try:
-        req = urllib.request.Request(
-            url.rstrip("/") + "/secret/ai-rem-api-token",
-            headers={"Authorization": f"Bearer {vt}"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode()).get("password", "")
-    except Exception:
-        return ""
-
-
-def _sync_ai_rem_header(token):
-    """Bearer-Header in ~/.claude.json mcpServers."ai-rem".headers schreiben —
-    die einzige Mechanik, über die Claudes primärer /mcp-Tool-Kanal den Token
-    erhält (Header werden aus der Config gelesen). Atomar via temp + os.replace.
-    No-op, wenn kein Token oder ai-rem nicht registriert ist.
-
-    Liegt daneben die client-neutrale Token-Datei (opencode liest sie per {file:…}),
-    wird sie mitgezogen — sonst bliebe opencode nach einer Rotation auf dem alten."""
-    if not token:
-        return
-    tf = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"),
-                      "ai-rem", "token")
-    try:
-        with open(tf) as f:
-            if f.read().strip() != token:
-                with open(tf, "w") as w:
-                    w.write(token + "\n")
-    except OSError:
-        pass
-    try:
-        with open(CLAUDE_JSON) as f:
-            cfg = json.load(f)
-        srv = cfg.get("mcpServers", {}).get("ai-rem")
-        if not srv:
-            return
-        desired = f"Bearer {token}"
-        if srv.get("headers", {}).get("Authorization") == desired:
-            return
-        srv.setdefault("headers", {})["Authorization"] = desired
-        tmp = CLAUDE_JSON + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, CLAUDE_JSON)
-    except Exception:
-        pass
-
-
-# Detached-Modus: Token frisch aus dem Vault holen und Header aktualisieren, dann raus.
-# Haelt den /mcp-Header bei Token-Rotation aktuell (greift ab naechster Session), ohne
-# den ~8s langsamen Vault-Read in den synchronen SessionStart zu legen.
-if "--refresh" in sys.argv:
-    _sync_ai_rem_header(_vault_token(15))
-    sys.exit(0)
-
-# Refresh detached anstossen (kein Startup-Delay trotz ~8s bw).
-# start_new_session ist POSIX-only; Windows-Pendant ist DETACHED_PROCESS.
-_detach = ({"creationflags": 0x00000008} if sys.platform == "win32"
-           else {"start_new_session": True})
-try:
-    subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), "--refresh"],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        **_detach,
-    )
-except Exception:
-    pass
-
-
 def _resolve_ai_rem_token():
-    """Token fuer diese Session: 1) Env AI_REM_TOKEN. 2) zuletzt gespeicherter Header
-    (schnell). 3) Vault (nur Erststart ohne Header). Rotation zieht der detached
-    --refresh fuer die naechste Session nach — kein synchroner Vault-Block."""
-    return os.environ.get("AI_REM_TOKEN", "") or _header_token() or _vault_token(15)
+    """Token fuer diese Session plus Quelle (fuer die Statuszeile):
+    1) Env AI_REM_TOKEN (bewusster Override), 2) OS-Keychain (Zielbild),
+    3) Legacy-Header in ~/.claude.json (nur Uebergangszeit). Kein Vault mehr —
+    der Keychain ist das einzige Secret auf dem Geraet."""
+    tok = os.environ.get("AI_REM_TOKEN", "").strip()
+    if tok:
+        return tok, "env"
+    tok = _keychain_token()
+    if tok:
+        return tok, "keychain"
+    tok = _legacy_header_token()
+    if tok:
+        return tok, "legacy"
+    return "", ""
 
 
-AI_REM_TOKEN = _resolve_ai_rem_token()
+AI_REM_TOKEN, AI_REM_TOKEN_SOURCE = _resolve_ai_rem_token()
 
 SMB_CFG = TMPL.get("smb", {})
 SMB_MOUNT = SMB_CFG.get("mount", "")
@@ -184,6 +121,7 @@ TOOLS_SCRIPTS = TMPL.get("tools_scripts_dir", "")
 
 results = []
 open_tasks_md = ""  # gefuellt von check_ai_rem(): offene Tasks/Plaene fuer die Anzeige
+ai_rem_ok = False  # True sobald die MCP-Session stand: Server erreichbar, Token gueltig
 
 def offene_tasks_section(ctx):
     """Aus dem memory_get_context-Markdown die '## Offene Tasks'-Sektion ziehen.
@@ -265,6 +203,8 @@ def check_ai_rem():
 
         # MCP-Session steht (initialize ok) → Transport, Auth und DB sind in Ordnung.
         # Zaehlstaende sagen am Sessionstart nichts, darum nur der Status.
+        global ai_rem_ok
+        ai_rem_ok = True
         results.append("ai-rem ✓")
         # Offene Tasks/Plaene fuer die Anzeige nachladen (best effort, blockiert nie).
         try:
@@ -274,6 +214,19 @@ def check_ai_rem():
             pass
     except Exception:
         results.append("ai-rem ❌ nicht erreichbar")
+
+
+def check_token():
+    """Woher der Geraete-Token kam: Keychain ist das Zielbild, Env der bewusste
+    Override, der Klartext-Header in ~/.claude.json nur noch Uebergang. Ohne Token
+    laeuft nichts — darum mit dem Befehl, der ihn beschafft."""
+    if not AI_REM_ENDPOINT:
+        return
+    results.append({
+        "env": "token ✓ (Env)",
+        "keychain": "token ✓ (Keychain)",
+        "legacy": "token ⚠ Klartext-Legacy → ai-rem update",
+    }.get(AI_REM_TOKEN_SOURCE, "token ❌ fehlt → ai-rem pair"))
 
 
 def check_smb():
@@ -484,21 +437,42 @@ def _cli_cmd(cli, *args):
     return [cli, *args]
 
 
+def _llm_target():
+    """(URL, Key) fuer den Router-Check. Quelle in dieser Reihenfolge: Env,
+    /api/client-config (Server >= 1.7), settings-template. Dritter Wert: ob der
+    Server die Koordinaten geliefert hat — ohne die und ohne Env-Key ist ein
+    401 am Router kein Router-Problem, sondern ein veralteter Server."""
+    cfg = _api_get("/api/client-config")
+    cfg = cfg if isinstance(cfg, dict) else {}
+    url = (AI_REM_LLM_URL_ENV or (cfg.get("llm_url") or "").strip()
+           or AI_REM_LLM_URL_TMPL).rstrip("/")
+    key = AI_REM_LLM_API_KEY or (cfg.get("llm_api_key") or "").strip()
+    return url, key, bool(cfg)
+
+
 def check_ollama_and_catchup():
     """llama-server-Reachability; wenn erreichbar, Catch-up der md-Fallback-Queue im
-    Hintergrund anstoßen (non-blocking). Nur bei Ausfall sichtbar melden."""
+    Hintergrund anstoßen (non-blocking). Nur bei Ausfall sichtbar melden.
+
+    Rueckgabe: Hinweistext, wenn der Check ohne Key lief, weil der Server die
+    LLM-Koordinaten noch nicht liefert (< 1.7) — sonst sucht man den Fehler am
+    Router statt am Server. Geht als additionalContext rein."""
+    url, key, from_server = _llm_target()
     # /v1/models statt /health: am LiteLLM-Router feuert /health echte Testcalls
     # gegen alle Modelle inkl. Kimi. Dieser Check laeuft bei JEDEM SessionStart.
-    hdr = {"Authorization": f"Bearer {AI_REM_LLM_API_KEY}"} if AI_REM_LLM_API_KEY else {}
+    hdr = {"Authorization": f"Bearer {key}"} if key else {}
     try:
-        req = urllib.request.Request(AI_REM_OLLAMA_URL + "/v1/models", headers=hdr)
+        req = urllib.request.Request(url + "/v1/models", headers=hdr)
         with urllib.request.urlopen(req, timeout=2) as r:
             up = getattr(r, "status", 200) == 200
     except Exception:
         up = False
     if not up:
         results.append("llm ❌")
-        return
+        if ai_rem_ok and not from_server and not key:
+            return ("[ai-rem] Server < 1.7 — liefert /api/client-config noch nicht, der "
+                    "LLM-Check lief darum ohne Router-Key. ai-rem-Server aktualisieren.")
+        return ""
     cli = _ai_rem_cli()
     if cli:
         try:
@@ -506,6 +480,7 @@ def check_ollama_and_catchup():
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
+    return ""
 
 
 def _errors_since(lines, since_ts):
@@ -692,18 +667,20 @@ def check_cleanup_pending():
     )
 
 
-_sync_ai_rem_header(AI_REM_TOKEN)
+# check_ai_rem() ist der erste Top-Level-Aufruf — tests/test_system_check_parser.py
+# schneidet den Quelltext an dieser Zeile ab, um den Hook ohne Ausfuehrung zu laden.
 check_ai_rem()
+check_token()
 check_smb()
 check_mcp_servers()
 check_and_sync_settings()
 check_tools()
-check_ollama_and_catchup()
+_llm_hint = check_ollama_and_catchup()
 check_embed_pending()
 _am_fault = check_auto_memory()
 _client_stale = check_client_artifacts()
 _extra_ctx = "\n".join(
-    x for x in (_am_fault, _client_stale, check_cleanup_pending()) if x)
+    x for x in (_am_fault, _client_stale, _llm_hint, check_cleanup_pending()) if x)
 
 _out = {"suppressOutput": True}
 _msg = " | ".join(results) if results else ""
