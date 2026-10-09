@@ -36,7 +36,7 @@ def _scenario() -> None:
     # setup-config.json neben server.py, deren Inhalt der Test nicht kennen darf.
     fixture = {
         "ollama_url": "http://router.test:11437",
-        "_comment_llm_api_key": "Doku zum Key — kein Secret, darf public bleiben",
+        "_comment_llm_api_key": "Doku zum Key — kein Secret, darf public bleiben",  # pragma: allowlist secret
         "llm_api_key": "leak-me-not",  # pragma: allowlist secret
         "foo_token": "leak-me-neither",  # pragma: allowlist secret
         "mcp_register": {"mykeyvault": {"vault_url": "http://vault.test:8223"}},
