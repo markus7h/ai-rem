@@ -77,7 +77,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.6.1"
+VERSION = "1.7.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -228,8 +228,20 @@ CLAUDE_MD_GUARD_PY = _pkg_text("hooks/claude-md-guard.py")
 # es importiert lib/ (mcp_client immer, extractor bei ingest/catchup), daher werden
 # diese Module mit ausgeliefert. Alles reine stdlib, kein venv noetig.
 AI_REM_CLI_SRC = _pkg_text("bin/ai-rem")
-CLI_LIB_FILES = {name: _pkg_text("lib/" + name) for name in
-                 ("__init__.py", "mcp_client.py", "extractor.py", "extractor_heuristic.py")}
+# keychain.py: ein Secret pro Geraet (ai-rem-Token im OS-Keychain), alles Weitere
+# holt der Client zur Laufzeit ueber /api/client-config. Fehlt ein lib-Modul neben
+# server.py, soll der Server trotzdem starten: /lib ist nur der Ausliefer-Pfad, der
+# Client meldet den ImportError selbst — besser als ein Server, der wegen einer
+# Client-Datei nicht hochkommt. Die Luecke wird geloggt und fehlt dann sichtbar im
+# /manifest (tests/test_client_manifest.py haengt an CLI_LIB_FILES, nicht an der Liste).
+CLI_LIB_FILES: dict[str, str] = {}
+for _lib_name in ("__init__.py", "mcp_client.py", "extractor.py", "extractor_heuristic.py",
+                  "keychain.py"):
+    try:
+        CLI_LIB_FILES[_lib_name] = _pkg_text("lib/" + _lib_name)
+    except FileNotFoundError:
+        log.warning("lib/%s fehlt neben server.py — wird nicht ausgeliefert", _lib_name)
+del _lib_name
 
 # opencode-Plugin: Gegenstueck zu auto-memory.py/system-check.py (session.idle →
 # ai-rem ingest, session.created → catchup + Update-Check).
@@ -1258,6 +1270,48 @@ def _load_setup_cfg() -> dict:
     return {}
 
 
+# Top-Level-Keys mit diesen Endungen gelten als Secret und gehen nie ueber die
+# oeffentliche /setup-config raus. Suffix-Liste statt Einzelname, damit ein spaeter
+# ergaenzter *_token nicht wieder still im Klartext landet.
+_SECRET_KEY_SUFFIXES = ("_key", "_token", "_secret", "_password")
+
+
+def _public_setup_cfg() -> dict:
+    """setup-config ohne Secrets — fuer die oeffentliche /setup-config.
+
+    /setup-config ist public (Onboarding laeuft vor dem ersten Token), lieferte aber
+    bisher die komplette Datei inkl. llm_api_key. Secrets holt der Client seit 1.7
+    authentifiziert ueber /api/client-config; hier bleiben nur Pfade, URLs und
+    Templates. Die _comment_*-Keys sind Doku und bleiben drin, auch wenn ihr Name
+    auf ein Secret-Suffix endet. Flache Kopie: das Original bleibt unveraendert,
+    weil _load_setup_cfg() auch intern (Pairing, LLM-URL) genutzt wird.
+    """
+    cfg = _load_setup_cfg()
+    return {k: v for k, v in cfg.items()
+            if k.startswith("_comment") or not k.endswith(_SECRET_KEY_SUFFIXES)}
+
+
+# LLM-Basis-URL (OpenAI-kompatibel) config-aware: Env > setup-config
+# 'ollama_url' > Default. Var-Name bleibt AI_REM_OLLAMA_URL für Env-Rückwärts-
+# kompatibilität; /v1 wird in den Calls angehängt.
+#
+# Default ist der LiteLLM-Router auf mystorage, nicht mehr myai direkt. Der
+# direkte Weg fiel mit myais Nachtruhe (23:00-06:00) einfach aus; über den Router
+# greift stattdessen dessen Fallback auf Kimi, und der Verbrauch taucht in der
+# Admin-UI auf. Die alten Ports 11435/11436 bleiben offen — wer zurück will,
+# setzt die Env-Variable.
+#
+# Steht hier statt beim Nightly-Cleanup, weil /api/client-config die Werte an die
+# Clients weiterreicht und die Route vor dem Cleanup-Block definiert ist.
+AI_REM_OLLAMA_URL = os.environ.get(
+    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://mystorage.lan:11437")
+)
+# Der Router verlangt einen Key (public_routes ist bei LiteLLM Enterprise-only).
+# Leer lassen, wenn direkt gegen einen llama-server ohne --api-key gefahren wird:
+# dann geht gar kein Authorization-Header raus.
+AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
+
+
 _ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
@@ -1367,7 +1421,8 @@ async def cli_lib_route(request: Request) -> PlainTextResponse:
 
 @mcp.custom_route("/setup-config", methods=["GET"])
 async def setup_config_route(request: Request) -> JSONResponse:
-    return JSONResponse(_load_setup_cfg())
+    # Public → nur die Secret-freie Sicht (siehe _public_setup_cfg).
+    return JSONResponse(_public_setup_cfg())
 
 
 @mcp.custom_route("/cmd", methods=["GET"])
@@ -1832,9 +1887,37 @@ async def pair_poll(request: Request) -> JSONResponse:
             return JSONResponse({"state": e["state"]})
         del _pairs[pid]  # Einmal-Abholung
     out = {"state": "approved", "ai_rem_token": AI_REM_API_TOKEN}
+    # vault_token/vault_url: deprecated, nur noch fuer alte Installer. Clients
+    # >= 1.7 speichern allein den ai-rem-Token und holen den Rest pro Lauf ueber
+    # /api/client-config. Bleibt drin, bis kein Installer < 1.7 mehr koppelt.
     if AI_REM_PAIR_VAULT_TOKEN:
         out.update(vault_token=AI_REM_PAIR_VAULT_TOKEN, vault_url=_pair_vault_url())
     return JSONResponse(out)
+
+
+@mcp.custom_route("/api/client-config", methods=["GET"])
+async def client_config_route(request: Request) -> JSONResponse:
+    """Laufzeit-Config fuer gekoppelte Clients — Secrets inklusive, daher Bearer-only.
+
+    Warum: bisher lagen LLM-Router-Key und Vault-Token im Klartext auf jeder
+    Workstation (settings.json, setup-config.json). Zielbild ist ein Secret pro
+    Geraet — der ai-rem-Token im OS-Keychain (lib/keychain.py) — und alles Weitere
+    holt der Client bei jedem Lauf hier ab, statt es zu speichern. Rotation
+    passiert damit zentral am Server, ohne Workstations anzufassen.
+
+    Nicht in _PUBLIC_PATH_PREFIXES: die AuthMiddleware verlangt Bearer-Token
+    (bzw. UI-Cookie/echtes Loopback). Vault-Felder identisch zu /api/pair/poll,
+    damit der Client beide Quellen gleich verarbeitet; ohne AI_REM_PAIR_VAULT_TOKEN
+    bleiben sie leer und mykeyvault faellt beim Client auf HTTP zurueck.
+    """
+    return JSONResponse({
+        "version": VERSION,
+        "llm_url": AI_REM_OLLAMA_URL,
+        # Env hat Vorrang (wie beim Server selbst), sonst der Key aus der setup-config.
+        "llm_api_key": AI_REM_LLM_API_KEY or (_load_setup_cfg().get("llm_api_key") or ""),
+        "vault_url": _pair_vault_url(),
+        "vault_token": AI_REM_PAIR_VAULT_TOKEN,
+    })
 
 
 @mcp.custom_route("/api/pair/info", methods=["GET"])
@@ -4108,22 +4191,8 @@ async def api_tool(request: Request) -> JSONResponse:
 
 # ─── Nightly-Cleanup (nicht-destruktiv: archivieren statt löschen) ────────────
 
-# LLM-Basis-URL (OpenAI-kompatibel) config-aware: Env > setup-config
-# 'ollama_url' > Default. Var-Name bleibt AI_REM_OLLAMA_URL für Env-Rückwärts-
-# kompatibilität; /v1 wird in den Calls angehängt.
-#
-# Default ist der LiteLLM-Router auf mystorage, nicht mehr myai direkt. Der
-# direkte Weg fiel mit myais Nachtruhe (23:00-06:00) einfach aus; über den Router
-# greift stattdessen dessen Fallback auf Kimi, und der Verbrauch taucht in der
-# Admin-UI auf. Die alten Ports 11435/11436 bleiben offen — wer zurück will,
-# setzt die Env-Variable.
-AI_REM_OLLAMA_URL = os.environ.get(
-    "AI_REM_OLLAMA_URL", _load_setup_cfg().get("ollama_url", "http://mystorage.lan:11437")
-)
-# Der Router verlangt einen Key (public_routes ist bei LiteLLM Enterprise-only).
-# Leer lassen, wenn direkt gegen einen llama-server ohne --api-key gefahren wird:
-# dann geht gar kein Authorization-Header raus.
-AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
+# AI_REM_OLLAMA_URL / AI_REM_LLM_API_KEY stehen bei _load_setup_cfg() (werden auch
+# von /api/client-config gebraucht).
 # Modellname, den der Router kennt. "qwen" ist die Modellgruppe (zwei Deployments
 # + Kimi-Fallback), nicht ein einzelner Host. Der alte Default
 # "mistral-small3.2:24b" existiert seit 2026-08 nirgends mehr und quittierte am

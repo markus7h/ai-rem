@@ -122,12 +122,28 @@ jobs:
           set -euo pipefail
           mkdir -p cli-smoke/bin cli-smoke/lib
           curl -fsS http://localhost:3456/bin/ai-rem -o cli-smoke/bin/ai-rem
-          for f in __init__.py mcp_client.py extractor.py extractor_heuristic.py; do
+          for f in __init__.py mcp_client.py extractor.py extractor_heuristic.py keychain.py; do
             curl -fsS "http://localhost:3456/lib/$f" -o "cli-smoke/lib/$f"
           done
           chmod +x cli-smoke/bin/ai-rem
           AI_REM_ENDPOINT=http://localhost:3456/mcp AI_REM_TOKEN=ci-smoke \
             ./cli-smoke/bin/ai-rem status
+
+      - name: Smoke — mcp-proxy brueckt stdio zum HTTP-Endpoint
+        # Claude Code und opencode starten seit 1.7 `ai-rem mcp-proxy` statt http+Header.
+        # Bricht der Proxy (Session-ID, SSE-Parsing, Token-Aufloesung), sieht kein
+        # Frontend mehr ein einziges Tool — und das faellt erst auf der Workstation auf.
+        # AI_REM_TOKEN im Env: auf dem Runner gibt es keinen Keychain, und genau diese
+        # Stufe steht in der Kette vor ihm.
+        run: |
+          set -euo pipefail
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0"}}}' \
+            | AI_REM_TOKEN=ci-smoke timeout 30 \
+              ./cli-smoke/bin/ai-rem mcp-proxy --endpoint http://localhost:3456/mcp \
+            > cli-smoke/proxy.out
+          head -1 cli-smoke/proxy.out
+          head -1 cli-smoke/proxy.out | grep -q protocolVersion
+          echo "✅ mcp-proxy: initialize beantwortet"
 
       - name: Trivy — fixbare CRITICAL/HIGH blocken
         # ignore-unfixed ist der Punkt: die Debian-Basis schleppt dauerhaft CVEs

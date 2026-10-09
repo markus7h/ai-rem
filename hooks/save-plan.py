@@ -23,8 +23,9 @@
 #                   "timeout": 10 }] } ] }
 #
 # Transport mirrors the other ai-rem hooks (initialize -> notifications/initialized
-# -> tools/call). Auth: AI_REM_TOKEN env, else the Bearer header already written to
-# ~/.claude.json by the SessionStart hook. Fail-silent: never blocks ExitPlanMode.
+# -> tools/call). Auth: AI_REM_TOKEN env, else the device token from the OS keychain
+# (lib/keychain.py), else the legacy Bearer header still sitting in ~/.claude.json.
+# Fail-silent: never blocks ExitPlanMode.
 import datetime
 import glob
 import json
@@ -40,8 +41,36 @@ CLAUDE_JSON = os.path.join(_CC, ".claude.json") if _CC else os.path.expanduser("
 PLANS_DIR = os.path.join(CLAUDE_DIR, "plans")
 
 
+def _keychain_token():
+    """Geraete-Token aus dem OS-Keychain via lib/keychain.py. Das Modul liegt nach dem
+    Setup neben der CLI (nicht neben dem Hook), darum per Pfad laden: zuerst relativ
+    zu $AI_REM_CLI, sonst die Standard-Installation. Jeder Fehler -> "" — der Hook
+    bleibt fail-silent, und Secrets werden nie geloggt. (Bewusst dupliziert aus
+    system-check.py: die Hooks laufen standalone in ~/.claude/hooks.)"""
+    import importlib.util
+
+    cands = []
+    cli = os.environ.get("AI_REM_CLI", "")
+    if cli:
+        cands.append(os.path.join(os.path.dirname(os.path.dirname(cli)), "lib", "keychain.py"))
+    cands.append(os.path.expanduser("~/.local/share/ai-rem/lib/keychain.py"))
+    for p in cands:
+        if not os.path.isfile(p):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("ai_rem_keychain", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return (mod.get() or "").strip()
+        except Exception:
+            return ""
+    return ""
+
+
 def auth_header():
-    tok = os.environ.get("AI_REM_TOKEN")
+    """Env AI_REM_TOKEN -> OS-Keychain -> Legacy-Header aus ~/.claude.json (nur lesen,
+    Uebergangszeit bis `ai-rem update` ihn entfernt hat). None, wenn nichts da ist."""
+    tok = os.environ.get("AI_REM_TOKEN", "").strip() or _keychain_token()
     if tok:
         return tok if tok.lower().startswith("bearer ") else f"Bearer {tok}"
     try:

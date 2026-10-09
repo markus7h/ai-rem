@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for AI coding agents
 
-> This documentation describes **[v1.6.1](https://github.com/markus7h/ai-rem/releases/tag/v1.6.1)**.
+> This documentation describes **[v1.7.0](https://github.com/markus7h/ai-rem/releases/tag/v1.7.0)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -310,8 +310,9 @@ On **native Windows** (PowerShell, no WSL needed): `irm http://<SERVER_IP>:3456/
 
 The setup installs the `ai-rem` CLI and then sets up every frontend it finds (`claude`, `opencode`; neither → `generic` snippets). It is idempotent and needs no preparation on the machine:
 
-- **No SSH key needed.** Without one the setup shows a code and opens `/pair` in the browser; approve it there (logged into the web UI, works from your phone too) and the setup continues with the ai-rem token — and the mykeyvault token if `AI_REM_PAIR_VAULT_TOKEN` is set on the server. ([How pairing works](docs/authentication.md#pairing-a-new-machine-no-ssh-needed))
-- **Missing node/npm/git** (for mykeyvault and tools) are installed after one prompt via brew, apt (NodeSource) or winget; `--yes` skips the prompt.
+- **No SSH key needed.** Without one the setup shows a code and opens `/pair` in the browser; approve it there (logged into the web UI, works from your phone too) and the setup continues with the ai-rem token. ([How pairing works](docs/authentication.md#pairing-a-new-machine-no-ssh-needed))
+- **One secret per device.** The ai-rem token goes into the OS keychain (macOS Keychain, Linux libsecret, Windows Credential Manager) — nothing else is stored on the machine. The LLM-router key and the mykeyvault access are fetched per run from the server (`/api/client-config`), so rotating them is a server-side change only.
+- **Missing node/npm/git** (only needed when mykeyvault or tools are built from `mcp_register`) are installed after one prompt via brew, apt (NodeSource) or winget; `--yes` skips the prompt.
 - It ends with a ✓/✗ summary, one fix command per ✗, and runs `ai-rem doctor`.
 
 To pick targets explicitly or add one later:
@@ -322,10 +323,11 @@ ai-rem install --client generic      # snippets for Codex, Gemini CLI, Cursor in
 ai-rem uninstall --client opencode   # remove one frontend again
 ai-rem doctor [--fix]                # server version, installed targets, drift, token source
 ai-rem pair                          # renew just the token (browser approval)
+ai-rem token [--store|--forget]      # print the token / store it from stdin in the keychain / remove it
 ```
 
-- **Claude Code:** registers the MCP server, deploys the hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.
-- **opencode:** merges `ai-rem` (plus `mykeyvault`/`tools` if configured) into the `mcp` block of `~/.config/opencode/opencode.json` — providers and other servers stay untouched, a JSONC file with comments is left alone and a snippet is written instead — adds an `AGENTS.md` pointer, the plugin and the commands. Tokens are referenced as `{file:~/.config/ai-rem/token}`, never written into the config.
+- **Claude Code:** registers `ai-rem` (and `mykeyvault`, if built) as **stdio** MCP servers — `ai-rem mcp-proxy` bridges to the HTTP endpoint with the keychain token, `ai-rem vault-mcp` starts the vault MCP with access fetched from the server — so `~/.claude.json` holds no header and no `env` secret; deploys the hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.
+- **opencode:** merges `ai-rem` (plus `mykeyvault`/`tools` if configured) into the `mcp` block of `~/.config/opencode/opencode.json` as `local` servers through the same `ai-rem mcp-proxy` / `ai-rem vault-mcp` wrappers — providers and other servers stay untouched, a JSONC file with comments is left alone and a snippet is written instead — adds an `AGENTS.md` pointer, the plugin and the commands. No token is written into the config, not even as a `{file:…}` reference.
 
 → **[What the setup does, repo layout & CLAUDE.md strategy](docs/installation.md)**
 

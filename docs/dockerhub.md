@@ -122,7 +122,8 @@ Set in the Compose `.env`:
 | `BACKUP_DIR` | `/backups` | Backup files |
 | `MAX_BACKUPS` | `10` | Backups to keep |
 | `AI_REM_OLLAMA_URL` | `http://mystorage.lan:11437` | LLM endpoint (OpenAI-compatible) for nightly cleanup / extraction. Defaults to the LiteLLM router rather than a GPU host directly, so a sleeping backend falls back instead of failing |
-| `AI_REM_LLM_API_KEY` | — | Bearer token for that endpoint. Empty = no `Authorization` header |
+| `AI_REM_LLM_API_KEY` | — | Bearer token for that endpoint. Empty = no `Authorization` header. Also served to paired clients via `GET /api/client-config` (preferred over `llm_api_key` in the setup-config), so workstations store no LLM key |
+| `AI_REM_PAIR_VAULT_TOKEN` | — | mykeyvault API token handed to paired clients via `/api/client-config` (with the vault URL from the setup-config). Empty = clients run mykeyvault over HTTP without the exec/file tools |
 | `CLEANUP_LLM_MODEL` | `qwen` | Model name sent to `AI_REM_OLLAMA_URL` |
 | `CLEANUP_TASK_RETENTION_DAYS` | `14` | Grace period before a task on `status=erledigt` is archived, counted from `extra.done_at` |
 | `EMBED_API_KEY` | — | Bearer token for `EMBED_URL`. Empty = no `Authorization` header |

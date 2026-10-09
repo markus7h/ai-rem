@@ -11,21 +11,25 @@ CLAUDE.md-Strategie, die es verwaltet.
 `bash <(curl -s http://<SERVER_IP>:3456/setup)` (oder `irm http://<SERVER_IP>:3456/setup.ps1 | iex`
 auf nativem Windows) lädt dieselbe plattformneutrale Logik (`/setup.py`, benötigt Python 3) —
 das Verhalten ist auf macOS, Linux, WSL und Windows identisch. Auf Windows werden die Hooks als
-`python -X utf8 <hook>`-Commands registriert und der Secret-Pull nutzt den mitgelieferten
-OpenSSH-Client (alternativ `$env:AI_REM_TOKEN` setzen).
+`python -X utf8 <hook>`-Commands registriert und der optionale SSH-Token-Pull nutzt den
+mitgelieferten OpenSSH-Client (alternativ das Gerät im Browser koppeln oder `$env:AI_REM_TOKEN` setzen).
 
 Das Skript erledigt automatisch:
-1. `claude mcp add` — ai-rem als user-scoped HTTP MCP-Server registrieren
+1. `~/.claude.json` → `mcpServers.ai-rem` — ai-rem als user-scoped **stdio**-MCP-Server registrieren: `{"type": "stdio", "command": "~/.local/share/ai-rem/bin/ai-rem", "args": ["mcp-proxy"]}`. Der Proxy liest den Geräte-Token aus dem OS-Keychain und brückt zum HTTP-Endpoint; in der Config steht kein `headers.Authorization` mehr ([Authentifizierung](authentication.de.md#ein-secret-pro-gerät--der-os-keychain))
 2. `~/.claude/settings-template.json` — Basis-Template für Permissions, Deny-Rules und Hooks aus der Live-Setup-Config schreiben
-3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests, Settings-Sync, Tools-Anzahl, Vektor-Abdeckung, offene Tasks/Pläne)
+3. `~/.claude/hooks/system-check.py` — konsolidierter SessionStart-Hook deployen (ai-rem Health, SMB-Mount, MCP-Server-Tests — nur für die `mcp_stdio_servers`, die in `~/.claude.json` registriert sind oder von einem aktiven Plugin kommen —, Settings-Sync, Tools-Anzahl, Vektor-Abdeckung, offene Tasks/Pläne)
 4. `~/.claude/hooks/auto-memory.py` — PreCompact + SessionEnd Hook deployen (Transcript → `ai-rem ingest` → llama-server-Extraktor → strukturierte Entities)
 5. `~/.local/share/ai-rem/bin/ai-rem` (+ `../lib/`, die von der CLI importierten Module) — die CLI selbst lokal ablegen und `AI_REM_CLI` in `~/.claude/settings.json` darauf zeigen lassen. Ein dort eingetragener Clone-Pfad wird ersetzt: liegt der Clone auf einem Netzlaufwerk, ist die CLI beim Session-Ende weg, sobald der Mount hängt, und der Hook bricht still ab (nur sichtbar in `~/.claude/auto-memory/errors.log`). Ein manuell gesetztes `AI_REM_CLI`, das auf keinen Clone zeigt, bleibt unangetastet. Findet der Hook die CLI dort nicht, sucht er zusätzlich unter `~/myCode/github/ai-rem/bin/ai-rem`, `~/*/myCode/github/ai-rem/bin/ai-rem`, `/Volumes/*/myCode/…` und im `PATH`. Zusätzlich verlinkt das Setup `~/.local/bin/ai-rem` auf diese Kopie, damit `ai-rem` in der Shell als normaler Befehl funktioniert. Musste `~/.local/bin` dafür erst angelegt werden, zieht der `PATH` auf manchen Systemen erst beim nächsten Login nach; fehlt das Verzeichnis ganz im `PATH`, gibt das Setup die passende Zeile aus.
 6. `~/.claude/hooks/claude-md-guard.py` — PreToolUse-Hook deployen, der (non-blocking) warnt, wenn `~/.claude/CLAUDE.md` editiert wird
-7. `~/.claude/settings.json` — Permissions, Deny-Rules und alle Hooks eintragen; alte Hooks entfernen; `autoMemoryEnabled: false`
+7. `~/.claude/settings.json` — Permissions, Deny-Rules und alle Hooks eintragen (den PostToolUse-Hook `vault-secret-reminder.py` nur, wenn mykeyvault registriert oder als Plugin aktiv ist — sonst wird ein vorhandener Eintrag entfernt); alte Hooks entfernen; `autoMemoryEnabled: false`
 8. `~/.claude/CLAUDE.md` — minimalen Pointer auf ai-rem anlegen oder aktualisieren
 9. Slash-Commands installieren (`/setup-ai-rem`, `/memory-cleanup`, `/migrate-claude-md`, `/ai-rem-update`)
 10. Preferences & Tool-Entities direkt via MCP API im Knowledge Graph anlegen
-11. **mykeyvault** lokal als **stdio**-MCP bauen und registrieren (git clone + `npm run build` im `mcp/`-Ordner). Lokaler stdio-Betrieb schaltet die exec/file-Tools frei (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`) — Secrets landen damit **nie** im LLM-Kontext, sondern nur im lokal gestarteten Subprozess. Ohne Node/Git oder bei Build-Fehler fällt das Setup auf den HTTP-MCP zurück (nur `vault_list_items`/`vault_create_item`).
+11. **mykeyvault** lokal bauen (git clone + `npm run build` im `mcp/`-Ordner) und als **stdio**-MCP über den Wrapper `ai-rem vault-mcp` registrieren, der beim Start Vault-URL und -Token von `/api/client-config` holt und `node <mcp entry>` damit im Env per `exec` startet — kein `env`-Block mit Vault-Token in `~/.claude.json`, keine `ai-rem-vault.env`. Lokaler stdio-Betrieb schaltet die exec/file-Tools frei (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`) — Secrets landen damit **nie** im LLM-Kontext, sondern nur im lokal gestarteten Subprozess. Ohne Node/Git oder bei Build-Fehler fällt das Setup auf den HTTP-MCP über `ai-rem mcp-proxy --endpoint <vault-mcp-url>` zurück (nur `vault_list_items`/`vault_create_item`).
+
+**Nur ai-rem:** Ohne Build-Blöcke in `mcp_register` (`mykeyvault.stdio`, `tools.stdio.registry_url`) baut das Setup nichts und prüft bzw. installiert deshalb auch kein node/npm/git; ohne mykeyvault entfällt der Hook `vault-secret-reminder.py` (ein Eintrag aus einem früheren Lauf wird ausgetragen), und der SessionStart-Check testet nur stdio-Server, die tatsächlich registriert sind.
+
+**Plugin-Modus:** Ist in `~/.claude/settings.json` → `enabledPlugins` ein Plugin `ai-rem@…` / `mykeyvault@…` aktiv (beliebiger Marketplace, z. B. `ai-rem@tools-registry`), bringt es den MCP-Server selbst mit (`ai-rem mcp-proxy` / `ai-rem vault-mcp`). Das Setup legt dann den gleichnamigen `mcpServers`-Eintrag in `~/.claude.json` **nicht** an und entfernt einen vorhandenen mit Hinweis (auch `ai-rem update`) — es gibt nie zwei Server gleichen Namens. Hooks und Settings werden wie gewohnt installiert; ein aktives `mykeyvault`-Plugin gilt als registriert.
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`. Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
 
@@ -34,8 +38,10 @@ Das Skript erledigt automatisch:
 Die Schritte oben sind das Ziel **`claude`**. Das Setup wählt Ziele mit `--client`
 (`bash <(curl -s …/setup) --client opencode` oder später `ai-rem install --client …`); der
 Default `auto` nimmt jedes Frontend, dessen Binary im `PATH` liegt, und fällt sonst auf
-`generic` zurück. Installierte Ziele stehen in `~/.config/ai-rem/client.json`, zusammen mit
-dem Endpoint und der Token-Datei `~/.config/ai-rem/token` (Modus 0600), die CLI und opencode lesen.
+`generic` zurück. Installierte Ziele stehen in `~/.config/ai-rem/client.json` (`endpoint`,
+`targets`, `vault_url`, `vault_entry` = Pfad des gebauten mykeyvault-MCP, `keychain` = das
+Backend, das den Token hält). Die Datei enthält kein Secret: der Geräte-Token liegt im
+OS-Keychain, LLM-Router-Key und Vault-Token kommen pro Lauf von `/api/client-config`.
 
 **`opencode`** — die Unterschiede zu Claude Code:
 
@@ -43,15 +49,16 @@ dem Endpoint und der Token-Datei `~/.config/ai-rem/token` (Modus 0600), die CLI 
 |---|---|---|
 | Config | `~/.claude.json` → `mcpServers` | `~/.config/opencode/opencode.json` → `mcp` |
 | stdio-Server | `"type": "stdio"`, `command` + `args` | `"type": "local"`, `command` als **ein Array** |
-| http-Server | `"type": "http"`, `url` + `headers` | `"type": "remote"`, `url` + `headers` |
-| Env pro Server | `env` | `environment` |
+| http-Server (für ai-rem seit 1.7 nicht mehr genutzt) | `"type": "http"`, `url` + `headers` | `"type": "remote"`, `url` + `headers` |
+| Env pro Server | `env` | `environment` (`AI_REM_CLIENT=opencode` für die Attribution) |
 | Instruktionen | `~/.claude/CLAUDE.md` | `~/.config/opencode/AGENTS.md` + `instructions[]` |
-| Secrets | Klartext in der 0600-Config | `{file:~/.config/ai-rem/token}` |
+| Secrets | keine in der Config — `ai-rem mcp-proxy` / `ai-rem vault-mcp` lösen sie beim Start auf (OS-Keychain, `/api/client-config`) | dieselben Wrapper, keine `{file:…}`-Referenz |
 | Session-Hooks | SessionStart / PreCompact / SessionEnd | Plugin-Events `session.created` / `session.idle` / `session.compacted` |
 
 Was das Ziel schreibt:
-1. `opencode.json`: mergt `mcp.ai-rem` (remote, Bearer aus der Token-Datei) und — wenn
-   node und die Builds da sind — `mykeyvault` und `tools` als `local`-Server; `node` kommt
+1. `opencode.json`: mergt `mcp.ai-rem` als `local`-Server (`command: [ai-rem, mcp-proxy]`,
+   `environment: {AI_REM_CLIENT: opencode}`) und — wenn node und die Builds da sind —
+   `mykeyvault` (`[ai-rem, vault-mcp]`) und `tools` als `local`-Server; `node` kommt
    aus dem `PATH` (Homebrew: `/opt/homebrew/bin/node`). Provider, Modelle und fremde Server
    bleiben unberührt, einmalig wird `opencode.json.pre-airem.bak` angelegt. Eine
    JSONC-Datei mit Kommentaren wird **nicht** umgeschrieben — der Block landet stattdessen
@@ -66,9 +73,11 @@ Was das Ziel schreibt:
 4. `command/*.md`: `/setup-ai-rem`, `/memory-cleanup`, `/ai-rem-update`.
 
 **`generic`** — schreibt nichts außerhalb von `~/.config/ai-rem/snippets/`: fertige Blöcke
-für Codex (`config.toml`, Token über `AI_REM_TOKEN`), Gemini CLI (`settings.json`), Cursor
-(`mcp.json`) und einen `AGENTS.md`-Pointer. Diese Frontends bekommen Tools und
-Server-Instruktionen, aber kein Auto-Memory.
+für Codex (`config.toml`, HTTP mit `bearer_token_env_var`, Token über
+`export AI_REM_TOKEN="$(ai-rem token)"`), Gemini CLI (`settings.json`) und Cursor
+(`mcp.json`) — beide stdio über `{"command": "ai-rem", "args": ["mcp-proxy"]}` — plus einen
+`AGENTS.md`-Pointer. Diese Frontends bekommen Tools und Server-Instruktionen, aber kein
+Auto-Memory.
 
 `ai-rem uninstall --client <ziel>` entfernt, was das Ziel angelegt hat (bei opencode den
 `ai-rem`-Server, den `instructions`-Eintrag, den `AGENTS.md`-Block, Plugin und Commands;

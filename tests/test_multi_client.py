@@ -1,5 +1,6 @@
-"""Multi-Client: opencode-Transcripts, Setup-Ziel opencode, CLI-Drift je Ziel,
-Token-Suche. Alles ohne Netz — Downloads werden auf Stubs umgebogen."""
+"""Multi-Client: opencode-Transcripts, Setup-Ziel opencode (stdio-Wrapper statt
+{file:}-Secrets), CLI-Drift je Ziel, Token-Suche. Alles ohne Netz — Downloads
+werden auf Stubs umgebogen, der Keychain ist ein Dict."""
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -33,12 +34,23 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "CLAUDE_HOME", str(tmp_path / "claude-fehlt"))
     monkeypatch.setattr(mod, "AIREM_CFG_DIR", str(cfg / "ai-rem"))
     monkeypatch.setattr(mod, "CLIENT_JSON", str(cfg / "ai-rem" / "client.json"))
-    monkeypatch.setattr(mod, "TOKEN_FILE", str(cfg / "ai-rem" / "token"))
-    monkeypatch.setattr(mod, "VAULT_TOKEN_FILE", str(cfg / "ai-rem" / "vault.token"))
+    monkeypatch.setattr(mod, "LEGACY_TOKEN_FILE", str(cfg / "ai-rem" / "token"))
+    monkeypatch.setattr(mod, "LEGACY_VAULT_TOKEN_FILE", str(cfg / "ai-rem" / "vault.token"))
+    monkeypatch.setattr(mod, "LEGACY_VAULT_ENV", str(tmp_path / "claude-fehlt" / "ai-rem-vault.env"))
     monkeypatch.setattr(mod, "SNIPPET_DIR", str(cfg / "ai-rem" / "snippets"))
     monkeypatch.setattr(mod, "OPENCODE_DIR", str(cfg / "opencode"))
+    monkeypatch.setattr(mod, "LOCAL_CLI", str(tmp_path / ".local" / "share" / "ai-rem" / "bin" / "ai-rem"))
     monkeypatch.setattr(mod, "HOME", str(tmp_path))
+    monkeypatch.setattr(mod, "IS_WIN", False)
     monkeypatch.delenv("AI_REM_STATE_DIR", raising=False)
+    monkeypatch.delenv("NODE_EXTRA_CA_CERTS", raising=False)
+    # Keychain als Dict statt echtem Backend.
+    store = {}
+    monkeypatch.setattr(mod, "keychain_get", lambda: store.get("t", ""))
+    monkeypatch.setattr(mod, "keychain_set", lambda tok: store.__setitem__("t", tok))
+    monkeypatch.setattr(mod, "keychain_delete", lambda: store.pop("t", None))
+    monkeypatch.setattr(mod, "keychain_backend", lambda: "Fake-Keychain")
+    mod._store = store
 
     def fake_fetch(url, dst):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -82,15 +94,16 @@ def test_opencode_json_wird_gemergt_nicht_ersetzt(setup, tmp_path):
     (oc / "opencode.json").write_text(json.dumps(
         {"provider": {"litellm": {"x": 1}}, "mcp": {"fremd": {"type": "remote", "url": "u"}},
          "instructions": ["eigene.md"]}))
-    setup.install_opencode("https://kg.test/mcp", "", "", "", "")
-    setup.install_opencode("https://kg.test/mcp", "", "", "", "")  # idempotent
+    setup.install_opencode("", "", "")
+    setup.install_opencode("", "", "")  # idempotent
 
     data = json.loads((oc / "opencode.json").read_text())
     assert data["provider"] == {"litellm": {"x": 1}}, "Provider verloren"
     assert "fremd" in data["mcp"], "fremder MCP-Server verloren"
     ai = data["mcp"]["ai-rem"]
-    assert ai["type"] == "remote" and ai["url"] == "https://kg.test/mcp"
-    assert ai["headers"]["Authorization"] == "Bearer {file:%s}" % setup.TOKEN_FILE
+    assert ai["type"] == "local" and ai["command"] == [setup.LOCAL_CLI, "mcp-proxy"]
+    assert ai["environment"] == {"AI_REM_CLIENT": "opencode"}
+    assert "headers" not in ai and "{file:" not in json.dumps(data), "kein Token-Verweis mehr"
     fallbacks = [i for i in data["instructions"] if i.endswith("fallback.md")]
     assert data["instructions"][0] == "eigene.md" and len(fallbacks) == 1
     assert (oc / "opencode.json.pre-airem.bak").exists()
@@ -112,31 +125,47 @@ def test_jsonc_wird_nicht_umgeschrieben(setup):
 
 
 def test_stdio_server_nutzen_node_aus_dem_path(setup, monkeypatch, tmp_path):
+    """mykeyvault laeuft ueber `ai-rem vault-mcp` (holt Vault-Zugang vom Server);
+    node muss trotzdem da sein, sonst entsteht ein toter Eintrag. tools bleibt
+    direkt node (kein Secret)."""
     monkeypatch.setattr(setup.shutil, "which", lambda n: "/opt/homebrew/bin/node" if n == "node" else None)
-    setup.write_secret(setup.VAULT_TOKEN_FILE, "vt")
-    e = setup.opencode_mcp_entries("u", "https://vault", "/v/index.js", "/t/index.js", "http://reg")
-    assert e["mykeyvault"]["command"] == ["/opt/homebrew/bin/node", "/v/index.js"]
-    assert e["mykeyvault"]["environment"]["VAULT_API_TOKEN"] == "{file:%s}" % setup.VAULT_TOKEN_FILE
+    e = setup.opencode_mcp_entries("/v/index.js", "/t/index.js", "http://reg")
+    assert e["ai-rem"]["type"] == "local" and e["ai-rem"]["command"] == [setup.LOCAL_CLI, "mcp-proxy"]
+    assert e["mykeyvault"]["command"] == [setup.LOCAL_CLI, "vault-mcp"]
+    assert "environment" not in e["mykeyvault"], "kein Vault-Token/-URL in der opencode.json"
+    assert "{file:" not in json.dumps(e)
     assert e["tools"]["command"] == ["/opt/homebrew/bin/node", "/t/index.js"]
+    monkeypatch.setenv("NODE_EXTRA_CA_CERTS", "/ca.pem")
+    assert setup.opencode_mcp_entries("/v", "", "")["mykeyvault"]["environment"] == {"NODE_EXTRA_CA_CERTS": "/ca.pem"}
     monkeypatch.setattr(setup.shutil, "which", lambda n: None)
-    assert set(setup.opencode_mcp_entries("u", "v", "/v", "/t", "r")) == {"ai-rem"}, \
+    assert set(setup.opencode_mcp_entries("/v", "/t", "r")) == {"ai-rem"}, \
         "ohne node darf kein kaputter stdio-Eintrag entstehen"
 
 
-def test_token_datei_und_client_json(setup):
-    setup.record_client("https://kg.test/mcp", ["opencode"], {"ollama_url": "http://llm"}, token="tok")
-    setup.record_client("https://kg.test/mcp", ["claude"], {})
-    mode = stat.S_IMODE(os.stat(setup.TOKEN_FILE).st_mode)
-    if os.name != "nt":
-        assert mode == 0o600, oct(mode)
+def test_client_json_ohne_secrets(setup):
+    """client.json traegt Endpoint, Ziele, vault_entry, Keychain-Backend — nie
+    Token, LLM-Key oder Token-Pfad. Alte Felder werden beim Schreiben entfernt."""
+    pathlib.Path(setup.AIREM_CFG_DIR).mkdir(parents=True)
+    pathlib.Path(setup.CLIENT_JSON).write_text(json.dumps(
+        {"targets": ["claude"], "llm_api_key": "sk-alt", "llm_url": "http://llm",  # pragma: allowlist secret
+         "token_file": "/alt/token"}))
+    setup.record_client("https://kg.test/mcp", ["opencode"], {"ollama_url": "http://llm", "llm_api_key": "x"},
+                        vault_url="https://vault", vault_entry="/v/mcp/dist/index.js")
+    setup.record_client("https://kg.test/mcp", ["claude"], {})  # vault_entry=None: bleibt
     cfg = json.loads(pathlib.Path(setup.CLIENT_JSON).read_text())
-    assert cfg["targets"] == ["opencode", "claude"], "Ziele verdraengt statt ergaenzt"
-    assert cfg["token_file"] == setup.TOKEN_FILE and cfg["llm_url"] == "http://llm"
+    assert cfg["targets"] == ["claude", "opencode"], "Ziele verdraengt statt ergaenzt"
+    assert cfg["vault_entry"] == "/v/mcp/dist/index.js" and cfg["vault_url"] == "https://vault"
+    assert cfg["keychain"] == "Fake-Keychain" and cfg["endpoint"] == "https://kg.test/mcp"
+    assert not {"llm_api_key", "llm_url", "token_file"} & set(cfg)
+    if os.name != "nt":
+        assert stat.S_IMODE(os.stat(setup.CLIENT_JSON).st_mode) == 0o600
+    assert not pathlib.Path(setup.LEGACY_TOKEN_FILE).exists(), "keine Token-Datei mehr"
 
 
 def test_uninstall_opencode(setup):
-    setup.install_opencode("https://kg.test/mcp", "", "", "", "")
+    setup.install_opencode("", "", "")
     setup.record_client("https://kg.test/mcp", ["opencode", "claude"], {})
+    setup._store["t"] = "tok"
     setup.uninstall(["opencode"])
     oc = pathlib.Path(setup.OPENCODE_DIR)
     data = json.loads((oc / "opencode.json").read_text())
@@ -144,6 +173,18 @@ def test_uninstall_opencode(setup):
     assert not (oc / "plugin" / "ai-rem.ts").exists()
     assert setup.AGENTS_BEGIN not in (oc / "AGENTS.md").read_text()
     assert json.loads(pathlib.Path(setup.CLIENT_JSON).read_text())["targets"] == ["claude"]
+    assert setup._store == {"t": "tok"}, "Token bleibt, solange ein Ziel uebrig ist"
+    setup.uninstall(["claude"])
+    assert setup._store == {}, "letztes Ziel weg => Token aus dem Keychain"
+
+
+def test_generic_snippets_ohne_bearer(setup):
+    setup.install_generic("https://kg.test/mcp")
+    snip = pathlib.Path(setup.SNIPPET_DIR)
+    for name in ("gemini-settings.json", "cursor-mcp.json"):
+        d = json.loads((snip / name).read_text())
+        assert d["mcpServers"]["ai-rem"] == {"command": setup.LOCAL_CLI, "args": ["mcp-proxy"]}
+    assert "$(ai-rem token)" in (snip / "codex-config.toml").read_text()
 
 
 def test_parse_args(setup, monkeypatch):
@@ -163,6 +204,11 @@ def test_cli_drift_beachtet_ziele(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     cli = _load("ai_rem_cli_mc", ROOT / "bin" / "ai-rem")
+    # lib.mcp_client legt CLIENT_JSON beim ersten Import fest (echtes HOME, ggf.
+    # schon durch einen frueheren Test) — load_client_cfg() liest sonst die
+    # client.json der Workstation, und deren targets schlagen die Datei-Erkennung.
+    mc = sys.modules[cli.load_client_cfg.__module__]
+    monkeypatch.setattr(mc, "CLIENT_JSON", str(tmp_path / "cfg" / "ai-rem" / "client.json"))
     body = b"x"
     sha = hashlib.sha256(body).hexdigest()
     share = tmp_path / ".local" / "share" / "ai-rem" / "bin"
@@ -185,16 +231,45 @@ def test_cli_drift_beachtet_ziele(tmp_path, monkeypatch):
 
 # ── Token-Suche ───────────────────────────────────────────────────────────────
 
-def test_token_aus_client_json_vor_claude_json(tmp_path, monkeypatch):
+def test_token_reihenfolge_env_keychain_legacy(tmp_path, monkeypatch, capsys):
+    """Env > Keychain > Klartext-Altlasten (token_file, dann ~/.claude.json-Header).
+    Die Altlasten werden nur gelesen und einmal pro Prozess gemeldet; der alte
+    Vault-Fallback existiert nicht mehr."""
     import lib.mcp_client as mc
+    from lib import keychain
     tf = tmp_path / "token"
     tf.write_text("aus-datei\n")
     cj = tmp_path / "client.json"
     cj.write_text(json.dumps({"token_file": str(tf), "endpoint": "https://kg/mcp"}))
     monkeypatch.setattr(mc, "CLIENT_JSON", str(cj))
+    monkeypatch.setattr(mc, "_legacy_warned", False)
     monkeypatch.delenv("AI_REM_TOKEN", raising=False)
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "nix"))
-    assert mc._resolve_token() == "aus-datei"
+    cdir = tmp_path / "claude"
+    cdir.mkdir()
+    (cdir / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "ai-rem": {"headers": {"Authorization": "Bearer aus-header"}},  # pragma: allowlist secret
+        "mykeyvault": {"env": {"VAULT_API_URL": "http://vault", "VAULT_API_TOKEN": "vt"}}}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cdir))
+    monkeypatch.setattr(keychain, "get", lambda: "")
+    monkeypatch.setattr(keychain, "backend_name", lambda: "Fake")
+
+    assert mc._resolve_token_with_source() == ("aus-datei", "Klartext-Legacy (%s)" % tf)
+    assert "Klartext" in capsys.readouterr().err
     assert mc._default_endpoint() == "https://kg/mcp"
+    tf.unlink()
+    assert mc._resolve_token_with_source() == ("aus-header", "Klartext-Legacy (~/.claude.json)")
+    assert capsys.readouterr().err == "", "Legacy-Hinweis nur einmal pro Prozess"
+
+    monkeypatch.setattr(keychain, "get", lambda: "aus-keychain")
+    assert mc._resolve_token_with_source() == ("aus-keychain", "Keychain (Fake)")
     monkeypatch.setenv("AI_REM_TOKEN", "env")
     assert mc._resolve_token() == "env", "Env muss gewinnen"
+
+    # Nichts gefunden: leer statt Vault-Roundtrip (zirkulaer seit 1.7).
+    monkeypatch.delenv("AI_REM_TOKEN")
+    monkeypatch.setattr(keychain, "get", lambda: "")
+    (cdir / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "mykeyvault": {"env": {"VAULT_API_URL": "http://vault", "VAULT_API_TOKEN": "vt"}}}}))
+    monkeypatch.setattr(mc.urllib.request, "urlopen",
+                        lambda *a, **kw: pytest.fail("kein Netz bei der Token-Suche"))
+    assert mc._resolve_token_with_source() == ("", "")
