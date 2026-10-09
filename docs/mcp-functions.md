@@ -118,7 +118,7 @@ Scripts ohne MCP-Neustart**.
 |---|---|
 | `list_scripts` | Meta-Tool: alle registrierten Scripts + Manifest-Metadaten (inputs/requires) auflisten. |
 | `pipeline_run` | Meta-Tool: mehrere Script-Aufrufe verketten, mit Variablen-Interpolation zwischen den Schritten. |
-| `ai_rem_token` | Liest den ai-rem-Bearer-Token aus `~/.claude.json` (`mcpServers.<server>.headers.Authorization`) → `{token, authorization}`. |
+| `ai_rem_token` | Liest den ai-rem-Bearer-Token → `{token, authorization}`. **Stand tools-registry:** liest noch `~/.claude.json` (`mcpServers.<server>.headers.Authorization`) — seit ai-rem 1.7 steht dort kein Header mehr (stdio-Proxy, Token im OS-Keychain). Follow-up im tools-registry-Repo: auf `ai-rem token` umstellen (Env → Keychain → Legacy). |
 | `settings_sync` | Synchronisiert Claude-Code `settings.json` mit dem Template. |
 | `subagent_models` | Wertet die Subagent-Modellnutzung aus den `subagent-*.jsonl`-Transcripts aus. |
 | `md_to_pdf` | Markdown → PDF (rendert auch Mermaid-Blöcke). |

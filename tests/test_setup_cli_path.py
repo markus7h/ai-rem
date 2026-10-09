@@ -55,7 +55,7 @@ def test_update_flag_ueberspringt_den_bootstrap(monkeypatch, tmp_path):
                  "update_claude_md", "load_setup_config", "choose_mcp_endpoint",
                  "write_settings_template", "install_hooks", "install_cli",
                  "link_cli", "update_settings", "install_commands", "record_client",
-                 "installed_targets"):
+                 "installed_targets", "migrate_secrets"):
         monkeypatch.setattr(setup, name,
                             (lambda n: lambda *a, **kw: gerufen.append(n))(name))
     monkeypatch.setattr(setup, "KG_URL", "http://kg.test")
@@ -64,8 +64,10 @@ def test_update_flag_ueberspringt_den_bootstrap(monkeypatch, tmp_path):
 
     setup.main()
 
+    # migrate_secrets gehoert dazu: ein Update von < 1.7 muss die Klartext-Tokens
+    # einsammeln — nach install_cli, weil der Keychain-Code aus lib/ kommt.
     assert gerufen == ["installed_targets", "load_setup_config", "choose_mcp_endpoint",
-                       "install_cli", "link_cli", "write_settings_template",
+                       "install_cli", "link_cli", "migrate_secrets", "write_settings_template",
                        "install_hooks", "update_settings", "install_commands",
                        "record_client"]
 

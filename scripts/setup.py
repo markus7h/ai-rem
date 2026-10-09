@@ -34,16 +34,22 @@ CLAUDE_HOME = _CC or os.path.join(HOME, '.claude')
 CLAUDE_JSON = os.path.join(_CC, '.claude.json') if _CC else os.path.join(HOME, '.claude.json')
 IS_WIN = sys.platform == 'win32'
 
-# Client-neutrale Ablage (XDG): client.json + Token-Dateien. opencode liest die
-# Tokens per {file:…} von hier; lib/mcp_client.py ebenso.
+# Client-neutrale Ablage (XDG): client.json (Endpoint, Ziele, vault_entry — KEINE
+# Secrets). Das einzige Secret pro Geraet, der ai-rem-Token, liegt im OS-Keychain
+# (lib/keychain.py); alles Weitere holt die CLI zur Laufzeit ueber /api/client-config.
 CONFIG_HOME = os.environ.get('XDG_CONFIG_HOME') or os.path.join(HOME, '.config')
 AIREM_CFG_DIR = os.path.join(CONFIG_HOME, 'ai-rem')
 CLIENT_JSON = os.path.join(AIREM_CFG_DIR, 'client.json')
-TOKEN_FILE = os.path.join(AIREM_CFG_DIR, 'token')
-VAULT_TOKEN_FILE = os.path.join(AIREM_CFG_DIR, 'vault.token')
 SNIPPET_DIR = os.path.join(AIREM_CFG_DIR, 'snippets')
 OPENCODE_DIR = os.path.join(CONFIG_HOME, 'opencode')
 TARGETS = ('claude', 'opencode', 'generic')
+# Klartext-Ablagen aelterer Installationen (< 1.7): werden nur noch gelesen
+# (Token-Uebernahme in den Keychain) und von migrate_secrets() geloescht.
+LEGACY_TOKEN_FILE = os.path.join(AIREM_CFG_DIR, 'token')
+LEGACY_VAULT_TOKEN_FILE = os.path.join(AIREM_CFG_DIR, 'vault.token')
+LEGACY_VAULT_ENV = os.path.join(CLAUDE_HOME, 'ai-rem-vault.env')
+# Lokale CLI-Kopie; lib/ (inkl. keychain.py) liegt daneben unter ../lib.
+LOCAL_CLI = os.path.join(HOME, '.local', 'share', 'ai-rem', 'bin', 'ai-rem')
 
 # Windows-Konsole (cp850/cp1252) wuerde sonst an ✓/✗ scheitern.
 for _stream in (sys.stdout, sys.stderr):
@@ -133,6 +139,20 @@ def fetch_to(url, dst):
     return True
 
 
+def write_json_atomic(path, data, mode=None):
+    # Tmp-Datei im Zielverzeichnis + os.replace: ein Abbruch mitten im Schreiben
+    # laesst die alte Datei intakt (bei ~/.claude.json waere ein halbes JSON fatal —
+    # Claude Code startet dann nicht mehr). mode=0o600 fuer client.json.
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write('\n')
+    if mode is not None and not IS_WIN:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
 def hook_command(path):
     # Unix: Shebang + chmod reichen, der Command ist der nackte Pfad.
     # Windows: kein Shebang-Exec — python explizit davorsetzen. -X utf8, weil
@@ -141,6 +161,83 @@ def hook_command(path):
     if IS_WIN:
         return '"%s" -X utf8 "%s"' % (sys.executable, path)
     return path
+
+
+def cli_invocation(*args):
+    """(command, args) fuer einen MCP-Server-Eintrag, der die lokale CLI startet —
+    Gegenstueck zu hook_command() fuer Configs, die command und args getrennt
+    erwarten (~/.claude.json, opencode.json, Snippets)."""
+    if IS_WIN:
+        return sys.executable, ['-X', 'utf8', LOCAL_CLI] + list(args)
+    return LOCAL_CLI, list(args)
+
+
+# ── Keychain: das einzige Secret pro Geraet ──────────────────────────────────
+# lib/keychain.py kommt mit der CLI (install_cli) — darum laeuft install_cli() im
+# Ablauf VOR obtain_tokens(). Fallback auf ../lib relativ zu diesem Skript, damit
+# Checkout und Tests ohne installierte CLI funktionieren. Die Wrapper sind die
+# Monkeypatch-Punkte der Tests (kein echter Keychain in der CI).
+
+_KEYCHAIN = None
+
+
+def _keychain():
+    global _KEYCHAIN
+    if _KEYCHAIN is not None:
+        return _KEYCHAIN
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(globals().get('__file__') or sys.argv[0]))
+    cands = [os.path.join(os.path.dirname(os.path.dirname(LOCAL_CLI)), 'lib', 'keychain.py'),
+             os.path.join(here, '..', 'lib', 'keychain.py')]
+    path = next((p for p in cands if os.path.isfile(p)), '')
+    if not path:
+        print('✗ lib/keychain.py fehlt (erwartet: %s) — CLI-Download fehlgeschlagen?' % cands[0])
+        print('  Erneut ausfuehren:  %s' % rerun_hint())
+        sys.exit(1)
+    spec = importlib.util.spec_from_file_location('ai_rem_keychain', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _KEYCHAIN = mod
+    return mod
+
+
+def keychain_get():
+    return _keychain().get()
+
+
+def keychain_set(tok):
+    _keychain().set(tok)
+
+
+def keychain_delete():
+    _keychain().delete()
+
+
+def keychain_backend():
+    return _keychain().backend_name()
+
+
+def store_token(tok):
+    """Token in den Keychain legen; False (mit Meldung) bei Backend-Fehler, damit
+    der Aufrufer entscheiden kann, ob es ohne weitergeht."""
+    try:
+        keychain_set(tok)
+    except Exception as ex:
+        print('✗ Token konnte nicht im Keychain abgelegt werden: %s' % ex)
+        print('  Notloesung: AI_REM_TOKEN im Env setzen (gilt dann nur fuer diese Shell).')
+        REPORT.append(('Keychain', False, 'ai-rem pair'))
+        return False
+    print('✓ Token im %s gespeichert' % keychain_backend())
+    return True
+
+
+def report_keychain():
+    backend = keychain_backend()
+    REPORT.append(('Keychain (%s)' % backend, True, ''))
+    if backend.startswith('Datei'):
+        print('⚠ Kein OS-Keychain gefunden — der Token liegt als Datei (0600) unter %s.'
+              % os.path.join(AIREM_CFG_DIR, 'keyring'))
+        print('  Besser: libsecret installieren (apt install libsecret-tools), dann  ai-rem pair')
 
 
 def run(cmd, timeout=120, capture=True, cwd=None):
@@ -173,14 +270,23 @@ def register_mcp(claude):
         listed = run([claude, 'mcp', 'list'], timeout=60).stdout or ''
     except Exception:
         listed = ''
-    if 'kg-memory' in listed:
+    # Zeilenanfang pruefen, nicht Substring: `claude mcp list` zeigt pro Server
+    # "name: command …", und der CLI-Pfad (…/ai-rem/bin/ai-rem) steht seit den
+    # stdio-Wrappern auch in der mykeyvault-Zeile.
+    def listed_as(name):
+        return re.search(r'^%s:' % re.escape(name), listed, re.M) is not None
+
+    if listed_as('kg-memory'):
         run([claude, 'mcp', 'remove', 'kg-memory'], timeout=60)
         print('✓ Alte kg-memory Registrierung entfernt')
-    if 'ai-rem' in listed:
+    if listed_as('ai-rem'):
+        # Eine alte http-Registrierung stellt update_claude_json() auf stdio um.
         print('✓ MCP bereits registriert')
         return
-    p = run([claude, 'mcp', 'add', '--transport', 'http', '--scope', 'user',
-             'ai-rem', KG_URL + '/mcp'], timeout=120)
+    # stdio statt http: Claude Code startet `ai-rem mcp-proxy`, der den Token aus
+    # dem Keychain holt — kein Bearer mehr in ~/.claude.json.
+    cmd, cargs = cli_invocation('mcp-proxy')
+    p = run([claude, 'mcp', 'add', '--scope', 'user', 'ai-rem', '--', cmd] + cargs, timeout=120)
     if p.returncode != 0:
         print("✗ 'claude mcp add' fehlgeschlagen - claude CLI zu alt? Aktualisieren mit:  claude update")
         if (p.stderr or '').strip():
@@ -245,41 +351,34 @@ def choose_mcp_endpoint(setup_cfg):
     return endpoint
 
 
-# ── Bootstrap-Secrets per SSH von mystorage ziehen ───────────────────────────
+# ── Bootstrap-Token per SSH von mystorage ziehen ─────────────────────────────
 # /setup ist oeffentlich (anonymer Download), Secrets liegen also NICHT im
-# Script-Body. Stattdessen zieht der bereits per SSH-Key vertraute Host die
-# Tokens direkt aus den .env-Dateien auf dem Server — ai-rem bleibt damit KEIN
-# Secret-Verteiler. Override: AI_REM_TOKEN / VAULT_API_TOKEN im Env haben Vorrang.
+# Script-Body. Ein bereits per SSH-Key vertrauter Host zieht den ai-rem-Token
+# direkt aus der .env auf dem Server — ai-rem bleibt damit KEIN Secret-Verteiler.
+# Override: AI_REM_TOKEN im Env hat Vorrang. Den Vault-Token braucht das Setup
+# seit 1.7 nicht mehr: `ai-rem vault-mcp` holt ihn zur Laufzeit ueber
+# /api/client-config, nichts davon landet auf Platte.
 
 def pull_secrets(setup_cfg):
+    ai_rem_token = os.environ.get('AI_REM_TOKEN', '')
+    if ai_rem_token:
+        return ai_rem_token
     ssh_host = os.environ.get('AI_REM_SSH_HOST') or setup_cfg.get('ssh_host', 'mystorage')
     ssh = shutil.which('ssh')
-    ssh_ok = False
-    if ssh:
-        try:
-            ssh_ok = run([ssh, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
-                          ssh_host, 'true'], timeout=20).returncode == 0
-        except Exception:
-            ssh_ok = False
-    # Kein SSH ist kein Fehler mehr: die Geraete-Kopplung (pair_device) holt die
-    # Tokens dann ueber den Browser. Darum hier keine Warnung.
-
-    def remote_env(remote_file, key):
-        try:
-            p = run([ssh, ssh_host,
-                     "grep -h '^%s=' %s 2>/dev/null | head -1 | cut -d= -f2-" % (key, remote_file)],
-                    timeout=20)
-            return (p.stdout or '').strip()
-        except Exception:
+    if not ssh:
+        return ''
+    # Kein SSH ist kein Fehler: die Geraete-Kopplung (pair_device) holt den Token
+    # dann ueber den Browser. Darum hier keine Warnung.
+    try:
+        if run([ssh, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', ssh_host, 'true'],
+               timeout=20).returncode != 0:
             return ''
-
-    ai_rem_token = os.environ.get('AI_REM_TOKEN', '')
-    if not ai_rem_token and ssh_ok:
-        ai_rem_token = remote_env('mydocker/compose-files/ai-rem/.env', 'AI_REM_API_TOKEN')
-    vault_token = os.environ.get('VAULT_API_TOKEN', '')
-    if not vault_token and ssh_ok:
-        vault_token = remote_env('mydocker/compose-files/mykeyvault/.env', 'VAULT_API_TOKEN')
-    return ssh_host, ai_rem_token, vault_token
+        p = run([ssh, ssh_host,
+                 "grep -h '^AI_REM_API_TOKEN=' mydocker/compose-files/ai-rem/.env 2>/dev/null"
+                 " | head -1 | cut -d= -f2-"], timeout=20)
+        return (p.stdout or '').strip()
+    except Exception:
+        return ''
 
 
 # ── Voraussetzungen selbst installieren ──────────────────────────────────────
@@ -463,21 +562,24 @@ def ask_token():
         return ''
 
 
-def obtain_tokens(ai_rem_token, vault_token, vault_url, force_pair=False):
-    """Token-Kette: Env/SSH (pull_secrets) > gespeicherte Dateien > Kopplung > Eingabe."""
-    if force_pair:
-        ai_rem_token = ''
-    ai_rem_token = ai_rem_token or ('' if force_pair else read_secret(TOKEN_FILE))
-    vault_token = vault_token or read_secret(VAULT_TOKEN_FILE)
+def obtain_tokens(ai_rem_token, vault_url='', force_pair=False):
+    """Token-Kette: Env/SSH (pull_secrets) > Keychain > Kopplung > Eingabe.
+    Gibt (ai_rem_token, vault_url) zurueck. Ein neu erhaltener Token landet genau
+    hier im Keychain — der einzige Ort, an dem das Setup ein Secret ablegt. Den
+    vault_token aus /api/pair/poll ignorieren wir bewusst: er wuerde nur auf Platte
+    landen, die CLI holt ihn pro Lauf vom Server."""
+    stored = '' if force_pair else keychain_get()
+    ai_rem_token = ('' if force_pair else ai_rem_token) or stored
     if not ai_rem_token:
         paired = pair_device()
         ai_rem_token = paired.get('ai_rem_token', '')
-        vault_token = paired.get('vault_token') or vault_token
         vault_url = paired.get('vault_url') or vault_url
     if not ai_rem_token:
         ai_rem_token = ask_token()
+    if ai_rem_token and ai_rem_token != stored:
+        store_token(ai_rem_token)
     REPORT.append(('ai-rem-Token', bool(ai_rem_token), 'ai-rem pair'))
-    return ai_rem_token, vault_token, vault_url
+    return ai_rem_token, vault_url
 
 
 def print_report():
@@ -575,68 +677,39 @@ def build_mykeyvault_mcp(setup_cfg):
                            stdio.get('subdir', 'mcp'), 'mykeyvault-MCP')
 
 
-# ── ai-rem Bearer setzen + mykeyvault bootstrappen (atomar in ~/.claude.json) ─
-# Damit die ERSTE Session nicht 401t; danach refresht der SessionStart-Hook.
+# ── ai-rem + mykeyvault + tools als stdio-Server in ~/.claude.json ───────────
+# Seit 1.7 ohne Secrets: ai-rem laeuft ueber `ai-rem mcp-proxy` (Token aus dem
+# Keychain), mykeyvault ueber `ai-rem vault-mcp` (Vault-Zugang pro Lauf vom
+# Server). Eine bestehende http-Registrierung mit Bearer wird hier migriert.
 
-def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
-                       vault_token, tools_entry, tools_reg_url, vault_entry=''):
+def update_claude_json(setup_cfg, mcp_endpoint, tools_entry, tools_reg_url, vault_entry=''):
     cj = CLAUDE_JSON
     if not os.path.exists(cj):
         print('⚠ ~/.claude.json fehlt - claude einmal interaktiv starten, dann Setup erneut ausfuehren')
-        return ''
+        return False
     with open(cj, encoding='utf-8') as f:
         cfg = json.load(f)
     servers = cfg.setdefault('mcpServers', {})
     if 'ai-rem' not in servers:
-        print('⚠ ai-rem nicht in ~/.claude.json registriert - Bearer/Vault-Bootstrap uebersprungen')
-        return ''
+        print('⚠ ai-rem nicht in ~/.claude.json registriert - MCP-Eintraege uebersprungen')
+        return False
 
+    cmd, cargs = cli_invocation()
+
+    # (1) ai-rem: stdio-Proxy. url/headers einer alten http-Registrierung fallen weg.
+    old = servers['ai-rem'] if isinstance(servers['ai-rem'], dict) else {}
+    was_http = 'url' in old or 'headers' in old
+    servers['ai-rem'] = {'type': 'stdio', 'command': cmd, 'args': cargs + ['mcp-proxy']}
+    print('✓ ai-rem ' + ('von http auf stdio-Proxy migriert' if was_http else 'als stdio-Proxy eingetragen'))
+
+    # (2) mykeyvault: bevorzugt lokaler stdio-MCP via `ai-rem vault-mcp` (voller
+    # Funktionsumfang inkl. exec/file-Tools), sonst HTTP-Fallback ueber den Proxy
+    # (nur list/create) — beides ohne Token in der Datei.
     reg = setup_cfg.get('mcp_register', {}).get('mykeyvault', {})
-    vault_url = os.environ.get('VAULT_API_URL') or reg.get('vault_url', 'http://mystorage:8223')
-
-    # Runtime-Endpoint setzen (https-mit-Fallback) — migriert auch bestehende
-    # http-Registrierungen bei Re-Run auf TLS.
-    if mcp_endpoint:
-        servers['ai-rem']['url'] = mcp_endpoint
-
-    def from_vault(url, vt):
-        req = urllib.request.Request(url.rstrip('/') + '/secret/ai-rem-api-token',
-                                     headers={'Authorization': 'Bearer ' + vt})
-        return json.loads(urllib.request.urlopen(req, timeout=10).read().decode('utf-8')).get('password', '')
-
-    # (1) ai-rem Bearer: AI_REM_TOKEN (SSH-Pull/Env) > frischer Vault-Read > bestehende Koordinaten
-    tok = ai_rem_token
-    if not tok and vault_token:
-        try:
-            tok = from_vault(vault_url, vault_token)
-        except Exception:
-            pass
-    if not tok and 'mykeyvault' in servers:
-        try:
-            e = servers['mykeyvault']['env']
-            tok = from_vault(e['VAULT_API_URL'], e['VAULT_API_TOKEN'])
-        except Exception:
-            pass
-
-    if tok:
-        servers['ai-rem'].setdefault('headers', {})['Authorization'] = 'Bearer ' + tok
-        print('✓ ai-rem Bearer-Header gesetzt')
-    else:
-        print('✗ ai-rem-Token nicht ermittelbar — SSH-Zugang zu %s einrichten oder erneut mit:' % ssh_host)
-        if PLATFORM == 'windows':
-            print('  $env:AI_REM_TOKEN="<token>"; %s' % rerun_hint())
-        else:
-            print('  AI_REM_TOKEN=<token> %s' % rerun_hint())
-
-    # (2) mykeyvault registrieren: bevorzugt lokaler stdio-MCP (voller
-    # Funktionsumfang inkl. exec/file-Tools), sonst HTTP-Fallback (nur list/create).
-    if vault_entry and vault_token:
+    if vault_entry:
         existed = 'mykeyvault' in servers
-        servers['mykeyvault'] = {'type': 'stdio', 'command': 'node',
-                                 'args': [vault_entry],
-                                 'env': {'VAULT_API_URL': vault_url,
-                                         'VAULT_API_TOKEN': vault_token}}
-        print('✓ mykeyvault ' + ('migriert' if existed else 'registriert') + ' (stdio)')
+        servers['mykeyvault'] = {'type': 'stdio', 'command': cmd, 'args': cargs + ['vault-mcp']}
+        print('✓ mykeyvault ' + ('migriert' if existed else 'registriert') + ' (stdio via ai-rem vault-mcp)')
     else:
         # HTTP-Fallback (kein Build/node noetig). Kandidaten nur registrieren, wenn
         # der Host von DIESER Maschine aus antwortet (DNS aufloesbar + TLS vertraut)
@@ -651,7 +724,7 @@ def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
                 return False
 
         reg_http = reg.get('http') or {}
-        ai_https = servers.get('ai-rem', {}).get('url', '').startswith('https')
+        ai_https = (mcp_endpoint or '').startswith('https')
         mkv_url = os.environ.get('MYKEYVAULT_URL', '')
         if not mkv_url:
             cands = []
@@ -664,17 +737,12 @@ def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
                     mkv_url = c
                     break
                 print('⚠ mykeyvault-Kandidat nicht erreichbar/vertraut, ueberspringe: %s' % c)
-        if mkv_url and tok:
+        if mkv_url:
             existed = 'mykeyvault' in servers
-            servers['mykeyvault'] = {'type': 'http', 'url': mkv_url,
-                                     'headers': {'Authorization': 'Bearer ' + tok}}
+            servers['mykeyvault'] = {'type': 'stdio', 'command': cmd,
+                                     'args': cargs + ['mcp-proxy', '--endpoint', mkv_url]}
             print('✓ mykeyvault ' + ('migriert' if existed else 'registriert')
-                  + (' (https)' if mkv_url.startswith('https') else ' (http)'))
-    if vault_token:
-        vf = os.path.join(CLAUDE_HOME, 'ai-rem-vault.env')
-        fd = os.open(vf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write('VAULT_API_URL=%s\nVAULT_API_TOKEN=%s\n' % (vault_url, vault_token))
+                  + ' (Proxy auf %s)' % mkv_url)
 
     # (3) tools als stdio-MCP registrieren (gebaut aus Registry-Repo)
     if tools_entry and tools_reg_url:
@@ -684,11 +752,8 @@ def update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
                             'env': {'TOOLS_REGISTRY_URL': tools_reg_url}}
         print('✓ tools ' + ('migriert' if existed else 'registriert') + ' (stdio)')
 
-    tmp = cj + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, cj)
-    return tok
+    write_json_atomic(cj, cfg)
+    return True
 
 
 # ── settings-template.json: immer aus setup-config neu schreiben ─────────────
@@ -751,9 +816,6 @@ def install_hooks():
     return paths
 
 
-LOCAL_CLI = os.path.join(HOME, '.local', 'share', 'ai-rem', 'bin', 'ai-rem')
-
-
 def points_at_clone(path):
     """True, wenn der Pfad in einen ai-rem-Clone zeigt (statt in die lokale Kopie)."""
     return path.replace('\\', '/').endswith('/github/ai-rem/bin/ai-rem')
@@ -769,11 +831,13 @@ def install_cli():
     bin/ai-rem allein reicht nicht: es legt sein Parent-Verzeichnis auf sys.path
     und importiert lib/ (mcp_client immer, extractor bei ingest/catchup). Ohne
     diese Module scheitert schon `ai-rem status` am ModuleNotFoundError.
+    keychain.py braucht zusaetzlich dieses Setup selbst (_keychain()).
     """
     if not fetch_to(KG_URL + '/bin/ai-rem', LOCAL_CLI):
         return ''
     lib_dir = os.path.join(os.path.dirname(os.path.dirname(LOCAL_CLI)), 'lib')
-    for name in ('__init__.py', 'mcp_client.py', 'extractor.py', 'extractor_heuristic.py'):
+    for name in ('__init__.py', 'mcp_client.py', 'extractor.py', 'extractor_heuristic.py',
+                 'keychain.py'):
         if not fetch_to(KG_URL + '/lib/' + name, os.path.join(lib_dir, name)):
             return ''
     if not IS_WIN:
@@ -950,22 +1014,17 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
     # Env fuer Hook + CLI hinterlegen, damit Auto-Memory ohne manuelle Env laeuft:
     # - AI_REM_ENDPOINT kennt der Bootstrap bereits (MCP_ENDPOINT, TLS-aufgeloest)
     # - AI_REM_CLI per Discovery (inkl. SMB-Mount /Volumes/<x>/myCode auf macOS)
-    # - AI_REM_LLAMA_URL aus der setup-config: der system-check-Hook liest die URL
-    #   zwar aus settings-template.json, die CLI aber nicht — lib/extractor.py kennt
-    #   nur die Env. Ohne diesen Eintrag faellt `ai-rem ingest` auf den eingebauten
-    #   Default zurueck und meldet {"skipped": "llm_down"}, waehrend der
-    #   SessionStart-Report gleichzeitig "llm ✓" zeigt.
     # setdefault => bewusste manuelle Overrides bleiben erhalten.
+    #
+    # LLM-Zugang (URL + Key) kommt seit 1.7 als Paar ueber /api/client-config.
+    # AI_REM_LLM_API_KEY wird nie mehr geschrieben (migrate_secrets() raeumt den
+    # Altbestand weg). AI_REM_LLAMA_URL schreiben wir konsequenterweise auch nicht
+    # mehr neu: Env gewinnt gegen den Server, der Key kaeme aber von dort — zeigt
+    # der Server spaeter auf einen anderen Router, passten URL und Key nicht mehr
+    # zusammen. Ein vorhandener Eintrag bleibt als bewusster Override stehen.
     env = data.setdefault('env', {})
     if mcp_endpoint:
         env.setdefault('AI_REM_ENDPOINT', mcp_endpoint)
-    if setup_cfg.get('ollama_url'):
-        env.setdefault('AI_REM_LLAMA_URL', setup_cfg['ollama_url'])
-    # Zeigt ollama_url auf einen Router (LiteLLM), braucht der Hook dessen Key —
-    # sonst antwortet /v1/models mit 401, der Check meldet "llm ❌" und die
-    # Extraktion faellt still auf die Markdown-Notiz zurueck.
-    if setup_cfg.get('llm_api_key'):
-        env.setdefault('AI_REM_LLM_API_KEY', setup_cfg['llm_api_key'])
 
     def usable_cli(p):
         # X_OK ist auf Windows bedeutungslos; dort ruft der Hook die CLI eh via python auf.
@@ -992,8 +1051,7 @@ def update_settings(setup_cfg, mcp_endpoint, hook_paths):
     if usable_cli(LOCAL_CLI) and points_at_clone(env.get('AI_REM_CLI', '')):
         env['AI_REM_CLI'] = LOCAL_CLI
 
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    write_json_atomic(path, data)
     for line in ('' if not added else '  +%d allow permissions' % len(added),
                  '' if not added_deny else '  +%d deny rules' % len(added_deny),
                  '  SessionStart-Hook' if hook_added else '',
@@ -1065,14 +1123,7 @@ def install_commands():
 
 def create_entities(setup_cfg, ai_rem_token):
     mcp_url = KG_URL + '/mcp'
-    token = ai_rem_token or os.environ.get('AI_REM_TOKEN', '')
-    if not token:
-        try:
-            with open(CLAUDE_JSON, encoding='utf-8') as f:
-                auth = json.load(f)['mcpServers']['ai-rem']['headers']['Authorization']
-            token = auth.split()[-1] if auth else ''
-        except Exception:
-            token = ''
+    token = ai_rem_token or keychain_get()
 
     sid = {'v': None}
 
@@ -1150,23 +1201,14 @@ def load_client_cfg():
 
 
 def save_client_cfg(cfg):
-    os.makedirs(AIREM_CFG_DIR, exist_ok=True)
-    tmp = CLIENT_JSON + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, CLIENT_JSON)
-
-
-def write_secret(path, value):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-        f.write(value.strip() + '\n')
-    if not IS_WIN:
-        os.chmod(path, 0o600)  # bestehende Datei mit lockereren Rechten nachziehen
+    # 0600, obwohl keine Secrets drinstehen: Endpoint und Pfade gehen niemand
+    # anderen auf der Maschine etwas an, und ein spaeteres Feld soll nicht erst
+    # die Rechte korrigieren muessen.
+    write_json_atomic(CLIENT_JSON, cfg, mode=0o600)
 
 
 def read_secret(path):
+    # Nur noch fuer Klartext-Altlasten (LEGACY_TOKEN_FILE); geschrieben wird nicht mehr.
     try:
         with open(path, encoding='utf-8') as f:
             return f.read().strip()
@@ -1193,7 +1235,30 @@ def detect_targets():
     return found or ['generic']
 
 
+USAGE = '''ai-rem Setup — Claude Code / opencode / weitere Frontends einrichten
+
+  setup.py [--client claude,opencode,generic|auto] [--yes] [--pair]
+  setup.py --update [--client …]     nur ausgelieferte Dateien auffrischen
+  setup.py --pair-only               nur den Geraete-Token neu holen
+  setup.py --uninstall --client X    ein Ziel wieder entfernen
+
+Ohne Option laeuft das komplette Setup und baut die Installation um.'''
+
+
 def parse_args(argv):
+    # ponytail: ohne diesen Zweig war `setup.py --help` ein kompletter Setup-Lauf
+    # (unbekannte Optionen wurden still ignoriert) — genau das, was niemand will,
+    # der nur die Optionen sehen wollte.
+    if '-h' in argv or '--help' in argv:
+        print(USAGE)
+        sys.exit(0)
+    unknown = [a for a in argv if a.startswith('-') and a not in
+               ('--update', '--uninstall', '--yes', '-y', '--pair', '--pair-only', '--client')
+               and not a.startswith('--client=')]
+    if unknown:
+        print('✗ Unbekannte Option: %s' % ', '.join(unknown))
+        print(USAGE)
+        sys.exit(2)
     args = {'update': '--update' in argv, 'uninstall': '--uninstall' in argv, 'targets': [],
             'yes': '--yes' in argv or '-y' in argv, 'pair': '--pair' in argv,
             'pair_only': '--pair-only' in argv}
@@ -1215,40 +1280,32 @@ def parse_args(argv):
     return args
 
 
-def record_client(mcp_endpoint, targets, setup_cfg, token='', vault_token='', vault_url=''):
-    """client.json + Token-Dateien schreiben. Ziele werden ergaenzt, nie verdraengt."""
+# Felder aus client.json < 1.7, die Secrets oder deren Pfade trugen.
+LEGACY_CLIENT_FIELDS = ('llm_api_key', 'llm_url', 'token_file')
+
+
+def record_client(mcp_endpoint, targets, setup_cfg, vault_url='', vault_entry=None):
+    """client.json schreiben — ohne Secrets. Ziele werden ergaenzt, nie verdraengt.
+    vault_entry: absoluter Pfad des gebauten mykeyvault-MCP ('' = nicht gebaut,
+    None = Feld unveraendert lassen, z.B. beim --update ohne Build). keychain:
+    Backend-Name, damit `ai-rem doctor` sagen kann, wo der Token liegt."""
     cfg = load_client_cfg()
     cfg['endpoint'] = mcp_endpoint or cfg.get('endpoint') or KG_URL + '/mcp'
     cfg['targets'] = list(dict.fromkeys(cfg.get('targets', []) + list(targets)))
-    if setup_cfg.get('ollama_url'):
-        cfg['llm_url'] = setup_cfg['ollama_url']
-    if setup_cfg.get('llm_api_key'):
-        cfg['llm_api_key'] = setup_cfg['llm_api_key']
-    if token:
-        write_secret(TOKEN_FILE, token)
-    if os.path.isfile(TOKEN_FILE):
-        cfg['token_file'] = TOKEN_FILE
-    if vault_token:
-        write_secret(VAULT_TOKEN_FILE, vault_token)
+    if vault_url:
         cfg['vault_url'] = vault_url
+    if vault_entry is not None:
+        cfg['vault_entry'] = vault_entry
+    cfg['keychain'] = keychain_backend()
+    for k in LEGACY_CLIENT_FIELDS:
+        cfg.pop(k, None)
     save_client_cfg(cfg)
     return cfg
 
 
-def resolve_token(ai_rem_token, vault_url, vault_token):
-    """Fuer Ziele ohne ~/.claude.json: SSH/Env > Vault > bereits gespeicherte Datei."""
-    if ai_rem_token:
-        return ai_rem_token
-    if vault_token:
-        try:
-            req = urllib.request.Request(vault_url.rstrip('/') + '/secret/ai-rem-api-token',
-                                         headers={'Authorization': 'Bearer ' + vault_token})
-            tok = json.loads(urllib.request.urlopen(req, timeout=10).read().decode('utf-8')).get('password', '')
-            if tok:
-                return tok
-        except Exception:
-            pass
-    return read_secret(TOKEN_FILE)
+def resolve_token(ai_rem_token):
+    """Env/SSH/Kopplung > Keychain."""
+    return ai_rem_token or keychain_get()
 
 
 # ── opencode ─────────────────────────────────────────────────────────────────
@@ -1272,30 +1329,34 @@ def opencode_config_path():
     return os.path.join(OPENCODE_DIR, 'opencode.json')
 
 
-def opencode_mcp_entries(mcp_endpoint, vault_url, vault_entry, tools_entry, tools_reg_url):
+def opencode_mcp_entries(vault_entry, tools_entry, tools_reg_url):
     """mcp-Block fuer opencode. stdio heisst dort "local" (command als EIN Array),
-    http "remote", env "environment"; Secrets per {file:…} statt Klartext."""
-    entries = {'ai-rem': {'type': 'remote', 'url': mcp_endpoint, 'enabled': True,
-                          'headers': {'Authorization': 'Bearer {file:%s}' % TOKEN_FILE}}}
+    env "environment". ai-rem und mykeyvault laufen ueber die stdio-Wrapper der
+    CLI — kein Token und kein {file:…} mehr in der opencode.json.
+    AI_REM_CLIENT=opencode: der Proxy macht daraus X-AI-REM-Client, damit der
+    Server Entities dem richtigen Frontend zuordnet."""
+    cmd, cargs = cli_invocation()
+    entries = {'ai-rem': {'type': 'local', 'command': [cmd] + cargs + ['mcp-proxy'],
+                          'enabled': True, 'environment': {'AI_REM_CLIENT': 'opencode'}}}
     node = shutil.which('node')  # Homebrew: /opt/homebrew/bin/node, nicht /usr/bin/node
-    if vault_entry and node and os.path.isfile(VAULT_TOKEN_FILE):
-        env = {'VAULT_API_URL': vault_url, 'VAULT_API_TOKEN': '{file:%s}' % VAULT_TOKEN_FILE}
+    if vault_entry and node:
+        entry = {'type': 'local', 'command': [cmd] + cargs + ['vault-mcp'], 'enabled': True}
         if os.environ.get('NODE_EXTRA_CA_CERTS'):
-            env['NODE_EXTRA_CA_CERTS'] = os.environ['NODE_EXTRA_CA_CERTS']
-        entries['mykeyvault'] = {'type': 'local', 'command': [node, vault_entry],
-                                 'enabled': True, 'environment': env}
+            entry['environment'] = {'NODE_EXTRA_CA_CERTS': os.environ['NODE_EXTRA_CA_CERTS']}
+        entries['mykeyvault'] = entry
     elif vault_entry:
-        print('⚠ opencode: mykeyvault uebersprungen (node oder Vault-Token fehlt)')
+        print('⚠ opencode: mykeyvault uebersprungen (node fehlt)')
     if tools_entry and node:
         entries['tools'] = {'type': 'local', 'command': [node, tools_entry], 'enabled': True,
                             'environment': {'TOOLS_REGISTRY_URL': tools_reg_url}}
     return entries
 
 
-def merge_opencode_json(entries, only_ai_rem=False):
+def merge_opencode_json(entries, only=None):
     """mcp-Eintraege und den Fallback-Pfad in opencode.json mergen. Provider, Modelle
     und fremde MCP-Server bleiben unberuehrt. JSONC mit Kommentaren wird nicht
-    umgeschrieben (Kommentare gingen verloren) — dann liegt ein Snippet bereit."""
+    umgeschrieben (Kommentare gingen verloren) — dann liegt ein Snippet bereit.
+    only: nur diese Namen anfassen. Eintrag None entfernt den Server."""
     path = opencode_config_path()
     fallback = os.path.join(state_dir(), 'fallback.md')
     data = {}
@@ -1318,18 +1379,17 @@ def merge_opencode_json(entries, only_ai_rem=False):
     data.setdefault('$schema', 'https://opencode.ai/config.json')
     mcp = data.setdefault('mcp', {})
     for name, entry in entries.items():
-        if only_ai_rem and name != 'ai-rem':
+        if only is not None and name not in only:
             continue
-        mcp[name] = entry
+        if entry is None:
+            mcp.pop(name, None)
+        else:
+            mcp[name] = entry
     instr = [i for i in data.get('instructions', [])
              if not (isinstance(i, str) and i.endswith('fallback.md')
                      and ('ai-rem' in i or 'auto-memory' in i))]
     data['instructions'] = instr + [fallback]
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    write_json_atomic(path, data)
     print('✓ %s: mcp %s' % (path, ', '.join(sorted(n for n in entries if n in mcp))))
     return True
 
@@ -1366,19 +1426,18 @@ def install_opencode_files():
               % ', '.join('/' + c for c in OPENCODE_COMMANDS))
 
 
-def install_opencode(mcp_endpoint, vault_url, vault_entry, tools_entry, tools_reg_url):
+def install_opencode(vault_entry, tools_entry, tools_reg_url):
     print('--- opencode ---')
     if not shutil.which('opencode'):
         print('ℹ opencode nicht im PATH — Konfiguration wird trotzdem geschrieben.')
-    merge_opencode_json(opencode_mcp_entries(mcp_endpoint, vault_url, vault_entry,
-                                             tools_entry, tools_reg_url))
+    merge_opencode_json(opencode_mcp_entries(vault_entry, tools_entry, tools_reg_url))
     install_opencode_files()
 
 
-def update_opencode(mcp_endpoint):
+def update_opencode():
     # Nur ai-rem selbst nachziehen; mykeyvault/tools brauchen git+npm und bleiben
     # beim Update wie sie sind (Neu-Einrichtung: ai-rem install --client opencode).
-    merge_opencode_json(opencode_mcp_entries(mcp_endpoint, '', '', '', ''), only_ai_rem=True)
+    merge_opencode_json(opencode_mcp_entries('', '', ''), only=('ai-rem',))
     install_opencode_files()
 
 
@@ -1394,8 +1453,7 @@ def uninstall_opencode():
             data['instructions'] = instr
         else:
             data.pop('instructions', None)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        write_json_atomic(path, data)
         print('✓ %s: ai-rem entfernt (mykeyvault/tools bleiben stehen)' % path)
     except (OSError, ValueError):
         print('⚠ %s nicht lesbar — mcp-Eintrag ggf. von Hand entfernen' % path)
@@ -1416,17 +1474,16 @@ def install_generic(mcp_endpoint):
     MCP + Instruktionen + Pointer-Text reichen fuer Lesen/Schreiben ins Gedaechtnis."""
     print('--- generic ---')
     os.makedirs(SNIPPET_DIR, exist_ok=True)
-    hdr = 'Bearer <Token: ai-rem token>'
+    # stdio ueber die CLI: der Token bleibt im Keychain, kein Bearer im Snippet.
+    # Codex liest den Token per Env-Var — dort bleibt `ai-rem token` der Weg.
+    cmd, cargs = cli_invocation('mcp-proxy')
+    stdio = {'mcpServers': {'ai-rem': {'command': cmd, 'args': cargs}}}
     files = {
         'codex-config.toml': (
             '# ~/.codex/config.toml — Token per Env: export AI_REM_TOKEN="$(ai-rem token)"\n'
             '[mcp_servers.ai-rem]\nurl = "%s"\nbearer_token_env_var = "AI_REM_TOKEN"\n' % mcp_endpoint),
-        'gemini-settings.json': json.dumps(
-            {'mcpServers': {'ai-rem': {'httpUrl': mcp_endpoint, 'headers': {'Authorization': hdr}}}},
-            indent=2) + '\n',
-        'cursor-mcp.json': json.dumps(
-            {'mcpServers': {'ai-rem': {'url': mcp_endpoint, 'headers': {'Authorization': hdr}}}},
-            indent=2) + '\n',
+        'gemini-settings.json': json.dumps(stdio, indent=2) + '\n',
+        'cursor-mcp.json': json.dumps(stdio, indent=2) + '\n',
         'AGENTS.md': AGENTS_BLOCK.replace('opencode hat keinen', 'die meisten Frontends haben keinen') + '\n',
     }
     for name, body in files.items():
@@ -1467,8 +1524,7 @@ def uninstall_claude():
             hooks[event] = [g for g in groups if g.get('hooks')]
             if not hooks[event]:
                 del hooks[event]
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        write_json_atomic(path, data)
         print('✓ settings.json: ai-rem-Hooks ausgetragen')
     except (OSError, ValueError):
         pass
@@ -1498,7 +1554,163 @@ def uninstall(targets):
     cfg = load_client_cfg()
     cfg['targets'] = [t for t in cfg.get('targets', []) if t not in targets]
     save_client_cfg(cfg)
+    if not cfg['targets']:
+        # Letztes Ziel weg => das Geraet braucht den Token nicht mehr.
+        try:
+            keychain_delete()
+            print('✓ Token aus %s entfernt' % keychain_backend())
+        except Exception as ex:
+            print('⚠ Token nicht aus dem Keychain entfernt: %s (ai-rem token --forget)' % ex)
     print('Fertig. Verbleibende Ziele: %s' % (', '.join(cfg['targets']) or '—'))
+
+
+# ── Migration: Klartext-Secrets aelterer Installationen einsammeln ───────────
+# Vor 1.7 lagen der ai-rem-Token und der Vault-Token an bis zu sechs Stellen im
+# Klartext. Jetzt gibt es genau ein Secret pro Geraet (Keychain); alles andere
+# wird hier geloescht bzw. auf die stdio-Wrapper umgestellt. Laeuft bei jedem
+# Setup/Update/Pair und ist idempotent: ohne Altlasten passiert nichts, und es
+# wird nichts ausgegeben.
+
+def _legacy_header_token(servers):
+    auth = ((servers.get('ai-rem') or {}).get('headers') or {}).get('Authorization', '')
+    return auth.split()[-1] if isinstance(auth, str) and auth.strip() else ''
+
+
+def _is_cli_command(cmd):
+    # Eintraege, die bereits auf die CLI zeigen (Pfad oder Shim), nicht nochmal anfassen.
+    return isinstance(cmd, str) and os.path.basename(cmd).startswith('ai-rem')
+
+
+def migrate_secrets():
+    removed = []
+
+    def gone(what):
+        removed.append(what)
+        print('✓ Klartext entfernt: %s' % what)
+
+    cmd, cargs = cli_invocation()
+    client_cfg = load_client_cfg()
+    vault_entry = client_cfg.get('vault_entry') or ''
+
+    # ~/.claude.json einmal lesen; Token-Uebernahme braucht den Header VOR dem Loeschen.
+    cj = None
+    try:
+        with open(CLAUDE_JSON, encoding='utf-8') as f:
+            cj = json.load(f)
+    except (OSError, ValueError):
+        pass
+    servers = (cj.get('mcpServers') if isinstance(cj, dict) else None) or {}
+
+    # (a) Keychain befuellen, falls leer: Token-Datei, dann Bearer aus ~/.claude.json.
+    try:
+        have = keychain_get()
+    except Exception as ex:
+        print('⚠ Keychain nicht lesbar (%s) — Klartext-Altlasten bleiben vorerst liegen' % ex)
+        return removed
+    if not have:
+        legacy = read_secret(LEGACY_TOKEN_FILE) or _legacy_header_token(servers)
+        if legacy:
+            print('ℹ Token aus Klartext-Altbestand uebernommen')
+            if not store_token(legacy):
+                return removed  # ohne Keychain nichts loeschen — sonst waere der Token weg
+
+    # (b) Token-Dateien
+    for p in (LEGACY_TOKEN_FILE, LEGACY_VAULT_TOKEN_FILE, LEGACY_VAULT_ENV):
+        if os.path.lexists(p):
+            try:
+                os.unlink(p)
+                gone(p)
+            except OSError as ex:
+                print('⚠ %s nicht loeschbar: %s' % (p, ex))
+
+    # (c) ~/.claude.json: ai-rem http+Bearer -> stdio-Proxy; mykeyvault env/headers weg.
+    if cj is not None and servers:
+        changed = False
+        ai = servers.get('ai-rem')
+        if isinstance(ai, dict) and ('headers' in ai or 'url' in ai):
+            if 'headers' in ai:
+                gone('%s mcpServers.ai-rem.headers' % CLAUDE_JSON)
+            servers['ai-rem'] = {'type': 'stdio', 'command': cmd, 'args': cargs + ['mcp-proxy']}
+            changed = True
+        mkv = servers.get('mykeyvault')
+        if isinstance(mkv, dict) and ('env' in mkv or 'headers' in mkv):
+            if 'env' in mkv:
+                gone('%s mcpServers.mykeyvault.env' % CLAUDE_JSON)
+                # Pfad des gebauten MCP merken: `ai-rem vault-mcp` braucht ihn, und
+                # ein --update baut nicht neu.
+                args = mkv.get('args') or []
+                if not vault_entry and args and str(args[0]).endswith('.js') and not _is_cli_command(mkv.get('command')):
+                    vault_entry = args[0]
+            if 'headers' in mkv:
+                gone('%s mcpServers.mykeyvault.headers' % CLAUDE_JSON)
+            if vault_entry and shutil.which('node'):
+                servers['mykeyvault'] = {'type': 'stdio', 'command': cmd, 'args': cargs + ['vault-mcp']}
+            elif mkv.get('url'):
+                servers['mykeyvault'] = {'type': 'stdio', 'command': cmd,
+                                         'args': cargs + ['mcp-proxy', '--endpoint', mkv['url']]}
+            else:
+                servers.pop('mykeyvault')
+                print('  mykeyvault ohne gebauten MCP entfernt — `ai-rem install` registriert ihn neu')
+            changed = True
+        if changed:
+            write_json_atomic(CLAUDE_JSON, cj)
+
+    # (d) settings.json: LLM-Key kommt vom Server
+    spath = os.path.join(CLAUDE_HOME, 'settings.json')
+    try:
+        with open(spath, encoding='utf-8') as f:
+            sdata = json.load(f)
+        env = sdata.get('env') if isinstance(sdata, dict) else None
+        if isinstance(env, dict) and 'AI_REM_LLM_API_KEY' in env:
+            env.pop('AI_REM_LLM_API_KEY')
+            write_json_atomic(spath, sdata)
+            gone('%s env.AI_REM_LLM_API_KEY' % spath)
+    except (OSError, ValueError):
+        pass
+
+    # (e) client.json: Secret-Felder raus, vault_entry ggf. aus (c) nachtragen
+    if client_cfg:
+        stale = [k for k in LEGACY_CLIENT_FIELDS if k in client_cfg]
+        if stale or (vault_entry and client_cfg.get('vault_entry') != vault_entry):
+            for k in stale:
+                client_cfg.pop(k)
+                gone('%s %s' % (CLIENT_JSON, k))
+            if vault_entry:
+                client_cfg['vault_entry'] = vault_entry
+            save_client_cfg(client_cfg)
+
+    # (f) opencode.json: {file:…}-Referenzen und Vault-Env -> stdio-Wrapper
+    if 'opencode' in installed_targets():
+        _migrate_opencode_secrets(vault_entry, gone)
+    return removed
+
+
+def _migrate_opencode_secrets(vault_entry, gone):
+    path = opencode_config_path()
+    try:
+        with open(path, encoding='utf-8') as f:
+            mcp = (json.load(f) or {}).get('mcp') or {}
+    except (OSError, ValueError):
+        return
+    ai = mcp.get('ai-rem') or {}
+    mkv = mcp.get('mykeyvault') or {}
+    legacy_ai = 'headers' in ai or ai.get('type') == 'remote'
+    legacy_mkv = bool(mkv) and ('VAULT_API_TOKEN' in (mkv.get('environment') or {})
+                                or 'headers' in mkv)
+    if not (legacy_ai or legacy_mkv):
+        return
+    new = opencode_mcp_entries(vault_entry, '', '')
+    entries = {}
+    if legacy_ai:
+        gone('%s mcp.ai-rem.headers' % path)
+        entries['ai-rem'] = new['ai-rem']
+    if legacy_mkv:
+        gone('%s mcp.mykeyvault.environment' % path if 'headers' not in mkv
+             else '%s mcp.mykeyvault.headers' % path)
+        # Ohne node/gebauten MCP lieber raus als ein Eintrag, der auf eine
+        # geloeschte Token-Datei zeigt.
+        entries['mykeyvault'] = new.get('mykeyvault')
+    merge_opencode_json(entries, only=tuple(entries))
 
 
 # ── Ablauf ────────────────────────────────────────────────────────────────────
@@ -1524,18 +1736,21 @@ def update_only(targets):
     build_tools_mcp/build_mykeyvault_mcp (git+npm), update_claude_json,
     create_entities (brauchen den Token), update_claude_md. Alles, was hier laeuft,
     ist idempotent, und fetch_to() schreibt atomar — ein Serverfehler laesst die
-    bestehende Datei stehen.
+    bestehende Datei stehen. migrate_secrets() laeuft mit: ein Update von < 1.7
+    muss die Klartext-Tokens einsammeln, sonst bleiben sie liegen.
     """
     targets = targets or installed_targets() or ['claude']
     print('=== ai-rem Update (%s; %s) ===' % (PLATFORM, ', '.join(targets)))
     setup_cfg = load_setup_config()
     mcp_endpoint = choose_mcp_endpoint(setup_cfg)
+    # CLI zuerst: der Keychain-Code (lib/keychain.py) kommt mit ihr.
     link_cli(install_cli())
+    migrate_secrets()
     if 'claude' in targets:
         update_claude(setup_cfg, mcp_endpoint)
     if 'opencode' in targets:
         print('--- opencode ---')
-        update_opencode(mcp_endpoint)
+        update_opencode()
     if 'generic' in targets:
         install_generic(mcp_endpoint)
     record_client(mcp_endpoint, targets, setup_cfg)
@@ -1544,43 +1759,30 @@ def update_only(targets):
 
 
 def pair_only():
-    """`ai-rem pair`: nur den Token neu holen (z.B. nach Rotation ohne Vault)."""
+    """`ai-rem pair`: nur den Token neu holen (z.B. nach Rotation). Der Token
+    geht allein in den Keychain; die MCP-Eintraege kennen keinen Bearer mehr,
+    also gibt es nichts mitzuziehen — nur Altlasten einzusammeln."""
+    # CLI zuerst: der Keychain-Code (lib/keychain.py) kommt mit ihr.
+    link_cli(install_cli())
     paired = pair_device() or {}
     tok = paired.get('ai_rem_token') or ask_token()
-    if not tok:
+    if not tok or not store_token(tok):
         sys.exit(1)
+    migrate_secrets()
     cfg = load_client_cfg()
-    record_client(cfg.get('endpoint', ''), [], {}, token=tok,
-                  vault_token=paired.get('vault_token', ''), vault_url=paired.get('vault_url', ''))
-    # Claude Code liest den Bearer aus ~/.claude.json — dort mitziehen, falls registriert.
-    try:
-        with open(CLAUDE_JSON, encoding='utf-8') as f:
-            cj = json.load(f)
-        srv = cj.get('mcpServers', {}).get('ai-rem')
-        if srv is not None:
-            srv.setdefault('headers', {})['Authorization'] = 'Bearer ' + tok
-            tmp = CLAUDE_JSON + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(cj, f, indent=2, ensure_ascii=False)
-            os.replace(tmp, CLAUDE_JSON)
-    except (OSError, ValueError):
-        pass
-    print('✓ Token gespeichert (%s)' % TOKEN_FILE)
+    record_client(cfg.get('endpoint', ''), [], {}, vault_url=paired.get('vault_url', ''))
 
 
-def install_claude(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token, vault_token,
-                   tools_entry, tools_reg_url, vault_entry):
+def install_claude(setup_cfg, mcp_endpoint, tools_entry, tools_reg_url, vault_entry):
     print('--- Claude Code ---')
     claude = find_claude()
     register_mcp(claude)
     os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
     os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
     try:
-        tok = update_claude_json(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token,
-                                 vault_token, tools_entry, tools_reg_url, vault_entry)
+        update_claude_json(setup_cfg, mcp_endpoint, tools_entry, tools_reg_url, vault_entry)
     except Exception as ex:
         print('⚠ ~/.claude.json-Update fehlgeschlagen: %s' % ex)
-        tok = ai_rem_token
 
     write_settings_template(setup_cfg, mcp_endpoint)
     hook_paths = install_hooks()
@@ -1611,7 +1813,6 @@ def install_claude(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token, vault_token,
             print('  Claude Code starten und  /migrate-claude-md  ausführen.')
     except Exception:
         pass
-    return tok
 
 
 def main():
@@ -1638,13 +1839,20 @@ def main():
 
     setup_cfg = load_setup_config()
     mcp_endpoint = choose_mcp_endpoint(setup_cfg)
-    ssh_host, ai_rem_token, vault_token = pull_secrets(setup_cfg)
+    # CLI zuerst: der Keychain-Code (lib/keychain.py) kommt mit ihr, und die Hooks,
+    # das opencode-Plugin und die MCP-Eintraege (mcp-proxy/vault-mcp) rufen sie auf.
+    link_cli(install_cli())
+    ai_rem_token = pull_secrets(setup_cfg)
     vault_url = (os.environ.get('VAULT_API_URL')
                  or setup_cfg.get('mcp_register', {}).get('mykeyvault', {}).get('vault_url', 'http://mystorage:8223'))
-    # Tokens VOR allem anderen: ohne SSH/Env laeuft hier die Kopplung im Browser.
-    ai_rem_token, vault_token, vault_url = obtain_tokens(ai_rem_token, vault_token, vault_url,
-                                                         force_pair=args['pair'])
-    tools_entry, tools_reg_url, vault_entry = '', '', ''
+    # Token VOR allem anderen: ohne SSH/Env laeuft hier die Kopplung im Browser.
+    ai_rem_token, vault_url = obtain_tokens(ai_rem_token, vault_url, force_pair=args['pair'])
+    report_keychain()
+    migrate_secrets()
+    # vault_entry None = kein Build versucht (z.B. setup-config nicht ladbar) —
+    # dann bleibt ein vorhandener Eintrag in client.json stehen statt auf ''
+    # ueberschrieben zu werden; migrate_secrets() hat ihn ggf. gerade erst gerettet.
+    tools_entry, tools_reg_url, vault_entry = '', '', None
     if ('claude' in targets or 'opencode' in targets) and setup_cfg.get('mcp_register'):
         ensure_deps()
         tools_entry, tools_reg_url = build_tools_mcp(setup_cfg)
@@ -1652,22 +1860,18 @@ def main():
         if tools_reg_url:
             REPORT.append(('tools', bool(tools_entry), 'ai-rem install --yes'))
         if setup_cfg['mcp_register'].get('mykeyvault'):
-            REPORT.append(('mykeyvault', bool(vault_entry and vault_token),
-                           'ai-rem pair' if vault_entry else 'ai-rem install --yes'))
+            REPORT.append(('mykeyvault', bool(vault_entry), 'ai-rem install --yes'))
+    # vault_entry VOR install_claude/install_opencode: `ai-rem vault-mcp` liest ihn
+    # aus client.json.
+    record_client(mcp_endpoint, targets, setup_cfg, vault_url=vault_url, vault_entry=vault_entry)
+    vault_entry = vault_entry or load_client_cfg().get('vault_entry', '')
 
-    # CLI zuerst: die Hooks und das opencode-Plugin rufen sie auf.
-    link_cli(install_cli())
-
-    tok = ''
     if 'claude' in targets:
-        tok = install_claude(setup_cfg, mcp_endpoint, ssh_host, ai_rem_token, vault_token,
-                             tools_entry, tools_reg_url, vault_entry)
-    tok = tok or resolve_token(ai_rem_token, vault_url, vault_token)
-    record_client(mcp_endpoint, targets, setup_cfg, token=tok,
-                  vault_token=vault_token, vault_url=vault_url)
+        install_claude(setup_cfg, mcp_endpoint, tools_entry, tools_reg_url, vault_entry)
+    tok = resolve_token(ai_rem_token)
 
     if 'opencode' in targets:
-        install_opencode(mcp_endpoint, vault_url, vault_entry, tools_entry, tools_reg_url)
+        install_opencode(vault_entry, tools_entry, tools_reg_url)
     if 'generic' in targets:
         install_generic(mcp_endpoint)
     for t in targets:

@@ -11,11 +11,11 @@ strategy it manages.
 `bash <(curl -s http://<SERVER_IP>:3456/setup)` (or `irm http://<SERVER_IP>:3456/setup.ps1 | iex`
 on native Windows) fetches the same platform-neutral logic (`/setup.py`, requires Python 3) —
 behaviour is identical on macOS, Linux, WSL and Windows. On Windows the hooks are registered
-as `python -X utf8 <hook>` commands and the secret pull uses the built-in OpenSSH client
-(or set `$env:AI_REM_TOKEN` instead).
+as `python -X utf8 <hook>` commands and the optional SSH token pull uses the built-in OpenSSH
+client (or pair the device in the browser, or set `$env:AI_REM_TOKEN` instead).
 
 The script automatically handles:
-1. `claude mcp add` — register ai-rem as a user-scoped HTTP MCP server
+1. `~/.claude.json` → `mcpServers.ai-rem` — register ai-rem as a user-scoped **stdio** MCP server: `{"type": "stdio", "command": "~/.local/share/ai-rem/bin/ai-rem", "args": ["mcp-proxy"]}`. The proxy reads the device token from the OS keychain and bridges to the HTTP endpoint, so the config holds no `headers.Authorization` ([Authentication](authentication.md#one-secret-per-device--the-os-keychain))
 2. `~/.claude/settings-template.json` — (re)generate base template for permissions, deny rules and hooks from the live setup config
 3. `~/.claude/hooks/system-check.py` — deploy consolidated SessionStart hook (ai-rem health, SMB mount, MCP server tests, settings sync, tool count, vector coverage, open tasks/plans)
 4. `~/.claude/hooks/auto-memory.py` — deploy PreCompact + SessionEnd hook (transcript → `ai-rem ingest` → llama-server extractor → structured entities)
@@ -25,7 +25,7 @@ The script automatically handles:
 8. `~/.claude/CLAUDE.md` — create or update minimal 3-line pointer to ai-rem
 9. Install slash commands (`/setup-ai-rem`, `/memory-cleanup`, `/migrate-claude-md`, `/ai-rem-update`)
 10. Create preferences & tool entities directly in the knowledge graph via MCP API
-11. **mykeyvault** — build and register locally as a **stdio** MCP (`git clone` + `npm run build` in the `mcp/` folder). Local stdio mode unlocks the exec/file tools (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`), so secrets **never** enter the LLM context — only the locally spawned subprocess. Without Node/Git or on build failure the setup falls back to the HTTP MCP (only `vault_list_items`/`vault_create_item`).
+11. **mykeyvault** — build locally (`git clone` + `npm run build` in the `mcp/` folder) and register it as a **stdio** MCP through the wrapper `ai-rem vault-mcp`, which fetches the vault URL and token from `/api/client-config` at start and `exec`s `node <mcp entry>` with them in its environment — no `env` block with a vault token in `~/.claude.json`, no `ai-rem-vault.env`. Local stdio mode unlocks the exec/file tools (`vault_write_secret`, `vault_run_with_secret`, `vault_run_with_secret_file`), so secrets **never** enter the LLM context — only the locally spawned subprocess. Without Node/Git or on build failure the setup falls back to the HTTP MCP via `ai-rem mcp-proxy --endpoint <vault mcp url>` (only `vault_list_items`/`vault_create_item`).
 
 **The only thing to remember:** the URL `<SERVER_IP>:3456/setup`. The script is idempotent — running it multiple times on the same machine is safe.
 
@@ -34,8 +34,10 @@ The script automatically handles:
 The steps above are the **`claude`** target. The setup picks targets with `--client`
 (`bash <(curl -s …/setup) --client opencode`, or later `ai-rem install --client …`); the
 default `auto` takes every frontend whose binary is on `PATH` and falls back to `generic`.
-Installed targets are recorded in `~/.config/ai-rem/client.json`, together with the endpoint
-and the token file `~/.config/ai-rem/token` (mode 0600) that the CLI and opencode read.
+Installed targets are recorded in `~/.config/ai-rem/client.json` (`endpoint`, `targets`,
+`vault_url`, `vault_entry` = path of the built mykeyvault MCP, `keychain` = the backend
+holding the token). The file contains no secret: the device token lives in the OS keychain,
+LLM-router key and vault token are fetched per run from `/api/client-config`.
 
 **`opencode`** — the differences to Claude Code:
 
@@ -43,16 +45,17 @@ and the token file `~/.config/ai-rem/token` (mode 0600) that the CLI and opencod
 |---|---|---|
 | Config | `~/.claude.json` → `mcpServers` | `~/.config/opencode/opencode.json` → `mcp` |
 | stdio server | `"type": "stdio"`, `command` + `args` | `"type": "local"`, `command` as **one array** |
-| http server | `"type": "http"`, `url` + `headers` | `"type": "remote"`, `url` + `headers` |
-| Env per server | `env` | `environment` |
+| http server (not used for ai-rem since 1.7) | `"type": "http"`, `url` + `headers` | `"type": "remote"`, `url` + `headers` |
+| Env per server | `env` | `environment` (`AI_REM_CLIENT=opencode` for attribution) |
 | Instructions | `~/.claude/CLAUDE.md` | `~/.config/opencode/AGENTS.md` + `instructions[]` |
-| Secrets | plain text in the 0600 config | `{file:~/.config/ai-rem/token}` |
+| Secrets | none in the config — `ai-rem mcp-proxy` / `ai-rem vault-mcp` resolve them at start (OS keychain, `/api/client-config`) | same wrappers, no `{file:…}` reference |
 | Session hooks | SessionStart / PreCompact / SessionEnd | plugin events `session.created` / `session.idle` / `session.compacted` |
 
 What the target writes:
-1. `opencode.json`: merges `mcp.ai-rem` (remote, bearer from the token file) and — if
-   node and the builds are available — `mykeyvault` and `tools` as `local` servers, with
-   `node` resolved from `PATH` (Homebrew: `/opt/homebrew/bin/node`). Providers, models and
+1. `opencode.json`: merges `mcp.ai-rem` as a `local` server (`command: [ai-rem, mcp-proxy]`,
+   `environment: {AI_REM_CLIENT: opencode}`) and — if node and the builds are available —
+   `mykeyvault` (`[ai-rem, vault-mcp]`) and `tools` as `local` servers, with `node`
+   resolved from `PATH` (Homebrew: `/opt/homebrew/bin/node`). Providers, models and
    other servers stay untouched; a one-time `opencode.json.pre-airem.bak` is kept. A JSONC
    file with comments is **not** rewritten — the block lands in
    `~/.config/ai-rem/snippets/opencode-mcp.json` instead. The auto-memory `fallback.md`
@@ -66,9 +69,11 @@ What the target writes:
 4. `command/*.md`: `/setup-ai-rem`, `/memory-cleanup`, `/ai-rem-update`.
 
 **`generic`** — writes nothing outside `~/.config/ai-rem/snippets/`: ready-to-paste blocks
-for Codex (`config.toml`, token via `AI_REM_TOKEN`), Gemini CLI (`settings.json`), Cursor
-(`mcp.json`) and an `AGENTS.md` pointer. These frontends get the tools and the server
-instructions, but no auto-memory.
+for Codex (`config.toml`, HTTP with `bearer_token_env_var`, token via
+`export AI_REM_TOKEN="$(ai-rem token)"`), Gemini CLI (`settings.json`) and Cursor
+(`mcp.json`) — both stdio via `{"command": "ai-rem", "args": ["mcp-proxy"]}` — plus an
+`AGENTS.md` pointer. These frontends get the tools and the server instructions, but no
+auto-memory.
 
 `ai-rem uninstall --client <target>` removes what the target added (for opencode the
 `ai-rem` server, the `instructions` entry, the `AGENTS.md` block, plugin and commands;

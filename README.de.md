@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für KI-Coding-Agenten
 
-> Diese Dokumentation bezieht sich auf **[v1.6.1](https://github.com/markus7h/ai-rem/releases/tag/v1.6.1)**.
+> Diese Dokumentation bezieht sich auf **[v1.7.0](https://github.com/markus7h/ai-rem/releases/tag/v1.7.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -315,7 +315,8 @@ Auf **nativem Windows** (PowerShell, kein WSL nötig): `irm http://<SERVER_IP>:3
 
 Das Setup installiert die `ai-rem`-CLI und richtet danach jedes gefundene Frontend ein (`claude`, `opencode`; keins von beiden → `generic`-Snippets). Es ist idempotent und braucht auf dem Rechner keine Vorbereitung:
 
-- **Kein SSH-Key nötig.** Ohne ihn zeigt das Setup einen Code und öffnet `/pair` im Browser; dort freigeben (eingeloggt in der Web-UI, geht auch am Handy), und das Setup läuft mit dem ai-rem-Token weiter — und dem mykeyvault-Token, falls auf dem Server `AI_REM_PAIR_VAULT_TOKEN` gesetzt ist. ([So funktioniert die Kopplung](docs/authentication.de.md#neuen-rechner-koppeln-ohne-ssh))
+- **Kein SSH-Key nötig.** Ohne ihn zeigt das Setup einen Code und öffnet `/pair` im Browser; dort freigeben (eingeloggt in der Web-UI, geht auch am Handy), und das Setup läuft mit dem ai-rem-Token weiter. ([So funktioniert die Kopplung](docs/authentication.de.md#neuen-rechner-koppeln-ohne-ssh))
+- **Ein Secret pro Gerät.** Der ai-rem-Token landet im OS-Keychain (macOS Keychain, Linux libsecret, Windows Credential Manager) — sonst wird auf dem Rechner nichts gespeichert. LLM-Router-Key und mykeyvault-Zugang holen sich die Clients pro Lauf vom Server (`/api/client-config`); eine Rotation ist damit nur noch eine Änderung am Server.
 - **Fehlende node/npm/git** (für mykeyvault und tools) installiert es nach einer Rückfrage per brew, apt (NodeSource) oder winget; `--yes` überspringt die Rückfrage.
 - Am Ende steht eine ✓/✗-Übersicht mit genau einem Befehl je ✗, danach läuft `ai-rem doctor`.
 
@@ -327,10 +328,11 @@ ai-rem install --client generic      # Snippets für Codex, Gemini CLI, Cursor i
 ai-rem uninstall --client opencode   # ein Frontend wieder entfernen
 ai-rem doctor [--fix]                # Server-Version, installierte Ziele, Drift, Token-Quelle
 ai-rem pair                          # nur den Token erneuern (Freigabe im Browser)
+ai-rem token [--store|--forget]      # Token ausgeben / von stdin im Keychain ablegen / entfernen
 ```
 
-- **Claude Code:** registriert den MCP-Server, deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.
-- **opencode:** mergt `ai-rem` (plus `mykeyvault`/`tools`, falls konfiguriert) in den `mcp`-Block von `~/.config/opencode/opencode.json` — Provider und fremde Server bleiben unberührt, eine JSONC-Datei mit Kommentaren wird nicht angefasst, stattdessen liegt ein Snippet bereit —, ergänzt einen `AGENTS.md`-Pointer, das Plugin und die Commands. Tokens stehen als `{file:~/.config/ai-rem/token}` drin, nie im Klartext in der Config.
+- **Claude Code:** registriert `ai-rem` (und `mykeyvault`, falls gebaut) als **stdio**-MCP-Server — `ai-rem mcp-proxy` brückt mit dem Keychain-Token zum HTTP-Endpoint, `ai-rem vault-mcp` startet den Vault-MCP mit dem vom Server geholten Zugang —, sodass `~/.claude.json` weder Header noch `env`-Secret enthält; deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.
+- **opencode:** mergt `ai-rem` (plus `mykeyvault`/`tools`, falls konfiguriert) als `local`-Server über dieselben Wrapper `ai-rem mcp-proxy` / `ai-rem vault-mcp` in den `mcp`-Block von `~/.config/opencode/opencode.json` — Provider und fremde Server bleiben unberührt, eine JSONC-Datei mit Kommentaren wird nicht angefasst, stattdessen liegt ein Snippet bereit —, ergänzt einen `AGENTS.md`-Pointer, das Plugin und die Commands. In die Config wird kein Token geschrieben, auch nicht als `{file:…}`-Referenz.
 
 → **[Was das Setup tut, Repo-Layout & CLAUDE.md-Strategie](docs/installation.de.md)**
 

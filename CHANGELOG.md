@@ -13,6 +13,76 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.7.0] – 2026-10-09
+
+### Added
+- **One secret per device: the ai-rem token lives in the OS keychain** (`lib/keychain.py`,
+  shipped via `/lib/`). macOS Keychain (`security`), Linux libsecret (`secret-tool`;
+  without a session or without `secret-tool` a 0600 file under
+  `$XDG_CONFIG_HOME/ai-rem/keyring/<account>`, shown as such in the status), Windows
+  Credential Manager. Service `ai-rem`, account `device-token` (`AI_REM_KEYCHAIN_ACCOUNT`).
+  The lookup order is the same in the CLI, the hooks and the setup: env `AI_REM_TOKEN` →
+  keychain → legacy plain text (read-only, with the hint that `ai-rem update` migrates it).
+- **`GET /api/client-config`** (bearer-only) → `{version, llm_url, llm_api_key, vault_url,
+  vault_token}`. The CLI (`ingest`/`catchup`), the SessionStart hook and `ai-rem vault-mcp`
+  fetch LLM-router and vault access per run and never persist it. Server-side the LLM key
+  comes from the env `AI_REM_LLM_API_KEY` (preferred) or the setup-config field
+  `llm_api_key`, so rotation happens on the server without touching a workstation.
+- **`ai-rem mcp-proxy`** — stdio MCP server that bridges to the Streamable HTTP endpoint
+  (session id, SSE events, 401 → JSON-RPC error). Claude Code and opencode start this
+  instead of talking HTTP with a stored header; `--endpoint` overrides `client.json`.
+- **`ai-rem vault-mcp`** — starts the locally built mykeyvault MCP (`node`) with
+  `VAULT_API_URL`/`VAULT_API_TOKEN` taken from `/api/client-config` and `exec`s it, so the
+  vault token is on disk nowhere.
+- `ai-rem token --store` (token on stdin, never argv) and `ai-rem token --forget` maintain
+  the keychain entry; `ai-rem doctor` shows the token source and the `/api/client-config`
+  status.
+- SessionStart status line `token ✓ (Keychain)` / `token ✓ (Env)` /
+  `token ⚠ Klartext-Legacy → ai-rem update` / `token ❌ fehlt → ai-rem pair`. Against a
+  server < 1.7 the hook says "Server < 1.7" instead of blaming the router for a 401.
+
+### Changed
+- **Claude Code talks to ai-rem over stdio.** `~/.claude.json` → `mcpServers.ai-rem` is
+  `{"type": "stdio", "command": "~/.local/share/ai-rem/bin/ai-rem", "args": ["mcp-proxy"]}`
+  instead of `http` + `headers.Authorization`; `mykeyvault` becomes `"args": ["vault-mcp"]`
+  without an `env` block (HTTP fallback without node: `mcp-proxy --endpoint <url>`).
+- **opencode:** `mcp.ai-rem = {type: local, command: [ai-rem, mcp-proxy], environment:
+  {AI_REM_CLIENT: opencode}}`, `mykeyvault = [ai-rem, vault-mcp]` — no `{file:…}`
+  references any more.
+- `GET /setup-config` stays public but drops every top-level field ending in `_key`,
+  `_token`, `_secret` or `_password` (`_comment_*` keys stay).
+- `~/.config/ai-rem/client.json` holds `endpoint`, `targets`, `vault_url`, `vault_entry`
+  and `keychain` (backend name); `llm_api_key`, `llm_url` and `token_file` are gone.
+- The hooks no longer sync the bearer header into `~/.claude.json` at SessionStart and no
+  longer read the vault. `AI_REM_LLAMA_URL`/`AI_REM_LLM_API_KEY` on a client are an optional
+  override only — the source is `/api/client-config`.
+- Generic snippets (Gemini CLI, Cursor) use the stdio proxy
+  `{"command": "ai-rem", "args": ["mcp-proxy"]}`; Codex keeps `$(ai-rem token)`.
+
+### Removed
+- Plain-text token files `~/.config/ai-rem/token` and `~/.config/ai-rem/vault.token`,
+  `~/.claude/ai-rem-vault.env`, and `AI_REM_LLM_API_KEY` in `~/.claude/settings.json` →
+  `env` (the 1.2.0 note below describes that write; it no longer happens).
+- `--refresh` in `system-check.py` — there is no header left to refresh.
+
+### Security
+- `/setup-config` is public (onboarding runs before the first token) and handed out the
+  complete setup-config **including `llm_api_key`** without auth. **Rotate the LLM router
+  key after the upgrade** — treat every key that ever sat in a setup-config as exposed —
+  and set the new one on the server as `AI_REM_LLM_API_KEY`; no client needs it any more.
+  Per-device token rotation is `ai-rem pair`.
+- `/api/pair/poll` still returns `vault_token`/`vault_url` for installers < 1.7
+  (deprecated); the current installer stores only the ai-rem token.
+
+### Migration
+1. Deploy server 1.7.0 — old clients keep working, the header auth is unchanged.
+2. `ai-rem update` on every workstation (any setup run does the same): moves an existing
+   plain-text token into the keychain, deletes the token files and `ai-rem-vault.env`,
+   strips header/env secrets from `~/.claude.json`, `settings.json`, `client.json` and
+   `opencode.json`, switches the MCP entries to the stdio wrappers and prints
+   `✓ Klartext entfernt: …` per location. Restart Claude Code / opencode afterwards.
+3. Then rotate the LLM router key and set it on the server as env.
+
 ## [1.6.1] – 2026-10-09
 
 ### Fixed
@@ -881,7 +951,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/markus7h/ai-rem/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/markus7h/ai-rem/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/markus7h/ai-rem/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/markus7h/ai-rem/compare/v1.4.0...v1.5.0

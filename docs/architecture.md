@@ -96,7 +96,7 @@ ruff noch ein Test je gesehen hat. Als Dateien werden sie normal geprüft.
 | LiteLLM-Router | mystorage | 11437 | HTTP (OpenAI-kompatibel) | Transcript-Extraktion + Nightly-Cleanup-Urteile für ai-rem. Routet auf die GPU-Hosts myai/myubuntu und fällt auf Kimi zurück, wenn beide schlafen (Container `llm-gateway`, geteilt mit doc-graph/case-assist/paperless-ai) |
 | Caddy | mystorage | — | Reverse-Proxy, `tls internal` | Terminiert TLS für alle `*.lan`-Endpunkte |
 
-**Auth:** ai-rem und mykeyvault-mcp teilen sich denselben Bearer-Token (`ai-rem-api-token`, als `MCP_AUTH_TOKEN`); `vault-api` verwendet ihn als `VAULT_API_TOKEN`. Der Token stammt aus Vaultwarden und wird über `vault-api` an die Clients verteilt; ai-rem frischt ihn pro Session im Hintergrund auf.
+**Auth:** ai-rem und mykeyvault-mcp teilen sich denselben Bearer-Token (`ai-rem-api-token`, als `MCP_AUTH_TOKEN`); `vault-api` verwendet ihn als `VAULT_API_TOKEN`. Der Token stammt aus Vaultwarden; der Server bekommt ihn per `deploy.sh` in die `.env`, Clients einmal per Geräte-Kopplung (oder SSH) in den OS-Keychain. Vault-Zugang und LLM-Router-Key holen Clients seit 1.7 pro Lauf über `GET /api/client-config`, gespeichert wird davon nichts.
 
 > **Hinweis:** `mykeyvault-mcp` läuft produktiv als HTTP-MCP-Container (`:3458`, `https://mykeyvault.lan/mcp`). Der Repo-Code (`mcp/src/index.ts`) zeigt noch die ältere stdio-Variante — das Repo hängt hier hinter der Produktion. Dieses Diagramm bildet die deployte Realität ab.
 >
