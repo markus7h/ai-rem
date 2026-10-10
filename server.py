@@ -77,7 +77,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.7.1"
+VERSION = "1.8.0"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -1238,7 +1238,9 @@ mcp = FastMCP(
         "- Task/Decision/Problem/Solution/Tool: offene Aufgaben, Architektur, Bugs, Lösungen, Tools.\n"
         "  Task abschließen: memory_add(name, 'Task', extra={'status': 'erledigt'}) — das genügt, "
         "archiviert wird automatisch nach der Karenzzeit. Status: offen | laufend | blockiert | "
-        "erledigt (Synonyme wie 'gemergt' oder 'done' werden gemappt, Freitext landet in status_note).\n\n"
+        "erledigt (Synonyme wie 'gemergt' oder 'done' werden gemappt, Freitext landet in status_note).\n"
+        "  Task → Projekt: memory_relate(task, 'TEIL_VON', projekt). Passiert automatisch, wenn genau "
+        "ein aktives Projekt per extra.keywords bzw. Namen im Task-Text vorkommt.\n\n"
         "## Nicht speichern\n"
         "Code-Patterns/Architektur/Pfade (aus Code ableitbar), git-Historie (git log/blame), "
         "Fix-Rezepte (Code+Commit), ephemere Sitzungsdetails. "
@@ -2481,6 +2483,10 @@ def memory_add(
     verb = "Aktualisiert" if existed else "Angelegt"
     pin_marker = " 📌" if eff_pinned == "true" else ""
     msg = f"{verb}: [{type}] {name}{pin_marker}"
+    if type == "Task" and base_extra.get("status") != "erledigt":
+        proj = _auto_link_project(eid, name, eff_descr, ts)
+        if proj:
+            msg += f" → TEIL_VON {proj}"
 
     if supersedes.strip():
         old_id = _id(supersedes)
@@ -4126,6 +4132,32 @@ def memory_normalize_task_status(dry_run: bool = True) -> str:
     return "\n".join([kopf, *geaendert]) if geaendert else kopf
 
 
+def memory_link_projects(dry_run: bool = True) -> str:
+    """Offene Tasks ohne Projekt per Projekt-Keywords zuordnen (TEIL_VON) — Backfill.
+
+    Gleiche Regel wie beim Anlegen: genau ein Projekt-Treffer → Kante, sonst bleibt
+    der Task ohne Projekt. extra.keywords am Project steuert die Treffer.
+    """
+    ts = _now()
+    linked, offen = [], []
+    seen: set = set()
+    for name, descr, _status, proj in _open_task_rows("", False):
+        if proj or name in seen:
+            continue
+        seen.add(name)
+        hit = _match_project(name, descr)
+        if not hit:
+            offen.append(name)
+            continue
+        if not dry_run:
+            _ensure_rel(_id(name), "TEIL_VON", _id(hit), ts)
+        linked.append(f"  {name} → {hit}")
+    kopf = (f"{'Trockenlauf' if dry_run else 'Verknüpft'}: {len(linked)} zugeordnet, "
+            f"{len(offen)} ohne eindeutiges Projekt")
+    rest = ["Ohne Treffer:", *(f"  {n}" for n in offen)] if offen else []
+    return "\n".join([kopf, *linked, *rest])
+
+
 _ADMIN_TOOL_FUNCS = {
     "memory_preference_update": memory_preference_update,
     "memory_set_project_context": memory_set_project_context,
@@ -4140,6 +4172,7 @@ _ADMIN_TOOL_FUNCS = {
     "memory_merge": memory_merge,
     "memory_purge_archived": memory_purge_archived,
     "memory_normalize_task_status": memory_normalize_task_status,
+    "memory_link_projects": memory_link_projects,
 }
 # Alle 16 Funktionen sind ueber /api/tool aufrufbar (auch die 4 Kern-Tools, damit
 # die CLI/Extractor genau einen Pfad haben). Das tools/list-Surface ist davon
@@ -4201,6 +4234,8 @@ CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
                           os.getenv("CLEANUP_OLLAMA_MODEL", "qwen")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "14"))
+# Offene Tasks, die so lange niemand angefasst hat, gehen als "noch aktuell?" in die Review.
+CLEANUP_TASK_STALE_DAYS = int(os.getenv("CLEANUP_TASK_STALE_DAYS", "30"))
 # Veraltungs-Check: ab wann ein Infra-Eintrag erneut gegen die Realitaet geprueft gehoert.
 CLEANUP_VERIFY_AFTER_DAYS = int(os.getenv("CLEANUP_VERIFY_AFTER_DAYS", "90"))
 CLEANUP_VERIFY_MAX_PER_RUN = int(os.getenv("CLEANUP_VERIFY_MAX_PER_RUN", "5"))
@@ -4274,6 +4309,75 @@ def _canon_status(raw) -> tuple:
 _DONE_BODY = re.compile(
     r"^\s*(?:ERLEDIGT|GELÖST|GELOEST|GEGENSTANDSLOS|ABGESCHLOSSEN|FERTIG|DONE"
     r"|OBSOLET|ÜBERHOLT|UEBERHOLT|VERWORFEN)\b", re.I)
+# Abschluss mitten im Fließtext: "PR #225 gemergt", "wurde erfolgreich deployt",
+# "ABGESCHLOSSEN 13.09.2026". Der Extractor schreibt so, statt den Status zu setzen.
+# Zu unscharf fürs Auto-Archiv — nur Vorschlag in der Review-Queue.
+_DONE_VERB = (r"(?:gemergt|gemerged|merged|erstellt|angelegt|gelöscht|geloescht|entfernt"
+              r"|durchgeführt|durchgefuehrt|deployt|deployed|geprüft|geprueft|getaggt"
+              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited)")
+_DONE_HINT = re.compile(
+    r"\b(?:wurden?|ist|sind)\s+(?:\S+\s+){0,6}?" + _DONE_VERB + r"\b"
+    r"|\bPRs?\s*#?\d+(?:\s*(?:,|und|\+)\s*#?\d+)*\s+(?:wurden?\s+)?(?:gemergt|gemerged|merged)\b",
+    re.I)
+# Großgeschriebene Marker zählen auch mitten im Text ("#805: … GESCHLOSSEN 16.09.").
+_DONE_SHOUT = re.compile(r"\b(?:ERLEDIGT|GESCHLOSSEN|ABGESCHLOSSEN|GELÖST|GELOEST|DONE)\b")
+
+
+def _done_hint(text: str) -> bool:
+    """True, wenn der Beschreibungstext einen Abschluss meldet (Heuristik, nur für Vorschläge)."""
+    return bool(_DONE_BODY.match(text) or _DONE_HINT.search(text) or _DONE_SHOUT.search(text))
+
+
+# ─── Task → Project: automatische Zuordnung ──────────────────────────────────
+# Ohne Kante landet ein Task in get_context unter "_ohne Projekt_" — und genau dort
+# landeten fast alle, weil weder Extractor noch Client je TEIL_VON setzen. Projects
+# tragen dafür optional extra.keywords; ohne Keywords zählt der Projektname selbst.
+def _project_keywords() -> dict:
+    """{Projektname: [keywords]} aller aktiven (nicht archivierten, nicht erledigten) Projects."""
+    rows = _rows(db_exec(
+        "MATCH (p:Entity) WHERE p.type = 'Project'"
+        + _archived_clause("p", False) + " RETURN p.name, p.extra"))
+    out: dict = {}
+    for name, extra_raw in rows:
+        try:
+            extra = json.loads(extra_raw or "{}")
+        except json.JSONDecodeError:
+            extra = {}
+        if _canon_status(extra.get("status"))[0] == "erledigt":
+            continue
+        kws = extra.get("keywords")
+        if isinstance(kws, str):
+            kws = [k for k in re.split(r"[,;]", kws)]
+        if not isinstance(kws, list) or not kws:
+            kws = [name]
+        out[name] = [str(k).strip().lower() for k in kws if str(k).strip()]
+    return out
+
+
+def _match_project(name: str, descr: str) -> Optional[str]:
+    """Genau ein passendes Projekt → dessen Name; keins oder mehrere → None (kein Raten)."""
+    text = f"{name} {descr}".lower()
+    hits = {
+        proj for proj, kws in _project_keywords().items()
+        if any(re.search(r"(?<!\w)" + re.escape(k) + r"(?!\w)", text) for k in kws)
+    }
+    return hits.pop() if len(hits) == 1 else None
+
+
+def _has_project(eid: str) -> bool:
+    return bool(_rows(db_exec(
+        "MATCH (t:Entity {id: $id})-[:Rel]-(p:Entity) WHERE p.type = 'Project' RETURN p.name",
+        {"id": eid})))
+
+
+def _auto_link_project(eid: str, name: str, descr: str, ts: str) -> Optional[str]:
+    """Task ohne Projekt-Kante per Keyword einem Projekt zuordnen (TEIL_VON)."""
+    if _has_project(eid):
+        return None
+    proj = _match_project(name, descr)
+    if proj and _ensure_rel(eid, "TEIL_VON", _id(proj), ts):
+        return proj
+    return None
 # Verderbliche Fakten: was hier matcht, kann sich in der realen Infrastruktur geaendert haben.
 _PERISHABLE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b|\bfd[0-9a-f]{2}:|"
                          r"\b[a-z][\w.-]*:\d{2,5}\b|\bports?\s*\d{2,5}|"
@@ -4679,14 +4783,21 @@ def _cleanup_candidates() -> dict:
             age = _age_days(str(e["extra"].get("done_at") or e["updated_at"]), now)
             if age is not None and age >= CLEANUP_TASK_RETENTION_DAYS:
                 auto_archive.append({"name": e["name"], "reason": f"erledigt seit {age}d"})
-        elif (e["type"] == "Task" and _DONE_BODY.match(e["descr"])
-              and not e["extra"].get("done_marker_dismissed")):
+        elif e["type"] == "Task" and not e["extra"].get("done_marker_dismissed"):
             # Erledigt-Marker steht nur im Beschreibungstext, der Status widerspricht.
             # Das wurde früher stillschweigend archiviert; Fließtext ist dafür zu
             # unzuverlässig, deshalb geht es als Vorschlag in die Review-Queue.
-            archive_review.append(
-                {"kind": "archive", "target": e["name"],
-                 "reason": f"Erledigt-Marker im Text, Status '{status}' widerspricht"})
+            # Verwerfen setzt done_marker_dismissed und gilt für beide Gründe.
+            if _done_hint(e["descr"]):
+                archive_review.append(
+                    {"kind": "archive", "target": e["name"],
+                     "reason": f"Erledigt-Marker im Text, Status '{status}' widerspricht"})
+                continue
+            age = _age_days(e["updated_at"], now)
+            if age is not None and age >= CLEANUP_TASK_STALE_DAYS:
+                archive_review.append(
+                    {"kind": "archive", "target": e["name"],
+                     "reason": f"Task seit {age} Tagen unverändert (Status '{status}') — noch aktuell?"})
 
     archived_names = {a["name"] for a in auto_archive}
     by_type: dict = {}

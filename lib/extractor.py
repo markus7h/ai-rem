@@ -107,7 +107,7 @@ LLM_TIMEOUT_S = 900
 
 SYSTEM_PROMPT_BASE = """OUTPUT: JSON nur. Kein Text.
 
-{"entities":[{"type":"Decision|Problem|Solution|Tool|Preference|Project|Topic|Task|Person","name":"<60 Zeichen","description":"1-3 Sätze","context":"private|work|"}],"relations":[{"from_name":"...","relation":"NUTZT|LÄUFT_AUF|GELÖST_DURCH|HÄNGT_AB_VON|INTEGRIERT_MIT|BEVORZUGT|ARBEITET_AN|GETROFFEN_VON","to_name":"..."}]}
+{"entities":[{"type":"Decision|Problem|Solution|Tool|Preference|Project|Topic|Task|Person","name":"<60 Zeichen","description":"1-3 Sätze","context":"private|work|"}],"relations":[{"from_name":"...","relation":"NUTZT|LÄUFT_AUF|GELÖST_DURCH|HÄNGT_AB_VON|INTEGRIERT_MIT|BEVORZUGT|ARBEITET_AN|GETROFFEN_VON|TEIL_VON","to_name":"..."}]}
 
 Leer: {"entities":[],"relations":[]}
 
@@ -119,6 +119,7 @@ context="work" nur: berufliche Beratung/Kunden
 NICHT speichern: Code-Pfade, git-log, Funktionsnamen, Rezepte, Smalltalk, triviale sofort-behobene Fehler.
 
 Task NUR fuer Arbeit, die nach der Session offen bleibt. KEIN Task fuer Schritte, die in der Session erledigt wurden ("PR #262", "task_556", "T1: …", "Phase 0", "Deploy beobachten"). Erledigtes gehoert als Decision/Solution gespeichert, nicht als Task. Task-Beschreibung, die einen Abschluss meldet, mit "ERLEDIGT" beginnen.
+Jeder Task gehoert zu einem Projekt: Relation Task TEIL_VON <Projektname>, wenn eines der aktiven Projekte unten passt.
 
 DEDUP: Name aus Liste unten? Exakt verwenden. Sonst neu.
 
@@ -278,13 +279,27 @@ def _fetch_known_entity_names(client: MCPClient) -> List[str]:
     return [m.group(1).strip() for m in _NAME_LINE.finditer(listing)]
 
 
-def _build_system_prompt(known_names: List[str]) -> str:
+def _fetch_project_names(client: MCPClient) -> List[str]:
+    """Aktive Projects — fuer TEIL_VON muss das Modell sie alle kennen, nicht nur
+    die zufaellig unter den 50 bekannten Namen gelandeten."""
+    try:
+        listing = client.call("memory_list", {"type": "Project"})
+    except Exception:
+        return []
+    return [m.group(1).strip() for m in _NAME_LINE.finditer(listing)]
+
+
+def _build_system_prompt(known_names: List[str], projects: Optional[List[str]] = None) -> str:
+    proj_block = ""
+    if projects:
+        proj_block = "\n\nAktive Projekte (fuer TEIL_VON):\n" + "\n".join(f"- {p}" for p in projects)
     if not known_names:
-        return SYSTEM_PROMPT_BASE + "\n\nBekannte Entities: (keine)"
+        return SYSTEM_PROMPT_BASE + proj_block + "\n\nBekannte Entities: (keine)"
     limited = sorted(known_names)[-50:]
     block = "\n".join(f"- {n}" for n in limited)
     return (
         SYSTEM_PROMPT_BASE
+        + proj_block
         + f"\n\n({len(limited)}/{len(known_names)} bekannte — bevorzuge diese Namen):\n"
         + block
     )
@@ -381,6 +396,25 @@ def is_step_task(name: str, typ: str) -> bool:
     return typ.strip().lower() == "task" and bool(_STEP_TASK_NAME.match(name.strip()))
 
 
+# Abschlussmeldung statt offener Arbeit: "PR #225 gemergt", "wurde geprueft",
+# "ERLEDIGT …". Das Modell legt solche Schritte trotz Prompt-Regel als Task an;
+# ohne Status zaehlen sie dann ewig als offen. Spiegelt server._done_hint — der
+# Extractor laeuft clientseitig und kann das Server-Modul nicht importieren.
+_DONE_VERB = (r"(?:gemergt|gemerged|merged|erstellt|angelegt|gelöscht|geloescht|entfernt"
+              r"|durchgeführt|durchgefuehrt|deployt|deployed|geprüft|geprueft|getaggt"
+              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited)")
+_DONE_TEXT = re.compile(
+    r"^\s*(?:ERLEDIGT|GELÖST|GELOEST|ABGESCHLOSSEN|FERTIG|DONE)\b"
+    r"|\b(?:wurden?|ist|sind)\s+(?:\S+\s+){0,6}?" + _DONE_VERB + r"\b"
+    r"|\bPRs?\s*#?\d+(?:\s*(?:,|und|\+)\s*#?\d+)*\s+(?:wurden?\s+)?(?:gemergt|gemerged|merged)\b",
+    re.I)
+
+
+def is_done_report(typ: str, descr: str) -> bool:
+    """True, wenn ein Task-Text einen Abschluss meldet statt offene Arbeit zu beschreiben."""
+    return typ.strip().lower() == "task" and bool(_DONE_TEXT.search(descr or ""))
+
+
 def upsert_entity(client: MCPClient, ent: dict) -> str:
     name = ent.get("name", "").strip()
     typ = ent.get("type", "").strip()
@@ -398,6 +432,11 @@ def upsert_entity(client: MCPClient, ent: dict) -> str:
         args["context"] = ctx
     existing = client.call("memory_search", {"query": name, "limit": 5})
     matched = any(name.lower() in line.lower() for line in existing.splitlines())
+    if is_done_report(typ, args["description"]):
+        if not matched:
+            return f"[skip]   Abschlussmeldung, kein Task: {name}"
+        # Bekannter Task, dessen Abschluss die Session meldet → schliessen statt offen lassen.
+        args["extra"] = {"status": "erledigt"}
     prefix = "[exists]" if matched else "[new]   "
     return f"{prefix} {client.call('memory_add', args)}"
 
@@ -576,7 +615,7 @@ def ingest_transcript(
 
     try:
         known = _fetch_known_entity_names(client)
-        prompt = _build_system_prompt(known)
+        prompt = _build_system_prompt(known, _fetch_project_names(client))
         print(
             f"transcript: {transcript_path} ({len(flat):,} Zeichen, "
             f"Modell={model}, bekannte Entities: {len(known)})",
