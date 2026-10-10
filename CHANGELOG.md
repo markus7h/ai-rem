@@ -13,6 +13,20 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.8.1] – 2026-10-11
+
+### Fixed
+- **Projects and tasks keep their type.** `memory_add` took the type of an existing entry
+  unchecked, so the transcript extractor kept rewriting the project `ai-rem` as a `Tool` —
+  after that none of its `TEIL_VON` links counted and its tasks fell back to "_ohne
+  Projekt_". An existing `Project` or `Task` now keeps its type; the reply says so
+  ("Typ bleibt Project, 'Tool' ignoriert"). Other changes such as Tool → Project still work.
+- **`ai-rem mcp-proxy` no longer crashes on exit ("Python quit unexpectedly").** After the
+  server dropped the session (HTTP 404, e.g. on a container restart) the proxy left with
+  `sys.exit` while its stdin reader thread was still blocked in `readline()`. Interpreter
+  shutdown could not acquire the stdin buffer lock and aborted (SIGABRT). The proxy now
+  exits via `os._exit` after flushing its output.
+
 ## [1.8.0] – 2026-10-10
 
 ### Added
@@ -1003,7 +1017,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/markus7h/ai-rem/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/markus7h/ai-rem/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/markus7h/ai-rem/compare/v1.6.0...v1.6.1

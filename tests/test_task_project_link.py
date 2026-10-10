@@ -140,3 +140,18 @@ def test_extractor_laesst_offene_arbeit_durch():
     assert not is_done_report("Task", "Login im Browser bestätigen")
     assert not is_done_report("Task", "Der Deploy muss manuell durchgeführt werden")
     assert not is_done_report("Decision", "PR #12 gemergt")
+
+
+def test_project_bleibt_project_bei_anderem_typ():
+    server.memory_add("TPL_Typfest", "Project", extra={"keywords": ["tpltypfest"]})
+    msg = server.memory_add("TPL_Typfest", "Tool", description="vom Extractor als Tool erkannt")
+    assert "Typ bleibt Project" in msg
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.type",
+                                       {"id": server._id("TPL_Typfest")}))
+    assert rows[0][0] == "Project"
+
+
+def test_tool_darf_project_werden():
+    server.memory_add("TPL_Aufstieg", "Tool")
+    msg = server.memory_add("TPL_Aufstieg", "Project")
+    assert "Typ bleibt" not in msg and "[Project]" in msg

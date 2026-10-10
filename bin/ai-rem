@@ -493,7 +493,14 @@ def cmd_mcp_proxy(c: MCPClient, a):
     # Ohne Header nimmt der Server clientInfo.name aus dem initialize — der Default
     # "ai-rem-cli" wuerde sonst alle von Claude angelegten Entities falsch attribuieren.
     proxy = _McpProxy(endpoint, c.token, os.environ.get("AI_REM_CLIENT", ""))
-    sys.exit(proxy.run())
+    code = proxy.run()
+    # os._exit statt sys.exit: der stdin-Leser (Daemon-Thread) haengt beim Ausstieg
+    # nach HTTP 404 noch in readline() und haelt den Lock von sys.stdin.buffer. Der
+    # Interpreter-Shutdown will den Puffer schliessen, bekommt den Lock nicht und
+    # bricht per abort() ab — macOS meldet "Python quit unexpectedly".
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 def cmd_vault_mcp(c: MCPClient, a):
