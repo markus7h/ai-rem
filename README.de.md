@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für KI-Coding-Agenten
 
-> Diese Dokumentation bezieht sich auf **[v1.8.0](https://github.com/markus7h/ai-rem/releases/tag/v1.8.0)**.
+> Diese Dokumentation bezieht sich auf **[v1.8.1](https://github.com/markus7h/ai-rem/releases/tag/v1.8.1)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**

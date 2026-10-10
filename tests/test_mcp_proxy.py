@@ -10,7 +10,9 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import pathlib
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -194,6 +196,10 @@ def test_cmd_mcp_proxy_nutzt_keychain_token_und_stdio(monkeypatch):
     client = cli.MCPClient(endpoint=ENDPOINT)
     assert client.token == TOKEN and client.token_source == "Keychain (Fake)"
     args = cli.build_parser().parse_args(["mcp-proxy", "--endpoint", ENDPOINT])
+
+    def _exit(code):
+        raise SystemExit(code)
+    monkeypatch.setattr(cli.os, "_exit", _exit)  # echtes os._exit beendete pytest
     try:
         cli.cmd_mcp_proxy(client, args)
     except SystemExit as e:
@@ -204,6 +210,38 @@ def test_cmd_mcp_proxy_nutzt_keychain_token_und_stdio(monkeypatch):
     assert posts[0][1]["authorization"] == "Bearer " + TOKEN
     # Ohne AI_REM_CLIENT kein X-AI-REM-Client: der Server soll clientInfo.name nehmen.
     assert "x-ai-rem-client" not in posts[0][1]
+
+
+def test_ausstieg_bei_offenem_stdin_ohne_abort(tmp_path):
+    """Regression: nach HTTP 404 beendet sich der Proxy, waehrend der stdin-Leser noch
+    in readline() haengt (Claude haelt stdin offen). sys.exit lief in den
+    Interpreter-Shutdown, der den Lock von sys.stdin.buffer nicht bekam → abort(),
+    SIGABRT, "Python quit unexpectedly". Erwartet: sauberer Exit 1."""
+    prog = (
+        "import importlib.machinery, importlib.util, os, sys, threading, time\n"
+        f"loader = importlib.machinery.SourceFileLoader('cli', {str(ROOT / 'bin' / 'ai-rem')!r})\n"
+        "spec = importlib.util.spec_from_loader('cli', loader)\n"
+        "cli = importlib.util.module_from_spec(spec); loader.exec_module(cli)\n"
+        "def run(self):\n"
+        "    threading.Thread(target=sys.stdin.buffer.readline, daemon=True).start()\n"
+        "    time.sleep(0.3)\n"
+        "    return 1\n"
+        "cli._McpProxy.run = run\n"
+        "c = cli.MCPClient(endpoint='https://kg.test/mcp')\n"
+        "cli.cmd_mcp_proxy(c, cli.build_parser().parse_args(['mcp-proxy']))\n"
+    )
+    env = {**os.environ, "AI_REM_TOKEN": TOKEN}
+    p = subprocess.Popen([sys.executable, "-c", prog], stdin=subprocess.PIPE,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
+    # Nicht communicate(): das schliesst stdin sofort, der Leser bekaeme EOF und
+    # der Fehler traete nie auf. stdin bleibt offen wie bei Claude Code.
+    try:
+        p.wait(timeout=30)
+        err = p.stderr.read()
+    finally:
+        p.kill()
+        p.stdin.close()
+    assert p.returncode == 1, err.decode()[-400:]
 
 
 def test_iter_sse_events_joint_data_und_ignoriert_kommentare():

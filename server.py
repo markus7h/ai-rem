@@ -77,7 +77,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -2385,7 +2385,7 @@ def memory_add(
     ts = _now()
 
     prev = _rows(db_exec(
-        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned, e.updated_at",
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned, e.updated_at, e.type",
         {"id": eid},
     ))
     existed = bool(prev)
@@ -2400,8 +2400,17 @@ def memory_add(
                 f"Bitte einen eindeutigeren Namen wählen — verschiedene Namen, die "
                 f"zur selben ID normalisieren, kollidieren.")
 
-    cur_descr, cur_extra_raw, cur_ctx, cur_pinned, cur_updated = (
-        prev[0][1:] if existed else ("", "{}", "", "", ""))
+    cur_descr, cur_extra_raw, cur_ctx, cur_pinned, cur_updated, cur_type = (
+        prev[0][1:] if existed else ("", "{}", "", "", "", ""))
+
+    # Typ-Guard: Project und Task tragen Struktur (TEIL_VON-Kanten, Keywords, Status).
+    # Der Extractor schrieb "ai-rem" wiederholt als Tool zurück — danach zählte keine
+    # Projekt-Zuordnung mehr. Der bestehende Typ gewinnt; bewusster Wechsel geht über
+    # archivieren + neu anlegen. Tool → Project u.ä. bleibt erlaubt.
+    type_note = ""
+    if existed and cur_type in ("Project", "Task") and type != cur_type:
+        type_note = f" (Typ bleibt {cur_type}, '{type}' ignoriert)"
+        type = cur_type
 
     # Weggelassene Felder (None) beim Update beibehalten, beim Create defaulten.
     eff_descr = description if description is not None else (cur_descr or "")
@@ -2482,7 +2491,7 @@ def memory_add(
     _store_embedding(eid, name, eff_descr)
     verb = "Aktualisiert" if existed else "Angelegt"
     pin_marker = " 📌" if eff_pinned == "true" else ""
-    msg = f"{verb}: [{type}] {name}{pin_marker}"
+    msg = f"{verb}: [{type}] {name}{pin_marker}{type_note}"
     if type == "Task" and base_extra.get("status") != "erledigt":
         proj = _auto_link_project(eid, name, eff_descr, ts)
         if proj:
