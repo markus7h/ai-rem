@@ -1240,7 +1240,7 @@ mcp = FastMCP(
         "archiviert wird automatisch nach der Karenzzeit. Status: offen | laufend | blockiert | "
         "erledigt (Synonyme wie 'gemergt' oder 'done' werden gemappt, Freitext landet in status_note).\n"
         "  Task → Projekt: memory_relate(task, 'TEIL_VON', projekt). Passiert automatisch, wenn genau "
-        "ein aktives Projekt per extra.keywords bzw. Namen im Task-Text vorkommt.\n\n"
+        "ein aktives Projekt per extra.keywords im Task-Text vorkommt.\n\n"
         "## Nicht speichern\n"
         "Code-Patterns/Architektur/Pfade (aus Code ableitbar), git-Historie (git log/blame), "
         "Fix-Rezepte (Code+Commit), ephemere Sitzungsdetails. "
@@ -4331,9 +4331,10 @@ def _done_hint(text: str) -> bool:
 # ─── Task → Project: automatische Zuordnung ──────────────────────────────────
 # Ohne Kante landet ein Task in get_context unter "_ohne Projekt_" — und genau dort
 # landeten fast alle, weil weder Extractor noch Client je TEIL_VON setzen. Projects
-# tragen dafür optional extra.keywords; ohne Keywords zählt der Projektname selbst.
+# nehmen nur mit explizitem extra.keywords teil: ein Namens-Fallback griff im Bestand
+# auf Extractor-Pseudoprojekte wie "mystorage" oder "PR 293" und ordnete falsch zu.
 def _project_keywords() -> dict:
-    """{Projektname: [keywords]} aller aktiven (nicht archivierten, nicht erledigten) Projects."""
+    """{Projektname: [keywords]} aller aktiven Projects mit gesetzten Keywords."""
     rows = _rows(db_exec(
         "MATCH (p:Entity) WHERE p.type = 'Project'"
         + _archived_clause("p", False) + " RETURN p.name, p.extra"))
@@ -4348,9 +4349,11 @@ def _project_keywords() -> dict:
         kws = extra.get("keywords")
         if isinstance(kws, str):
             kws = [k for k in re.split(r"[,;]", kws)]
-        if not isinstance(kws, list) or not kws:
-            kws = [name]
-        out[name] = [str(k).strip().lower() for k in kws if str(k).strip()]
+        if not isinstance(kws, list):
+            continue
+        kws = [str(k).strip().lower() for k in kws if str(k).strip()]
+        if kws:
+            out[name] = kws
     return out
 
 

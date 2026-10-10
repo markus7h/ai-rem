@@ -37,10 +37,10 @@ def test_keyword_treffer_verknuepft_beim_anlegen():
     assert _projekt_von("TPL_Task1") == {"TPL_Seeprojekt"}
 
 
-def test_ohne_keywords_zaehlt_der_projektname():
+def test_ohne_keywords_kein_namens_fallback():
     server.memory_add("TPL_Kaiwache", "Project")
     server.memory_add("TPL_Task2", "Task", description="Container von tpl_kaiwache updaten")
-    assert _projekt_von("TPL_Task2") == {"TPL_Kaiwache"}
+    assert _projekt_von("TPL_Task2") == set()
 
 
 def test_mehrdeutig_bleibt_ohne_projekt():
@@ -72,7 +72,7 @@ def test_bestehende_projektkante_bleibt():
 
 
 def test_backfill_trockenlauf_und_ausfuehren():
-    server.memory_add("TPL_Backfill", "Project")
+    server.memory_add("TPL_Backfill", "Project", extra={"keywords": ["tpl_backfill"]})
     # Projekt existiert erst nach dem Task → beim Anlegen kein Treffer.
     server.db_exec("MATCH (p:Entity {id: $id}) SET p.archived = 'true'",
                    {"id": server._id("TPL_Backfill")})

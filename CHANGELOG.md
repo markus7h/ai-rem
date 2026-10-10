@@ -19,8 +19,9 @@ German).
 - **Automatic task → project linking.** Nothing ever set a task's project edge, so
   `get_context` listed most open tasks under "_ohne Projekt_". `memory_add` now links a task
   without a project edge via `TEIL_VON` when exactly one active project matches by keyword
-  (`extra.keywords` on the project, falling back to the project name; word boundaries,
-  case-insensitive). Several matches link nothing.
+  (`extra.keywords` on the project; word boundaries, case-insensitive). Projects without
+  keywords never match — a name fallback mislinked to extractor pseudo-projects such as
+  "mystorage". Several matches link nothing.
 - `ai-rem project-keywords <project> "kw1,kw2"` sets a project's keywords;
   `ai-rem link-projects [--dry-run]` (server tool `memory_link_projects`) back-fills
   existing open tasks.
