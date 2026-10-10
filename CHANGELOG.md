@@ -35,10 +35,8 @@ German).
   marker sits anywhere in the text, and open tasks untouched for `CLEANUP_TASK_STALE_DAYS`
   (default 30). Dismissing either keeps it out of the queue.
 
-## [1.7.1] – 2026-10-09
-
 ### Fixed
-- **Keychain hint on headless servers.** On a server without a desktop login (SSH) the
+- **Keychain hint on headless servers** (#160). On a server without a desktop login (SSH) the
   login keyring stays locked, so `secret-tool store` fails and the token goes to the 0600
   file fallback — which is the intended behavior there. Setup still told the user to
   "install libsecret, then `ai-rem pair`", although `secret-tool` was already installed and
@@ -1006,8 +1004,7 @@ the new instance recomputes them.
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
 [Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.8.0...HEAD
-[1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.1...v1.8.0
-[1.7.1]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.7.1
+[1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/markus7h/ai-rem/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/markus7h/ai-rem/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/markus7h/ai-rem/compare/v1.5.0...v1.6.0
