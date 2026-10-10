@@ -13,10 +13,30 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [1.7.1] – 2026-10-09
+## [1.8.0] – 2026-10-10
+
+### Added
+- **Automatic task → project linking.** Nothing ever set a task's project edge, so
+  `get_context` listed most open tasks under "_ohne Projekt_". `memory_add` now links a task
+  without a project edge via `TEIL_VON` when exactly one active project matches by keyword
+  (`extra.keywords` on the project; word boundaries, case-insensitive). Projects without
+  keywords never match — a name fallback mislinked to extractor pseudo-projects such as
+  "mystorage". Several matches link nothing.
+- `ai-rem project-keywords <project> "kw1,kw2"` sets a project's keywords;
+  `ai-rem link-projects [--dry-run]` (server tool `memory_link_projects`) back-fills
+  existing open tasks.
+- The extractor prompt now offers `TEIL_VON` and always lists the active projects.
+
+### Changed
+- **Completion reports no longer pile up as open tasks.** The extractor skips new tasks whose
+  description only reports completion ("PR #225 gemergt", "wurde geprüft") and closes a known
+  task when the session reports it done.
+- The nightly cleanup also proposes (review queue, never automatic) tasks whose completion
+  marker sits anywhere in the text, and open tasks untouched for `CLEANUP_TASK_STALE_DAYS`
+  (default 30). Dismissing either keeps it out of the queue.
 
 ### Fixed
-- **Keychain hint on headless servers.** On a server without a desktop login (SSH) the
+- **Keychain hint on headless servers** (#160). On a server without a desktop login (SSH) the
   login keyring stays locked, so `secret-tool store` fails and the token goes to the 0600
   file fallback — which is the intended behavior there. Setup still told the user to
   "install libsecret, then `ai-rem pair`", although `secret-tool` was already installed and
@@ -983,8 +1003,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.7.1...HEAD
-[1.7.1]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.7.1
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/markus7h/ai-rem/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/markus7h/ai-rem/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/markus7h/ai-rem/compare/v1.5.0...v1.6.0

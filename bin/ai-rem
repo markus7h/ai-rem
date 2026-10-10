@@ -217,6 +217,16 @@ def cmd_set_project_context(c: MCPClient, a):
     _print(c.call("memory_set_project_context", args))
 
 
+def cmd_link_projects(c: MCPClient, a):
+    _print(c.call("memory_link_projects", {"dry_run": a.dry_run}))
+
+
+def cmd_project_keywords(c: MCPClient, a):
+    # Nur extra.keywords schreiben — description/context bleiben (Partial-Update).
+    kws = [k.strip() for k in a.keywords.split(",") if k.strip()]
+    _print(c.call("memory_add", {"name": a.name, "type": "Project", "extra": {"keywords": kws}}))
+
+
 def cmd_purge_archived(c: MCPClient, a):
     if not a.yes:
         sys.stderr.write("Confirm purge (destructive) with --yes\n")
@@ -828,6 +838,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--rules", default=None, help="JSON-Liste")
     s.add_argument("--context", "-c", choices=["", "work", "private"], default=None)
     s.set_defaults(func=cmd_set_project_context)
+
+    s = sub.add_parser("link-projects",
+                       help="offene Tasks ohne Projekt per Keywords zuordnen (TEIL_VON)")
+    s.add_argument("--dry-run", action="store_true", help="nur anzeigen, nichts verknüpfen")
+    s.set_defaults(func=cmd_link_projects)
+
+    s = sub.add_parser("project-keywords",
+                       help="Zuordnungs-Keywords eines Projects setzen (komma-getrennt)")
+    s.add_argument("name")
+    s.add_argument("keywords", help='z.B. "silbersee,diabi,fabric"')
+    s.set_defaults(func=cmd_project_keywords)
 
     s = sub.add_parser("purge-archived", help="memory_purge_archived (destruktiv, needs --yes)")
     s.add_argument("--keep-days", dest="keep_days", type=int, default=0)
