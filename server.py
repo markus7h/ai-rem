@@ -77,7 +77,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -4323,7 +4323,9 @@ _DONE_BODY = re.compile(
 # Zu unscharf fürs Auto-Archiv — nur Vorschlag in der Review-Queue.
 _DONE_VERB = (r"(?:gemergt|gemerged|merged|erstellt|angelegt|gelöscht|geloescht|entfernt"
               r"|durchgeführt|durchgefuehrt|deployt|deployed|geprüft|geprueft|getaggt"
-              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited)")
+              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited"
+              r"|gesendet|versendet|verschickt|eingetragen|übertragen|uebertragen|vereinbart"
+              r"|gebucht|bezahlt|überwiesen|ueberwiesen|zugestellt|beantwortet)")
 _DONE_HINT = re.compile(
     r"\b(?:wurden?|ist|sind)\s+(?:\S+\s+){0,6}?" + _DONE_VERB + r"\b"
     r"|\bPRs?\s*#?\d+(?:\s*(?:,|und|\+)\s*#?\d+)*\s+(?:wurden?\s+)?(?:gemergt|gemerged|merged)\b",

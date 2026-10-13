@@ -155,3 +155,28 @@ def test_tool_darf_project_werden():
     server.memory_add("TPL_Aufstieg", "Tool")
     msg = server.memory_add("TPL_Aufstieg", "Project")
     assert "Typ bleibt" not in msg and "[Project]" in msg
+
+
+def test_extractor_erkennt_buero_abschluesse():
+    assert is_done_report("Task", "Die Anfrage wurde an René Stegmann gesendet")
+    assert is_done_report("Task", "23 Termine sind in den Kalender eingetragen")
+    assert server._done_hint("Rechnung wurde bezahlt")
+    assert not is_done_report("Task", "Termine in den Kalender eintragen")
+
+
+def test_extractor_prompt_zeigt_neueste_tasks():
+    from lib.extractor import _build_system_prompt, _fetch_recent_tasks
+
+    class _Client:
+        def call(self, tool, args):
+            assert args == {"type": "Task"}
+            return ("- **A alt**: x  _(2026-01-01)_\n"
+                    "- **Behandlungsplan eintragen**: y  _(2026-10-13)_\n"
+                    "- **Z mitte**: z  _(2026-05-01)_")
+
+    tasks = _fetch_recent_tasks(_Client())
+    assert tasks == ["Behandlungsplan eintragen", "Z mitte", "A alt"]
+    prompt = _build_system_prompt(["Behandlungsplan eintragen", "Zebra"], [], tasks)
+    assert "Bekannte Tasks (neueste zuerst):\n- Behandlungsplan eintragen" in prompt
+    # nicht doppelt in der allgemeinen Namensliste
+    assert prompt.count("- Behandlungsplan eintragen") == 1

@@ -13,6 +13,25 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.9.1] – 2026-10-13
+
+### Fixed
+- **opencode: finished tasks no longer come back as open.** opencode extracts a session
+  again after every turn. The extractor only saw the alphabetical tail of all entity names,
+  so a task the model had just closed was unknown to it and got re-created under a new name
+  with status `offen`. The extraction prompt now lists the most recently changed tasks and
+  asks the model to report a finished one under exactly that name with "ERLEDIGT …", which
+  closes it.
+- **opencode: subagent sessions are no longer extracted.** A child session (`parentID`) only
+  sees the orchestrator's instruction ("send the mail now"), not the result, and produced
+  open tasks for work that was already done. Starting a subagent also no longer flushes the
+  parent session mid-turn.
+- **opencode: closing opencode no longer drops the last extraction.** Pending idle timers
+  are ingested on dispose instead of being discarded.
+- **Done detection knows office verbs.** gesendet, versendet, verschickt, eingetragen,
+  übertragen, vereinbart, gebucht, bezahlt, überwiesen, zugestellt and beantwortet count as
+  a completion report (extractor and cleanup review hint).
+
 ## [1.9.0] – 2026-10-13
 
 > **Migration notice — Claude Code now uses plugins instead of `mcpServers`.**
@@ -1057,7 +1076,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/markus7h/ai-rem/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/markus7h/ai-rem/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/markus7h/ai-rem/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.8.0

@@ -9,6 +9,9 @@
 //   `ai-rem ingest` ins Gedächtnis extrahieren. Nur wenn seit dem letzten Ingest neue
 //   Nachrichten dazugekommen sind.
 // - session.compacted: sofort exportieren, bevor der Kontext weg ist.
+// - Subagent-Sessions (parentID gesetzt) werden nie extrahiert: Sie sehen nur den
+//   Auftrag ("sende jetzt die Mail"), nicht das Ergebnis — daraus wurden offene Tasks
+//   fuer laengst erledigte Arbeit. Die Eltern-Session enthaelt alles Relevante.
 //
 // Zwei API-Generationen aus EINER Datei (ohne Imports/node_modules):
 //   opencode 2.x  → default.setup(ctx): Events per ctx.event.subscribe(), Nachrichten
@@ -89,6 +92,7 @@ function createCore(getMessages: (sessionID: string) => Promise<any[]>) {
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const ingested = new Map<string, number>() // sessionID → Nachrichtenzahl beim letzten Ingest
   const segment = new Map<string, number>() // sessionID → Compaction-Zaehler (eigene Datei je Abschnitt)
+  const children = new Set<string>() // Subagent-Sessions — nie ingesten
   let checked = false
 
   // rotate: Compaction steht bevor — danach beginnt der Kontext von vorn, also neuer
@@ -118,7 +122,14 @@ function createCore(getMessages: (sessionID: string) => Promise<any[]>) {
   return {
     // Session wurde angelegt: offene Timer jetzt ingesten (opencode kann beendet werden,
     // bevor sie ablaufen), verpasste Ingests nachziehen, einmal pro Prozess Drift pruefen.
-    async created(notify: (msg: string) => Promise<void>): Promise<void> {
+    // Subagent-Start: nichts flushen — sonst landet die Eltern-Session mitten im Turn
+    // im Extractor, und jeder weitere Ingest derselben Session kann Erledigtes erneut
+    // als offenen Task anlegen.
+    async created(notify: (msg: string) => Promise<void>, sessionID?: string, parentID?: string): Promise<void> {
+      if (parentID) {
+        if (sessionID) children.add(sessionID)
+        return
+      }
       for (const other of [...timers.keys()]) void ingest(other)
       runCli(["catchup"])
       if (!checked) {
@@ -127,13 +138,17 @@ function createCore(getMessages: (sessionID: string) => Promise<any[]>) {
       }
     },
     idle(sessionID: string): void {
+      if (children.has(sessionID)) return
       clearTimeout(timers.get(sessionID))
       timers.set(sessionID, setTimeout(() => void ingest(sessionID), IDLE_MS))
     },
-    compaction: (sessionID: string, rotate: boolean) => ingest(sessionID, rotate),
+    compaction: async (sessionID: string, rotate: boolean) => {
+      if (!children.has(sessionID)) await ingest(sessionID, rotate)
+    },
+    // Beenden vor Ablauf des Timers: letzten Stand noch exportieren statt verwerfen.
+    // Best effort — opencode wartet nicht zwingend; was fehlt, holt `catchup` nicht nach.
     dispose(): void {
-      for (const t of timers.values()) clearTimeout(t)
-      timers.clear()
+      for (const sid of [...timers.keys()]) void ingest(sid)
     },
   }
 }
@@ -160,7 +175,7 @@ async function setup(ctx: any): Promise<() => void> {
     const sid: string | undefined = d.sessionID ?? d.info?.id
     const type: string | undefined = event?.type
     if (!type) return
-    if (type === "session.created") await core.created(notify)
+    if (type === "session.created") await core.created(notify, sid, d.info?.parentID ?? d.parentID)
     else if (!sid) return
     else if (V2_IDLE.has(type)) core.idle(sid)
     // started: der Kontext ist noch vollstaendig → jetzt sichern, danach neuer Abschnitt.
@@ -203,7 +218,7 @@ async function server({ client }: { client: any }) {
       const sid: string | undefined = event?.properties?.sessionID ?? event?.properties?.info?.id
       switch (event?.type) {
         case "session.created":
-          await core.created(notify)
+          await core.created(notify, sid, event?.properties?.info?.parentID)
           break
         case "session.idle":
           if (sid) core.idle(sid)

@@ -119,6 +119,7 @@ context="work" nur: berufliche Beratung/Kunden
 NICHT speichern: Code-Pfade, git-log, Funktionsnamen, Rezepte, Smalltalk, triviale sofort-behobene Fehler.
 
 Task NUR fuer Arbeit, die nach der Session offen bleibt. KEIN Task fuer Schritte, die in der Session erledigt wurden ("PR #262", "task_556", "T1: …", "Phase 0", "Deploy beobachten"). Erledigtes gehoert als Decision/Solution gespeichert, nicht als Task. Task-Beschreibung, die einen Abschluss meldet, mit "ERLEDIGT" beginnen.
+Ist ein Task aus "Bekannte Tasks" unten laut Transcript erledigt (gesendet, eingetragen, gemergt …): unter EXAKT diesem Namen ausgeben, Beschreibung beginnt mit "ERLEDIGT". Nie denselben Task unter neuem Namen wieder anlegen.
 Jeder Task gehoert zu einem Projekt: Relation Task TEIL_VON <Projektname>, wenn eines der aktiven Projekte unten passt.
 
 DEDUP: Name aus Liste unten? Exakt verwenden. Sonst neu.
@@ -289,17 +290,38 @@ def _fetch_project_names(client: MCPClient) -> List[str]:
     return [m.group(1).strip() for m in _NAME_LINE.finditer(listing)]
 
 
-def _build_system_prompt(known_names: List[str], projects: Optional[List[str]] = None) -> str:
+_TASK_LINE = re.compile(r"^-\s+\*\*(.+?)\*\*.*_\((\d{4}-\d{2}-\d{2})\)_\s*$", re.MULTILINE)
+
+
+def _fetch_recent_tasks(client: MCPClient, limit: int = 40) -> List[str]:
+    """Zuletzt geaenderte Tasks, neueste zuerst. opencode extrahiert eine Session nach
+    jedem Turn erneut — kennt das Modell den eben angelegten Task nicht, erfindet es
+    einen neuen Namen und die Arbeit taucht nach dem Abschluss wieder als offen auf."""
+    try:
+        listing = client.call("memory_list", {"type": "Task"})
+    except Exception:
+        return []
+    rows = sorted(_TASK_LINE.findall(listing), key=lambda r: r[1], reverse=True)
+    return [name.strip() for name, _ in rows[:limit]]
+
+
+def _build_system_prompt(known_names: List[str], projects: Optional[List[str]] = None,
+                         tasks: Optional[List[str]] = None) -> str:
     proj_block = ""
     if projects:
         proj_block = "\n\nAktive Projekte (fuer TEIL_VON):\n" + "\n".join(f"- {p}" for p in projects)
+    task_block = ""
+    if tasks:
+        task_block = "\n\nBekannte Tasks (neueste zuerst):\n" + "\n".join(f"- {t}" for t in tasks)
     if not known_names:
-        return SYSTEM_PROMPT_BASE + proj_block + "\n\nBekannte Entities: (keine)"
-    limited = sorted(known_names)[-50:]
+        return SYSTEM_PROMPT_BASE + proj_block + task_block + "\n\nBekannte Entities: (keine)"
+    seen = set(tasks or [])
+    limited = sorted(n for n in known_names if n not in seen)[-50:]
     block = "\n".join(f"- {n}" for n in limited)
     return (
         SYSTEM_PROMPT_BASE
         + proj_block
+        + task_block
         + f"\n\n({len(limited)}/{len(known_names)} bekannte — bevorzuge diese Namen):\n"
         + block
     )
@@ -402,7 +424,9 @@ def is_step_task(name: str, typ: str) -> bool:
 # Extractor laeuft clientseitig und kann das Server-Modul nicht importieren.
 _DONE_VERB = (r"(?:gemergt|gemerged|merged|erstellt|angelegt|gelöscht|geloescht|entfernt"
               r"|durchgeführt|durchgefuehrt|deployt|deployed|geprüft|geprueft|getaggt"
-              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited)")
+              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited"
+              r"|gesendet|versendet|verschickt|eingetragen|übertragen|uebertragen|vereinbart"
+              r"|gebucht|bezahlt|überwiesen|ueberwiesen|zugestellt|beantwortet)")
 _DONE_TEXT = re.compile(
     r"^\s*(?:ERLEDIGT|GELÖST|GELOEST|ABGESCHLOSSEN|FERTIG|DONE)\b"
     r"|\b(?:wurden?|ist|sind)\s+(?:\S+\s+){0,6}?" + _DONE_VERB + r"\b"
@@ -615,7 +639,8 @@ def ingest_transcript(
 
     try:
         known = _fetch_known_entity_names(client)
-        prompt = _build_system_prompt(known, _fetch_project_names(client))
+        prompt = _build_system_prompt(known, _fetch_project_names(client),
+                                       _fetch_recent_tasks(client))
         print(
             f"transcript: {transcript_path} ({len(flat):,} Zeichen, "
             f"Modell={model}, bekannte Entities: {len(known)})",
