@@ -42,7 +42,7 @@ jobs:
           echo "server.py VERSION = ${CODE_VERSION}"
           echo "Tag             = ${GITHUB_REF_NAME} (→ ${TAG_VERSION})"
           if [ "$CODE_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::VERSION (${CODE_VERSION}) ≠ Tag (${TAG_VERSION}) — server.py:44 vor dem Tag anpassen."
+            echo "::error::VERSION (${CODE_VERSION}) ≠ Tag (${TAG_VERSION}) — VERSION in server.py vor dem Tag anpassen."
             exit 1
           fi
           echo "✅ VERSION und Tag stimmen überein."

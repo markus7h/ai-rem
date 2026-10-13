@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für KI-Coding-Agenten
 
-> Diese Dokumentation bezieht sich auf **[v1.8.1](https://github.com/markus7h/ai-rem/releases/tag/v1.8.1)**.
+> Diese Dokumentation bezieht sich auf **[v1.9.0](https://github.com/markus7h/ai-rem/releases/tag/v1.9.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -332,10 +332,40 @@ ai-rem pair                          # nur den Token erneuern (Freigabe im Brows
 ai-rem token [--store|--forget]      # Token ausgeben / von stdin im Keychain ablegen / entfernen
 ```
 
-- **Claude Code:** registriert `ai-rem` (und `mykeyvault`, falls gebaut) als **stdio**-MCP-Server — `ai-rem mcp-proxy` brückt mit dem Keychain-Token zum HTTP-Endpoint, `ai-rem vault-mcp` startet den Vault-MCP mit dem vom Server geholten Zugang —, sodass `~/.claude.json` weder Header noch `env`-Secret enthält; deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.
-- **opencode:** mergt `ai-rem` (plus `mykeyvault`/`tools`, falls konfiguriert) als `local`-Server über dieselben Wrapper `ai-rem mcp-proxy` / `ai-rem vault-mcp` in den `mcp`-Block von `~/.config/opencode/opencode.json` — Provider und fremde Server bleiben unberührt, eine JSONC-Datei mit Kommentaren wird nicht angefasst, stattdessen liegt ein Snippet bereit —, ergänzt einen `AGENTS.md`-Pointer, das Plugin und die Commands. In die Config wird kein Token geschrieben, auch nicht als `{file:…}`-Referenz.
+- **Claude Code:** mit aktiven Plugins `ai-rem` / `mykeyvault` (empfohlen, siehe [unten](#claude-code-plugins-statt-mcpservers)) bringen die Plugins die MCP-Server mit, und das Setup registriert nichts in `~/.claude.json`. Nur ohne Plugins (Fallback) registriert es `ai-rem` (und `mykeyvault`, falls gebaut) als **stdio**-MCP-Server in `~/.claude.json` — `ai-rem mcp-proxy` brückt mit dem Keychain-Token zum HTTP-Endpoint, `ai-rem vault-mcp` startet den Vault-MCP mit dem vom Server geholten Zugang —, sodass `~/.claude.json` weder Header noch `env`-Secret enthält; deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.
+- **opencode:** mergt `ai-rem` (plus `mykeyvault`/`tools`, falls konfiguriert) als `local`-Server über dieselben Wrapper `ai-rem mcp-proxy` / `ai-rem vault-mcp` in den `mcp`-Block von `~/.config/opencode/opencode.json` (opencode 2.x: `mcp.servers` mit `"disabled": false`; jeder Eintrag bekommt ein lokales `cwd`) — Provider und fremde Server bleiben unberührt, eine JSONC-Datei mit Kommentaren wird nicht angefasst, stattdessen liegt ein Snippet bereit —, ergänzt einen `AGENTS.md`-Pointer, das Plugin und die Commands. In die Config wird kein Token geschrieben, auch nicht als `{file:…}`-Referenz.
 
 → **[Was das Setup tut, Repo-Layout & CLAUDE.md-Strategie](docs/installation.de.md)**
+
+### Claude Code: Plugins statt mcpServers
+
+Seit 1.9.0 bekommt Claude Code seine MCP-Server aus den Plugins **`ai-rem`** und
+**`mykeyvault` (2.x)** des Marketplace [tools-registry](https://github.com/markus7h/tools-registry)
+statt aus `mcpServers`-Einträgen in `~/.claude.json`. Die Plugins tragen keine Secrets in
+ihrer Config: sie starten die Server per stdio über `ai-rem mcp-proxy` und `ai-rem vault-mcp`,
+die den Token aus dem OS-Keychain nehmen. Migration eines bestehenden Rechners:
+
+```bash
+ai-rem update                                       # verschiebt einen alten Token in den OS-Keychain
+claude plugin marketplace update tools-registry
+claude plugin install ai-rem@tools-registry         # und aktivieren
+claude plugin install mykeyvault@tools-registry     # und aktivieren
+# Claude Code neu starten
+```
+
+Das Setup (auch `ai-rem update`) entfernt danach die doppelten `ai-rem`-/`mykeyvault`-Einträge
+aus `mcpServers` in `~/.claude.json` (`drop_plugin_duplicates`) — es gibt nie zwei Server
+gleichen Namens. Ohne Plugins bleibt die stdio-Registrierung in `~/.claude.json` als Fallback.
+
+### Neue Authentifizierung: ein Secret pro Gerät im OS-Keychain
+
+Seit 1.7.0 ist das einzige Secret auf einem Client der ai-rem-Geräte-Token im OS-Keychain
+(`ai-rem token [--store|--forget]` gibt ihn aus, speichert oder entfernt ihn). Jeder
+MCP-Eintrag startet den stdio-Proxy (`ai-rem mcp-proxy`) statt HTTP mit Bearer-Header, und der
+Server-Endpoint `/api/client-config` liefert `vault_url`/`vault_token` und den
+LLM-Router-Key zur Laufzeit — keine Tokens in `~/.claude.json`, `opencode.json` oder anderen
+Client-Configs.
+→ **[Authentifizierung](docs/authentication.de.md)**
 
 ### Update auf neue Version
 

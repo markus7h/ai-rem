@@ -498,8 +498,13 @@ def cmd_mcp_proxy(c: MCPClient, a):
     # nach HTTP 404 noch in readline() und haelt den Lock von sys.stdin.buffer. Der
     # Interpreter-Shutdown will den Puffer schliessen, bekommt den Lock nicht und
     # bricht per abort() ab — macOS meldet "Python quit unexpectedly".
-    sys.stdout.flush()
-    sys.stderr.flush()
+    # Flush darf scheitern (Client hat die Pipe schon zu: EPIPE/BrokenPipe, oder der
+    # Stream ist geschlossen) — os._exit muss trotzdem erreicht werden.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
     os._exit(code)
 
 

@@ -142,6 +142,97 @@ def test_stdio_server_nutzen_node_aus_dem_path(setup, monkeypatch, tmp_path):
         "ohne node darf kein kaputter stdio-Eintrag entstehen"
 
 
+def test_stdio_server_mit_lokalem_cwd(setup, monkeypatch):
+    # opencode erbt sonst sein cwd — auf einem SMB-Mount laeuft der Spawn in den Timeout.
+    monkeypatch.setattr(setup.shutil, "which", lambda n: "/usr/bin/node" if n == "node" else None)
+    e = setup.opencode_mcp_entries("/opt/mkv/mcp/dist/index.js", "", "")
+    assert e["ai-rem"]["cwd"] == os.path.dirname(os.path.dirname(setup.LOCAL_CLI))
+    assert e["mykeyvault"]["cwd"] == "/opt/mkv/mcp/dist"
+
+
+def test_opencode2_servers_format(setup, monkeypatch):
+    oc = pathlib.Path(setup.OPENCODE_DIR)
+    oc.mkdir(parents=True)
+    (oc / "opencode.json").write_text(json.dumps(
+        {"mcp": {"servers": {"fremd": {"type": "remote", "url": "u"}},
+                 "ai-rem": {"type": "local", "command": ["alt"], "enabled": True}}}))
+    setup.install_opencode("", "", "")
+    mcp = json.loads((oc / "opencode.json").read_text())["mcp"]
+    assert "ai-rem" not in mcp, "flache 1.x-Dublette bleibt stehen"
+    ai = mcp["servers"]["ai-rem"]
+    assert ai["disabled"] is False and "enabled" not in ai
+    assert ai["command"] == [setup.LOCAL_CLI, "mcp-proxy"] and "cwd" in ai
+    assert mcp["servers"]["fremd"] == {"type": "remote", "url": "u"}
+    setup.uninstall_opencode()
+    assert "ai-rem" not in json.loads((oc / "opencode.json").read_text())["mcp"]["servers"]
+
+
+def test_opencode1_bleibt_flach(setup):
+    setup.install_opencode("", "", "")
+    mcp = json.loads((pathlib.Path(setup.OPENCODE_DIR) / "opencode.json").read_text())["mcp"]
+    assert "servers" not in mcp and mcp["ai-rem"]["enabled"] is True
+
+
+def test_jsonc_snippet_im_2x_format(setup):
+    oc = pathlib.Path(setup.OPENCODE_DIR)
+    oc.mkdir(parents=True)
+    (oc / "opencode.jsonc").write_text('{\n  // Kommentar\n  "mcp": {"servers": {}}\n}\n')
+    assert setup.merge_opencode_json(setup.opencode_mcp_entries("", "", "")) is False
+    snip = json.loads((pathlib.Path(setup.SNIPPET_DIR) / "opencode-mcp.json").read_text())
+    assert snip["mcp"]["servers"]["ai-rem"]["disabled"] is False
+
+
+def test_update_opencode_frischt_mykeyvault_auf(setup, monkeypatch):
+    monkeypatch.setattr(setup.shutil, "which", lambda n: "/usr/bin/node" if n == "node" else None)
+    oc = pathlib.Path(setup.OPENCODE_DIR)
+    oc.mkdir(parents=True)
+    (oc / "opencode.json").write_text(json.dumps({"mcp": {"tools": {"type": "local", "command": ["t"]}}}))
+    setup.update_opencode("/v/mcp/dist/index.js")
+    mcp = json.loads((oc / "opencode.json").read_text())["mcp"]
+    assert mcp["mykeyvault"]["command"] == [setup.LOCAL_CLI, "vault-mcp"]
+    assert mcp["mykeyvault"]["cwd"] == "/v/mcp/dist"
+    assert mcp["tools"] == {"type": "local", "command": ["t"]}, "tools bleibt unberuehrt"
+    setup.update_opencode("")  # ohne vault_entry: mykeyvault wird nicht angefasst
+    assert "mykeyvault" in json.loads((oc / "opencode.json").read_text())["mcp"]
+
+
+@pytest.mark.parametrize("vorhanden", [False, True])
+def test_update_baut_fehlenden_vault_entry(setup, monkeypatch, tmp_path, vorhanden):
+    built = tmp_path / "mkv" / "mcp" / "dist" / "index.js"
+    alt = tmp_path / "alt" / "index.js"
+    if vorhanden:
+        alt.parent.mkdir(parents=True)
+        alt.write_text("")
+    setup.record_client("https://kg.test/mcp", ["opencode"], {},
+                        vault_entry=str(alt) if vorhanden else None)
+    calls = []
+
+    def fake_build(cfg):
+        calls.append(cfg)
+        built.parent.mkdir(parents=True, exist_ok=True)
+        built.write_text("")
+        return str(built)
+    cfg = {"mcp_register": {"mykeyvault": {"stdio": {"repo": "git@x:mkv"}}}}
+    monkeypatch.setattr(setup, "build_mykeyvault_mcp", fake_build)
+    monkeypatch.setattr(setup, "load_setup_config", lambda: cfg)
+    monkeypatch.setattr(setup, "choose_mcp_endpoint", lambda c: "https://kg.test/mcp")
+    monkeypatch.setattr(setup, "install_cli", lambda: setup.LOCAL_CLI)
+    monkeypatch.setattr(setup, "link_cli", lambda p: None)
+    monkeypatch.setattr(setup, "migrate_secrets", lambda: None)
+    monkeypatch.setattr(setup.shutil, "which", lambda n: "/usr/bin/node" if n == "node" else None)
+    setup.update_only(["opencode"])
+    client = json.loads(pathlib.Path(setup.CLIENT_JSON).read_text())
+    mcp = json.loads((pathlib.Path(setup.OPENCODE_DIR) / "opencode.json").read_text())["mcp"]
+    if vorhanden:
+        assert calls == [], "Normalfall: kein git/npm beim Update"
+        assert client["vault_entry"] == str(alt)
+        assert mcp["mykeyvault"]["cwd"] == str(alt.parent)
+    else:
+        assert len(calls) == 1
+        assert client["vault_entry"] == str(built)
+        assert mcp["mykeyvault"]["cwd"] == str(built.parent)
+
+
 def test_client_json_ohne_secrets(setup):
     """client.json traegt Endpoint, Ziele, vault_entry, Keychain-Backend — nie
     Token, LLM-Key oder Token-Pfad. Alte Felder werden beim Schreiben entfernt."""
