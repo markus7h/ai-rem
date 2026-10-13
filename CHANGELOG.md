@@ -13,6 +13,46 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.9.0] – 2026-10-13
+
+> **Migration notice — Claude Code now uses plugins instead of `mcpServers`.**
+> The MCP servers for Claude Code come from the plugins `ai-rem` and `mykeyvault` (2.x) of
+> the [tools-registry](https://github.com/markus7h/tools-registry) marketplace. They carry no
+> secrets and start stdio via `ai-rem mcp-proxy` / `ai-rem vault-mcp`. To switch: run
+> `ai-rem update`, then `claude plugin marketplace update tools-registry`,
+> `claude plugin install ai-rem@tools-registry` and `claude plugin install
+> mykeyvault@tools-registry` (enable both), restart Claude Code. The setup removes the
+> duplicate `mcpServers` entries from `~/.claude.json`. Recap of the authentication change
+> since 1.7.0: the only secret per device is the ai-rem token in the OS keychain
+> (`ai-rem token [--store|--forget]`); vault access and the LLM-router key come from
+> `/api/client-config` at runtime — no tokens in any client config. See the README sections
+> "Claude Code: plugins instead of mcpServers" and [docs/authentication.md](docs/authentication.md).
+
+### Changed
+- **opencode entries get a local `cwd`.** `ai-rem` runs in `~/.local/share/ai-rem`,
+  `mykeyvault` in the folder of its built entry. opencode passes its own working directory
+  to stdio servers; on an SMB mount the spawn ran into a timeout.
+- **opencode 2.x config format.** If `opencode.json` already has `mcp.servers`, the setup
+  writes its entries there in the 2.x shape (`"disabled": false` instead of `"enabled": true`)
+  and removes flat 1.x duplicates `mcp.<name>`; otherwise it keeps the flat 1.x format. The
+  JSONC snippet fallback follows the same rule, and `ai-rem uninstall --client opencode`
+  handles both.
+- **`ai-rem update` refreshes the opencode `mykeyvault` entry** when the built MCP is known
+  (`vault_entry` in `client.json`) and node is available. `tools` stays untouched.
+- README/docs: new sections on the Claude Code plugins and the keychain authentication;
+  Claude Code registers stdio servers in `~/.claude.json` only without plugins (fallback).
+
+### Fixed
+- **`ai-rem update` builds a missing mykeyvault MCP.** With mykeyvault configured
+  (`mcp_register.mykeyvault.stdio`) but no `vault_entry` in `client.json` (or its file gone),
+  `ai-rem vault-mcp` failed with "`ai-rem update` holt ihn nach" — and the update never did.
+  It now builds the MCP and records `vault_entry`; the normal case still skips git/npm.
+- **`ai-rem mcp-proxy` always exits.** The final flush of stdout/stderr could raise
+  (`BrokenPipeError`, closed stream) when the client had already closed the pipe, so
+  `os._exit` was never reached. The flush errors are now ignored.
+- The release workflow's version-mismatch error no longer points at a stale line number
+  (`server.py:44`).
+
 ## [1.8.1] – 2026-10-11
 
 ### Fixed
@@ -1017,7 +1057,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/markus7h/ai-rem/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/markus7h/ai-rem/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/markus7h/ai-rem/compare/v1.6.1...v1.7.0
