@@ -68,6 +68,11 @@ def _scenario() -> None:
     assert body["llm_url"] == server.AI_REM_OLLAMA_URL
     assert body["vault_url"] == "http://vault.test:8223"
     assert body["vault_token"] == "", "Vault-Token ohne AI_REM_PAIR_VAULT_TOKEN nicht leer"
+    # Ohne git_accounts in der setup-config: Default-Kontextregeln fuer lib/origin.py.
+    assert body["context_rules"] == server._DEFAULT_GIT_ACCOUNTS, body
+    fixture["git_accounts"] = [{"owner": "acme", "emails": ["a@acme.example"], "context": "work"}]
+    assert auth.get("/api/client-config").json()["context_rules"] == fixture["git_accounts"]
+    del fixture["git_accounts"]
 
     # Oeffentliche /setup-config: erreichbar, aber ohne Secrets.
     r = anon.get("/setup-config")

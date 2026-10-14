@@ -162,9 +162,4 @@ Die eigentlichen Regeln kommen aus zwei Quellen, die automatisch beim Sitzungsst
 
 Ein **PreToolUse-Guard-Hook** (`claude-md-guard.py`, vom Setup-Skript deployt) verstärkt diese Invariante: Sobald `~/.claude/CLAUDE.md` editiert wird, injiziert er einen non-blocking Hinweis, Regeln/Wissen lieber in ai-rem zu legen, statt sie still in der CLAUDE.md anzusammeln.
 
-Projekt-spezifische CLAUDE.md-Dateien setzen den Standard-Context:
-
-| Datei | Zweck |
-|---|---|
-| `~/.claude/CLAUDE.md` | Minimaler ai-rem-Pointer (verwaltet vom Setup-Skript) |
-| `work-repo/CLAUDE.md` | `context="work"` als Standard für Arbeits-Repos |
+Projekt-spezifische CLAUDE.md-Dateien braucht es für den Context nicht mehr: Projekt und Kontext einer Session werden aus Arbeitsverzeichnis und git abgeleitet — siehe [Session-Herkunft](hooks-and-automation.de.md#session-herkunft-cwd--projekt--kontext).

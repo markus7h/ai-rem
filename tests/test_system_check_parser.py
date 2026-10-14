@@ -255,3 +255,39 @@ def test_llm_check_alter_server_hinweis(monkeypatch):
     assert sc.check_ollama_and_catchup() == ""
     assert sc.results == ["llm ❌"]
     sc.results[:] = []
+
+
+def test_session_herkunft_abschnitt(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(sc, "_ai_rem_cli", lambda: "/x/ai-rem")
+    seen = []
+
+    def fake_run(origin):
+        def run(cmd, **kw):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(origin), "")
+        return run
+
+    monkeypatch.setattr(sc.subprocess, "run", fake_run(
+        {"project": "ai-rem", "context": "private", "ask": False, "suggestions": []}))
+    out = sc.session_origin_section("/w/ai-rem")
+    assert seen[0][-4:] == ["origin", "--cwd", "/w/ai-rem", "--json"]
+    assert out.startswith("## Session-Herkunft\nProjekt: ai-rem · Kontext: private")
+    assert "context=private" in out and "TEIL_VON ai-rem" in out
+    assert "AskUserQuestion" not in out
+
+    monkeypatch.setattr(sc.subprocess, "run", fake_run(
+        {"project": "", "context": "", "ask": True, "suggestions": ["Luschendorf", "neu: lu"]}))
+    out = sc.session_origin_section("/w/lu")
+    assert "AskUserQuestion" in out and "Luschendorf, neu: lu" in out
+    assert 'ai-rem map-dir --dir "/w/lu"' in out
+
+    # Ad-hoc-Verzeichnis (nichts bekannt, keine Frage) und CLI-Fehler: kein Abschnitt.
+    monkeypatch.setattr(sc.subprocess, "run", fake_run({"project": "", "context": "", "ask": False}))
+    assert sc.session_origin_section("/Users/x") == ""
+
+    def boom(cmd, **kw):
+        raise OSError("weg")
+    monkeypatch.setattr(sc.subprocess, "run", boom)
+    assert sc.session_origin_section("/w") == ""

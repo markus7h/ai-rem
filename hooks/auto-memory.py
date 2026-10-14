@@ -205,9 +205,14 @@ def main():
     except Exception:
         pass
 
+    # cwd der Session: daraus leitet der Extraktor Projekt (Repo) und Kontext
+    # (Remote-Owner/git-Mail) deterministisch ab, statt das LLM raten zu lassen.
+    ingest_args = ["ingest", "--transcript", transcript]
+    if ctx.get("cwd"):
+        ingest_args += ["--cwd", ctx["cwd"]]
     try:
         proc = subprocess.run(
-            _cli_cmd(cli, "ingest", "--transcript", transcript),
+            _cli_cmd(cli, *ingest_args),
             capture_output=True, text=True, timeout=TIMEOUT_S,
         )
         if proc.returncode != 0:

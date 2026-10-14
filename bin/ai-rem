@@ -242,7 +242,32 @@ def cmd_ingest(c: MCPClient, a):
         transcript_path=Path(a.transcript),
         dry_run=a.dry_run,
         model=a.model,
+        cwd=a.cwd,
     )
+
+
+def cmd_origin(c: MCPClient, a):
+    """Session-Herkunft (Projekt/Kontext) eines Verzeichnisses — --json fuer Hooks."""
+    from lib.origin import resolve_for
+
+    o = resolve_for(c, os.path.abspath(os.path.expanduser(a.cwd)))
+    if a.json:
+        print(json.dumps(o, ensure_ascii=False))
+        return
+    lines = [f"Verzeichnis: {o['cwd']}",
+             f"Repo:        {o['repo'] or '-'}" + (f"  (git-Mail {o['email']})" if o["email"] else ""),
+             f"Projekt:     {o['project'] or '-'}"
+             + (f"  [{o['project_source']}{'' if o['project_exists'] else ', neu'}]" if o["project"] else ""),
+             f"Kontext:     {o['context'] or '-'}" + (f"  [{o['source']}]" if o["source"] else "")]
+    if o["ask"]:
+        lines.append("Rückfrage:   ja — Vorschläge: " + ", ".join(o["suggestions"]))
+    _print("\n".join(lines))
+
+
+def cmd_map_dir(c: MCPClient, a):
+    from lib.origin import map_dir
+
+    _print(map_dir(c, a.dir, a.project, a.context or ""))
 
 
 def cmd_catchup(c: MCPClient, a):
@@ -873,7 +898,21 @@ def build_parser() -> argparse.ArgumentParser:
     # Ohne --model gewinnt AI_REM_LLM_MODEL aus lib/extractor. Ein Default hier
     # loggte sonst ein Modell, das der llama-server gar nicht hostet.
     s.add_argument("--model", default=None)
+    # Arbeitsverzeichnis der Session (Hook-Input) → Projekt/Kontext aus git statt LLM.
+    # Ohne Angabe gilt das cwd aus dem Transcript.
+    s.add_argument("--cwd", default=None)
     s.set_defaults(func=cmd_ingest)
+
+    s = sub.add_parser("origin", help="Session-Herkunft (Projekt/Kontext) eines Verzeichnisses")
+    s.add_argument("--cwd", default=".")
+    s.add_argument("--json", action="store_true", help="maschinenlesbar (fuer Hooks)")
+    s.set_defaults(func=cmd_origin)
+
+    s = sub.add_parser("map-dir", help="Verzeichnis dauerhaft einem Project zuordnen (extra.dirs)")
+    s.add_argument("--dir", required=True)
+    s.add_argument("--project", required=True)
+    s.add_argument("--context", choices=("work", "private"), default=None)
+    s.set_defaults(func=cmd_map_dir)
 
     s = sub.add_parser("catchup", help="re-ingest md-fallback queue once Ollama is back")
     s.set_defaults(func=cmd_catchup)

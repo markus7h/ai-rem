@@ -692,6 +692,66 @@ def check_cleanup_pending():
     )
 
 
+def _hook_input():
+    """SessionStart-JSON von stdin (cwd, session_id, …). Ohne Pipe (manueller Aufruf)
+    oder bei leerem/kaputtem Input: {}. select statt blindem read(), damit ein nie
+    geschlossenes stdin den Sessionstart nicht blockiert."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return {}
+        if sys.platform != "win32":
+            import select
+            if not select.select([sys.stdin], [], [], 0.5)[0]:
+                return {}
+        raw = sys.stdin.read()
+        obj = json.loads(raw) if raw.strip() else {}
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def session_origin_section(cwd):
+    """Projekt/Kontext der Session aus cwd + git (ai-rem origin) als additionalContext.
+
+    Damit setzt Claude bei memory_add selbst den richtigen Kontext und haengt Tasks ans
+    richtige Projekt — vorher riet das jeweils das Modell. Ohne Zuordnung (kein Repo,
+    keine gespeicherte Verzeichnis-Zuordnung) einmal nachfragen und die Antwort per
+    map-dir dauerhaft ablegen. Jeder Fehler -> "" (blockiert den Sessionstart nie)."""
+    cli = _ai_rem_cli()
+    if not cli or not cwd:
+        return ""
+    try:
+        p = subprocess.run(_cli_cmd(cli, "origin", "--cwd", cwd, "--json"),
+                           capture_output=True, text=True, timeout=8)
+        o = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
+    except Exception:
+        return ""
+    if not isinstance(o, dict):
+        return ""
+    proj, ctx = o.get("project") or "", o.get("context") or ""
+    lines = []
+    if proj or ctx:
+        head = " · ".join(x for x in (f"Projekt: {proj}" if proj else "",
+                                      f"Kontext: {ctx}" if ctx else "") if x)
+        todo = []
+        if ctx:
+            todo.append(f"bei memory_add context={ctx} setzen")
+        if proj:
+            todo.append(f"Tasks TEIL_VON {proj}")
+        lines.append(f"{head} — {', '.join(todo)}.")
+    if o.get("ask"):
+        sugg = [str(x) for x in (o.get("suggestions") or [])]
+        lines.append(
+            "Herkunft dieses Verzeichnisses ist nicht vollstaendig bekannt. Frage den User "
+            "EINMAL zu Beginn per AskUserQuestion, zu welchem Projekt und Kontext (work/private) "
+            f"es gehoert — Vorschlaege: {', '.join(sugg) or '(keine)'}. Danach ausfuehren: "
+            f"`ai-rem map-dir --dir \"{cwd}\" --project \"<Projekt>\" --context <work|private>` "
+            "(bei \"neu: X\" den Namen X verwenden). Nicht erneut fragen, wenn der User ablehnt.")
+    if not lines:
+        return ""
+    return "## Session-Herkunft\n" + "\n".join(lines)
+
+
 # check_ai_rem() ist der erste Top-Level-Aufruf — tests/test_system_check_parser.py
 # schneidet den Quelltext an dieser Zeile ab, um den Hook ohne Ausfuehrung zu laden.
 check_ai_rem()
@@ -704,8 +764,10 @@ _llm_hint = check_ollama_and_catchup()
 check_embed_pending()
 _am_fault = check_auto_memory()
 _client_stale = check_client_artifacts()
+# cwd aus dem Hook-Input; Claude startet den Hook im Projektverzeichnis, darum getcwd als Fallback.
+_origin = session_origin_section(_hook_input().get("cwd") or os.getcwd())
 _extra_ctx = "\n".join(
-    x for x in (_am_fault, _client_stale, _llm_hint, check_cleanup_pending()) if x)
+    x for x in (_origin, _am_fault, _client_stale, _llm_hint, check_cleanup_pending()) if x)
 
 _out = {"suppressOutput": True}
 _msg = " | ".join(results) if results else ""

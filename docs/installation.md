@@ -160,9 +160,4 @@ The actual rules come from two sources loaded automatically at session start:
 
 A **PreToolUse guard hook** (`claude-md-guard.py`, deployed by the setup script) reinforces this invariant: whenever `~/.claude/CLAUDE.md` is edited, it injects a non-blocking reminder to put rules/knowledge into ai-rem rather than letting them silently accumulate in CLAUDE.md. This replaces relying on a pinned preference for the same purpose.
 
-Project-specific CLAUDE.md files set the default context:
-
-| File | Purpose |
-|---|---|
-| `~/.claude/CLAUDE.md` | Minimal ai-rem pointer (managed by setup script) |
-| `work-repo/CLAUDE.md` | `context="work"` as default for work repositories |
+Per-repo CLAUDE.md files are no longer needed to set the context: project and context of a session are derived from the working directory and git — see [Session origin](hooks-and-automation.md#session-origin-cwd--project--context).

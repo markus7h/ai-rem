@@ -88,7 +88,9 @@ function normalize(raw: any[]): Msg[] {
 
 // ── Gemeinsamer Kern ─────────────────────────────────────────────────────────
 
-function createCore(getMessages: (sessionID: string) => Promise<any[]>) {
+// cwd: Arbeitsverzeichnis der Instanz — daraus leitet der Extractor Projekt (Repo) und
+// Kontext (git-Remote/-Mail) ab, statt das LLM raten zu lassen (lib/origin.py).
+function createCore(getMessages: (sessionID: string) => Promise<any[]>, cwd: string) {
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const ingested = new Map<string, number>() // sessionID → Nachrichtenzahl beim letzten Ingest
   const segment = new Map<string, number>() // sessionID → Compaction-Zaehler (eigene Datei je Abschnitt)
@@ -106,7 +108,7 @@ function createCore(getMessages: (sessionID: string) => Promise<any[]>) {
       if (messages.length > (ingested.get(sessionID) ?? 0)) {
         mkdirSync(OUT_DIR, { recursive: true })
         const file = join(OUT_DIR, `opencode-${sessionID}${seg ? `-c${seg}` : ""}.json`)
-        writeFileSync(file, JSON.stringify({ format: "opencode", session: sessionID, messages }))
+        writeFileSync(file, JSON.stringify({ format: "opencode", session: sessionID, cwd, messages }))
         ingested.set(sessionID, messages.length)
         runCli(["ingest", "--transcript", file])
       }
@@ -164,7 +166,9 @@ const V2_IDLE = new Set([
 ])
 
 async function setup(ctx: any): Promise<() => void> {
-  const core = createCore(async (sessionID) => (await ctx.session.context({ sessionID })) ?? [])
+  // v2: ctx.location.directory (2.0.26 geprueft); defensiv mit Fallbacks.
+  const cwd: string = ctx?.location?.directory ?? ctx?.directory ?? ctx?.worktree ?? process.cwd()
+  const core = createCore(async (sessionID) => (await ctx.session.context({ sessionID })) ?? [], cwd)
   const controller = new AbortController()
 
   // v2 hat keine Toast-API fuer Plugins: Hinweis nur ins Log.
@@ -208,8 +212,11 @@ async function setup(ctx: any): Promise<() => void> {
 
 // ── opencode 1.x ─────────────────────────────────────────────────────────────
 
-async function server({ client }: { client: any }) {
-  const core = createCore(async (sessionID) => (await client.session.messages({ path: { id: sessionID } }))?.data ?? [])
+async function server({ client, directory, worktree }: { client: any; directory?: string; worktree?: string }) {
+  const core = createCore(
+    async (sessionID) => (await client.session.messages({ path: { id: sessionID } }))?.data ?? [],
+    directory ?? worktree ?? process.cwd(),
+  )
   const notify = async (message: string) => {
     await client.tui?.showToast?.({ body: { message, variant: "warning" } }).catch?.(() => {})
   }

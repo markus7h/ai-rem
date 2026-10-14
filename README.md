@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for AI coding agents
 
-> This documentation describes **[v1.9.1](https://github.com/markus7h/ai-rem/releases/tag/v1.9.1)**.
+> This documentation describes **[v1.10.0](https://github.com/markus7h/ai-rem/releases/tag/v1.10.0)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -39,9 +39,9 @@ At the start of each session, the agent loads the relevant context from the grap
   "deploy_host": "...", "deploy_cmd": "...", "skills": [...], "rules": [...] }
 ```
 
-**Lean tool surface.** Only **4 always-on MCP tools** (`memory_get_context`, `memory_search`, `memory_add`, `memory_relate`) sit in `tools/list` and cost per-session context; the other 12 admin ops (list, merge, archive, project-context, …) are reachable over HTTP via `POST /api/tool` or the [`ai-rem` CLI](bin/ai-rem), keeping the session footprint small. `AI_REM_ADMIN_TOOLS=1` re-exposes all of them as MCP tools.
+**Lean tool surface.** Only **4 always-on MCP tools** (`memory_get_context`, `memory_search`, `memory_add`, `memory_relate`) sit in `tools/list` and cost per-session context; the other 15 admin ops (list, merge, archive, project-context, …) are reachable over HTTP via `POST /api/tool` or the [`ai-rem` CLI](bin/ai-rem), keeping the session footprint small. `AI_REM_ADMIN_TOOLS=1` re-exposes all of them as MCP tools.
 
-→ **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` set (4 always-on + 12 admin) with signatures, entity types and context separation.
+→ **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` set (4 always-on + 15 admin) with signatures, entity types and context separation.
 
 ---
 
@@ -92,6 +92,7 @@ Four Claude Code hooks — all deployed by the client setup — keep the graph f
 - **Auto-Memory** — a `PreCompact`/`SessionEnd` hook extracts structured entities/relations from each transcript via an OpenAI-compatible LLM endpoint (`AI_REM_LLAMA_URL`, by default a LiteLLM router rather than a single GPU host), with an md-fallback + catch-up when it is down. It runs detached (extraction takes minutes) and reports at the next session start when it is broken. The setup installs the CLI to `~/.local/share/ai-rem/bin/ai-rem` and points `AI_REM_CLI` at it, so the hook does not depend on where the repo was cloned; `~/.local/bin/ai-rem` links to the same copy, which is what makes `ai-rem` a plain shell command.
 - **Nightly cleanup** — a daemon dedups/archives outdated entries **non-destructively** (archive, never delete; preferences/pinned untouched), pushing ambiguous cases to a review queue. Finished tasks are archived 14 days after `extra.status` reached `erledigt` (the status is normalised against the enum `offen | laufend | blockiert | erledigt`, common synonyms mapped, free text kept in `extra.status_note`). A completion marker that only shows up in the description text ("ERLEDIGT: …", "PR #225 gemergt", "wurde geprüft") never archives on its own - it lands in the review queue, as does any open task untouched for 30 days (`CLEANUP_TASK_STALE_DAYS`). Plus a **staleness check** that flags entries with perishable infrastructure facts (IPs, ports, services, devices) for a reality check — never automatically.
 - **Task → project linking** — a new task without a project edge is linked to a project (`TEIL_VON`) when exactly one active project matches by keyword (`extra.keywords`; projects without keywords never match). Several matches link nothing. `ai-rem project-keywords <project> "kw1,kw2"` sets the keywords, `ai-rem link-projects [--dry-run]` back-fills existing tasks. The transcript extractor knows the active projects, emits `TEIL_VON` itself and drops tasks whose description only reports completion.
+- **Session origin** — context and project are derived from the session's cwd/git instead of guessed by the model: remote owner (`git_accounts` in `setup-config.json`) → repo `git user.email` → stored directory mapping; project = repo name (worktrees → main repo). Without a match the SessionStart hook asks once and stores the answer via `ai-rem map-dir`; `ai-rem origin --cwd <dir>` shows what applies. The extractor uses this context for new entries and links every task `TEIL_VON` the origin project.
 - **Plan saving** — an `ExitPlanMode` hook stores every finalized plan as an open `Task`, so plans become a central, cross-machine list.
 - **Vault secret reminder** — a `PostToolUse` hook scans Bash output for auth/credential failures and injects a reminder to pull the matching secret from the vault via mykeyvault instead of asking the user for a token or password, failing silently so it never blocks a command.
 
@@ -135,7 +136,7 @@ EMBED_BACKFILL_PORTION=300                # vectors written per database session
 EMBED_RECONCILE_SEC=3600                  # how often the server backfills missing vectors (0 = startup/nightly only)
 KG_MAX_MB=4096                            # above this the embedding backfill stops writing entirely
 KG_MIN_FREE_MB=1024                       # free disk space the backfill requires before it writes
-AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 12 admin ops as MCP tools
+AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 15 admin ops as MCP tools
 AI_REM_LOG_RING=500                       # Lines of server log kept in memory for /logs
 EMBED_URL=                                # Empty = in-process embeddings; set to an OpenAI-compatible /v1/embeddings URL for an external service
 EMBED_HTTP_MODEL=bge-m3                   # Model name sent to EMBED_URL
@@ -325,6 +326,8 @@ ai-rem uninstall --client opencode   # remove one frontend again
 ai-rem doctor [--fix]                # server version, installed targets, drift, token source
 ai-rem pair                          # renew just the token (browser approval)
 ai-rem token [--store|--forget]      # print the token / store it from stdin in the keychain / remove it
+ai-rem origin [--cwd <dir>]          # project/context a session in <dir> gets (git remote, git email, mapping)
+ai-rem map-dir --dir <d> --project <P> [--context work|private]   # map a non-repo dir to a project
 ```
 
 - **Claude Code:** with the `ai-rem` / `mykeyvault` plugins enabled (recommended, see [below](#claude-code-plugins-instead-of-mcpservers)) the plugins ship the MCP servers and the setup registers nothing in `~/.claude.json`. Only without plugins (fallback) it registers `ai-rem` (and `mykeyvault`, if built) as **stdio** MCP servers in `~/.claude.json` — `ai-rem mcp-proxy` bridges to the HTTP endpoint with the keychain token, `ai-rem vault-mcp` starts the vault MCP with access fetched from the server — so `~/.claude.json` holds no header and no `env` secret; deploys the hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.
