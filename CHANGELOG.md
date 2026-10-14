@@ -13,6 +13,63 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.10.0] – 2026-10-14
+
+### Added
+- **Session origin: context and project come from cwd/git, not from the LLM.** New
+  `lib/origin.py` resolves a session's working directory deterministically. Context rule
+  order: remote owner of the repo (defaults `markusth-bi` → work, `markus7h` and `kaiguard` →
+  private; configurable via `git_accounts` in `setup-config.json`, delivered to clients as
+  `context_rules` via `/api/client-config`) → the repo's effective `git user.email` → a stored
+  directory mapping → ask. Project = repo name (worktrees resolve to the main repo), else the
+  stored directory mapping. Without a match the SessionStart hook asks once via
+  AskUserQuestion (with suggestions) and stores the answer with `ai-rem map-dir`; home and
+  temp directories are never asked about. The hook injects the resolved project/context as
+  "Session-Herkunft" into the session context.
+- **New CLI commands.** `ai-rem origin --cwd <dir> [--json]` shows the resolved origin;
+  `ai-rem map-dir --dir <d> --project <P> [--context work|private]` maps a directory to a
+  project permanently (`extra.dirs`); `ai-rem ingest --cwd <dir>` passes the session
+  directory to the extractor. The auto-memory hook passes the hook's `cwd`, the opencode
+  plugin exports its working directory, and `catchup` reads the `cwd` from the transcript.
+- **Admin tool `memory_project_index`** (via `/api/tool` only): active projects with context, repos, dirs and keywords — the
+  lookup table for the session origin.
+
+### Changed
+- **Extractor no longer creates projects** or overwrites project descriptions. The origin
+  context overrides the LLM's context for new entities (except `Preference`/`Person`), and
+  every task gets `TEIL_VON` the origin project unless it is already linked.
+- **Status visible to the model.** The "Bekannte Tasks" list in the extraction prompt and
+  `memory_list` show each task's status.
+
+### Fixed
+- **Closing tasks is reliable.** Done reports match the task name exactly instead of by
+  substring; a done report closes the stored task even when the LLM reports it as a
+  `Decision`/`Solution`; a `Decision`/`Solution` is never flipped to `Task`; names that only
+  differ in case or punctuation update the same entity.
+- **Done detection respects negation** ("noch nicht bezahlt" is not a completion) and
+  recognizes bare participles ("Mail versendet").
+- **Finished tasks stay finished.** `memory_merge` and the nightly merge keep `erledigt`, and
+  the save-plan hook no longer resets a closed plan task to `offen`.
+
+## [1.9.1] – 2026-10-13
+
+### Fixed
+- **opencode: finished tasks no longer come back as open.** opencode extracts a session
+  again after every turn. The extractor only saw the alphabetical tail of all entity names,
+  so a task the model had just closed was unknown to it and got re-created under a new name
+  with status `offen`. The extraction prompt now lists the most recently changed tasks and
+  asks the model to report a finished one under exactly that name with "ERLEDIGT …", which
+  closes it.
+- **opencode: subagent sessions are no longer extracted.** A child session (`parentID`) only
+  sees the orchestrator's instruction ("send the mail now"), not the result, and produced
+  open tasks for work that was already done. Starting a subagent also no longer flushes the
+  parent session mid-turn.
+- **opencode: closing opencode no longer drops the last extraction.** Pending idle timers
+  are ingested on dispose instead of being discarded.
+- **Done detection knows office verbs.** gesendet, versendet, verschickt, eingetragen,
+  übertragen, vereinbart, gebucht, bezahlt, überwiesen, zugestellt and beantwortet count as
+  a completion report (extractor and cleanup review hint).
+
 ## [1.9.0] – 2026-10-13
 
 > **Migration notice — Claude Code now uses plugins instead of `mcpServers`.**
@@ -1057,7 +1114,9 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/markus7h/ai-rem/compare/v1.9.1...v1.10.0
+[1.9.1]: https://github.com/markus7h/ai-rem/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/markus7h/ai-rem/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/markus7h/ai-rem/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.8.0

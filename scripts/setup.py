@@ -937,7 +937,7 @@ def install_cli():
         return ''
     lib_dir = os.path.join(os.path.dirname(os.path.dirname(LOCAL_CLI)), 'lib')
     for name in ('__init__.py', 'mcp_client.py', 'extractor.py', 'extractor_heuristic.py',
-                 'keychain.py'):
+                 'keychain.py', 'origin.py'):
         if not fetch_to(KG_URL + '/lib/' + name, os.path.join(lib_dir, name)):
             return ''
     if not IS_WIN:

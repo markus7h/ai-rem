@@ -25,6 +25,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, List, Optional
 
+from . import origin as origin_mod
 from .mcp_client import MCPClient
 
 # Muss demselben Config-Dir folgen wie hooks/auto-memory.py und hooks/system-check.py:
@@ -119,6 +120,7 @@ context="work" nur: berufliche Beratung/Kunden
 NICHT speichern: Code-Pfade, git-log, Funktionsnamen, Rezepte, Smalltalk, triviale sofort-behobene Fehler.
 
 Task NUR fuer Arbeit, die nach der Session offen bleibt. KEIN Task fuer Schritte, die in der Session erledigt wurden ("PR #262", "task_556", "T1: …", "Phase 0", "Deploy beobachten"). Erledigtes gehoert als Decision/Solution gespeichert, nicht als Task. Task-Beschreibung, die einen Abschluss meldet, mit "ERLEDIGT" beginnen.
+Ist ein Task aus "Bekannte Tasks" unten laut Transcript erledigt (gesendet, eingetragen, gemergt …): unter EXAKT diesem Namen als type "Task" ausgeben, Beschreibung beginnt mit "ERLEDIGT". Nie denselben Task unter neuem Namen wieder anlegen. Tasks mit [erledigt] nicht erneut als offen ausgeben.
 Jeder Task gehoert zu einem Projekt: Relation Task TEIL_VON <Projektname>, wenn eines der aktiven Projekte unten passt.
 
 DEDUP: Name aus Liste unten? Exakt verwenden. Sonst neu.
@@ -209,6 +211,27 @@ def _load_opencode(path: Path) -> Optional[dict]:
     return doc if isinstance(doc, dict) and doc.get("format") == "opencode" else None
 
 
+def transcript_cwd(path: Path) -> str:
+    """Arbeitsverzeichnis der Session aus dem Transcript: Claude schreibt es in jeden
+    JSONL-Record, das opencode-Plugin als Top-Level-Feld. Wichtig fuer catchup —
+    dort gibt es keinen Hook-Input mehr, der das cwd mitliefert."""
+    doc = _load_opencode(path)
+    if doc is not None:
+        return str(doc.get("cwd") or "")
+    try:
+        with path.open(encoding="utf-8") as f:
+            for raw in f:
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict) and rec.get("cwd"):
+                    return str(rec["cwd"])
+    except (OSError, UnicodeDecodeError):
+        pass
+    return ""
+
+
 def flatten_transcript(path: Path) -> str:
     """Reduce a session (Claude-JSONL oder opencode-Export) to a USER/ASSISTANT
     text dialogue.
@@ -289,17 +312,55 @@ def _fetch_project_names(client: MCPClient) -> List[str]:
     return [m.group(1).strip() for m in _NAME_LINE.finditer(listing)]
 
 
-def _build_system_prompt(known_names: List[str], projects: Optional[List[str]] = None) -> str:
-    proj_block = ""
+_TASK_LINE = re.compile(r"^-\s+\*\*(.+?)\*\*(?:\s+\[(\w+)\])?.*_\((\d{4}-\d{2}-\d{2})\)_\s*$",
+                        re.MULTILINE)
+_STATUS_SUFFIX = re.compile(r"\s+\[\w+\]$")
+
+
+def _fetch_recent_tasks(client: MCPClient, limit: int = 40) -> List[str]:
+    """Zuletzt geaenderte Tasks, neueste zuerst. opencode extrahiert eine Session nach
+    jedem Turn erneut — kennt das Modell den eben angelegten Task nicht, erfindet es
+    einen neuen Namen und die Arbeit taucht nach dem Abschluss wieder als offen auf."""
+    try:
+        listing = client.call("memory_list", {"type": "Task"})
+    except Exception:
+        return []
+    rows = sorted(_TASK_LINE.findall(listing), key=lambda r: r[2], reverse=True)
+    # Status mitgeben ("Name [erledigt]"): ohne ihn hielt das Modell erledigte Tasks
+    # fuer offen und legte sie neu an.
+    return [f"{name.strip()} [{st}]" if st else name.strip() for name, st, _ in rows[:limit]]
+
+
+def _session_line(origin: Optional[dict]) -> str:
+    """Vorgegebene Herkunft fuer den Prompt — Projekt/Kontext soll das Modell nicht raten."""
+    if not origin or not (origin.get("project") or origin.get("context")):
+        return ""
+    parts = []
+    if origin.get("project"):
+        parts.append(f"Projekt {origin['project']}")
+    if origin.get("context"):
+        parts.append(f"Kontext {origin['context']}")
+    return ("\n\nSession: " + ", ".join(parts) + " (aus Arbeitsverzeichnis/git, fest vorgegeben — "
+            "nicht raten, keine Project-Entities anlegen).")
+
+
+def _build_system_prompt(known_names: List[str], projects: Optional[List[str]] = None,
+                         tasks: Optional[List[str]] = None, origin: Optional[dict] = None) -> str:
+    proj_block = _session_line(origin)
     if projects:
-        proj_block = "\n\nAktive Projekte (fuer TEIL_VON):\n" + "\n".join(f"- {p}" for p in projects)
+        proj_block += "\n\nAktive Projekte (fuer TEIL_VON):\n" + "\n".join(f"- {p}" for p in projects)
+    task_block = ""
+    if tasks:
+        task_block = "\n\nBekannte Tasks (neueste zuerst):\n" + "\n".join(f"- {t}" for t in tasks)
     if not known_names:
-        return SYSTEM_PROMPT_BASE + proj_block + "\n\nBekannte Entities: (keine)"
-    limited = sorted(known_names)[-50:]
+        return SYSTEM_PROMPT_BASE + proj_block + task_block + "\n\nBekannte Entities: (keine)"
+    seen = {_STATUS_SUFFIX.sub("", t) for t in tasks or []}
+    limited = sorted(n for n in known_names if n not in seen)[-50:]
     block = "\n".join(f"- {n}" for n in limited)
     return (
         SYSTEM_PROMPT_BASE
         + proj_block
+        + task_block
         + f"\n\n({len(limited)}/{len(known_names)} bekannte — bevorzuge diese Namen):\n"
         + block
     )
@@ -402,46 +463,144 @@ def is_step_task(name: str, typ: str) -> bool:
 # Extractor laeuft clientseitig und kann das Server-Modul nicht importieren.
 _DONE_VERB = (r"(?:gemergt|gemerged|merged|erstellt|angelegt|gelöscht|geloescht|entfernt"
               r"|durchgeführt|durchgefuehrt|deployt|deployed|geprüft|geprueft|getaggt"
-              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited)")
-_DONE_TEXT = re.compile(
-    r"^\s*(?:ERLEDIGT|GELÖST|GELOEST|ABGESCHLOSSEN|FERTIG|DONE)\b"
-    r"|\b(?:wurden?|ist|sind)\s+(?:\S+\s+){0,6}?" + _DONE_VERB + r"\b"
-    r"|\bPRs?\s*#?\d+(?:\s*(?:,|und|\+)\s*#?\d+)*\s+(?:wurden?\s+)?(?:gemergt|gemerged|merged)\b",
+              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited"
+              r"|gesendet|versendet|verschickt|eingetragen|übertragen|uebertragen|vereinbart"
+              r"|gebucht|bezahlt|überwiesen|ueberwiesen|zugestellt|beantwortet)")
+_DONE_MARK = re.compile(r"^\s*(?:ERLEDIGT|GELÖST|GELOEST|ABGESCHLOSSEN|FERTIG|DONE)\b", re.I)
+# Fliesstext-Abschluss: "wurde … gesendet", "PR #12 gemergt" — und das nackte Partizip
+# am Satz-/Teilsatzende ("Mail an Bob gesendet.", "Angebot verschickt am 12.10."),
+# so schreibt das Modell Abschluesse meistens. Davor ein "wird/soll/muss" heisst
+# Zukunft, nicht Abschluss.
+_DONE_FLOW = re.compile(
+    r"\b(?:wurden?|ist|sind)\s+(?:\S+\s+){0,6}?" + _DONE_VERB + r"\b"
+    r"|\bPRs?\s*#?\d+(?:\s*(?:,|und|\+)\s*#?\d+)*\s+(?:wurden?\s+)?(?:gemergt|gemerged|merged)\b"
+    r"|\b(?P<bare>" + _DONE_VERB + r")"
+    r"(?:\s+(?:am\s+)?(?:\d{1,2}\.\d{1,2}\.(?:\d{2,4})?|\d{4}-\d{2}-\d{2})|\s+(?:heute|gestern))?"
+    r"(?=\s*(?:[,;:!?\n]|\.(?!\d)|$))",
     re.I)
+# Verneinung im selben Teilsatz blockt: "noch nicht bezahlt", "Versand steht aus",
+# "Freigabe ausstehend" sind offene Arbeit — das schloss vorher den Task.
+_DONE_NEG = re.compile(r"\b(?:nicht|steht\s+(?:\S+\s+){0,2}?aus|ausstehend\w*|offen|fehlt|fehlen)\b",
+                       re.I)
+_CLAUSE_END = re.compile(r"[,;:!?\n]|\.(?!\d)")
+_NOT_YET = {"wird", "werden", "soll", "sollen", "muss", "müssen", "muessen", "bitte"}
+
+
+def _done_text(text: str) -> bool:
+    """True, wenn der Text einen Abschluss meldet — unabhaengig vom Entity-Typ."""
+    text = text or ""
+    if _DONE_MARK.search(text):
+        return True
+    for m in _DONE_FLOW.finditer(text):
+        a = max((x.end() for x in _CLAUSE_END.finditer(text, 0, m.start())), default=0)
+        e = _CLAUSE_END.search(text, m.end())
+        clause = text[a:e.start() if e else len(text)]
+        if _DONE_NEG.search(clause):
+            continue
+        if m.group("bare"):
+            before = text[a:m.start("bare")].split()
+            if before and before[-1].lower() in _NOT_YET:
+                continue
+        return True
+    return False
 
 
 def is_done_report(typ: str, descr: str) -> bool:
     """True, wenn ein Task-Text einen Abschluss meldet statt offene Arbeit zu beschreiben."""
-    return typ.strip().lower() == "task" and bool(_DONE_TEXT.search(descr or ""))
+    return typ.strip().lower() == "task" and _done_text(descr)
 
 
-def upsert_entity(client: MCPClient, ent: dict) -> str:
+# memory_search-Zeile: "[Task] **Name** `[ctx]`: …" (aeltere Server/Tests: "- **Name**: …").
+_SEARCH_LINE = re.compile(r"^(?:\[([^\]]+)\]\s+|-\s+)\*\*(.+?)\*\*", re.MULTILINE)
+# Kontext gehoert der Person bzw. Regel selbst, nicht der Session, in der sie auftaucht.
+_ORIGIN_CTX_EXEMPT = {"preference", "person"}
+
+
+def _name_norm(name: str) -> str:
+    return " ".join(name.split()).lower()
+
+
+def _find_exact(search_text: str, name: str) -> Optional[tuple]:
+    """(gespeicherter Name, gespeicherter Typ) des exakt gleichnamigen Treffers.
+
+    Exakt statt Teilstring: "Deploy" galt vorher als Treffer fuer "Deploy auf
+    mystorage" — und eine Abschlussmeldung schloss damit den falschen Task."""
+    want = _name_norm(name)
+    for m in _SEARCH_LINE.finditer(search_text or ""):
+        if _name_norm(m.group(2)) == want:
+            return m.group(2).strip(), (m.group(1) or "").strip()
+    return None
+
+
+def upsert_entity(client: MCPClient, ent: dict, origin: Optional[dict] = None,
+                  tasks: Optional[set] = None) -> str:
+    """Eine LLM-Entity schreiben. origin (Session-Herkunft) gibt Kontext und Projekt vor.
+    tasks sammelt die Namen geschriebener Tasks (fuer die TEIL_VON-Bereinigung)."""
     name = ent.get("name", "").strip()
     typ = ent.get("type", "").strip()
     if not name or not typ:
         return f"skip (incomplete): {ent}"
     if is_step_task(name, typ):
         return f"[skip]   Arbeitsschritt, kein Task: {name}"
-    args = {
-        "name": name,
-        "type": typ,
-        "description": ent.get("description", "").strip(),
-    }
+    if typ.lower() == "project":
+        # Projekte entstehen nur noch ueber die Herkunft (Repo), map-dir oder den User.
+        # Das LLM machte aus Release-Notizen Pseudo-Projekte ("KaiGuard-Release
+        # v0.23.15") und ueberschrieb die Beschreibung bestehender Projekte.
+        return f"[skip]   Project nur ueber Herkunft/map-dir: {name}"
+    descr = ent.get("description", "").strip()
+    found = _find_exact(client.call("memory_search", {"query": name, "limit": 5}), name)
+    stored_name, stored_type = found if found else ("", "")
+    if found and not stored_type:
+        stored_type = typ  # Zeile ohne Typ-Praefix (aeltere Server): LLM-Typ annehmen
+    done = _done_text(descr)
+
+    # Abschluss greift am GESPEICHERTEN Typ: das Modell meldet Erledigtes gern als
+    # Decision/Solution — der Task blieb dann offen und daneben entstand eine Decision.
+    if stored_type == "Task" and done:
+        if tasks is not None:
+            tasks.add(_name_norm(stored_name))
+        res = client.call("memory_add", {"name": stored_name, "type": "Task",
+                                         "description": descr, "extra": {"status": "erledigt"}})
+        return f"[done]   {res}"
+    if typ.lower() == "task" and done:
+        return f"[skip]   Abschlussmeldung, kein Task: {name}"
+
+    args = {"name": stored_name or name, "type": typ, "description": descr}
     ctx = ent.get("context", "").strip()
-    if ctx:
+    o_ctx = (origin or {}).get("context", "")
+    if o_ctx and typ.lower() not in _ORIGIN_CTX_EXEMPT:
+        # Herkunft schlaegt LLM-Raten. Bestehende Eintraege behalten ihren Kontext:
+        # ein globales Tool wird nicht privat, nur weil es in einer privaten Session vorkommt.
+        if not found:
+            args["context"] = o_ctx
+    elif ctx:
         args["context"] = ctx
-    existing = client.call("memory_search", {"query": name, "limit": 5})
-    matched = any(name.lower() in line.lower() for line in existing.splitlines())
-    if is_done_report(typ, args["description"]):
-        if not matched:
-            return f"[skip]   Abschlussmeldung, kein Task: {name}"
-        # Bekannter Task, dessen Abschluss die Session meldet → schliessen statt offen lassen.
-        args["extra"] = {"status": "erledigt"}
-    prefix = "[exists]" if matched else "[new]   "
-    return f"{prefix} {client.call('memory_add', args)}"
+    res = client.call("memory_add", args)
+    is_task = (stored_type or typ).lower() == "task"
+    if is_task and tasks is not None:
+        tasks.add(_name_norm(args["name"]))
+    prefix = "[exists]" if found else "[new]   "
+    out = f"{prefix} {res}"
+    proj = (origin or {}).get("project", "")
+    # "→ TEIL_VON" in der Antwort: der Server hat per Projekt-Keywords schon eindeutig
+    # zugeordnet — das ist spezifischer als das Session-Verzeichnis.
+    if is_task and proj and "TEIL_VON" not in res and not (found and _has_project(client, args["name"])):
+        out += f"\n[rel]    {client.call('memory_relate', {'from_name': args['name'], 'relation': 'TEIL_VON', 'to_name': proj})}"
+    return out
 
 
-def upsert_relation(client: MCPClient, rel: dict) -> str:
+def _has_project(client: MCPClient, name: str) -> bool:
+    """Hat der (bestehende) Task schon eine Projekt-Kante? Dann nicht umhaengen: ein
+    Task aus einem anderen Projekt, der hier nebenbei erledigt wird, bleibt dort."""
+    try:
+        rels = client.call("memory_get_relations", {"name": name})
+    except Exception:
+        return False
+    return bool(re.search(r"^\s*→ \[Project\] .+via \[TEIL_VON\]", rels or "", re.MULTILINE))
+
+
+def upsert_relation(client: MCPClient, rel: dict, origin: Optional[dict] = None,
+                    tasks: Optional[set] = None) -> str:
     args = {
         "from_name": rel.get("from_name", "").strip(),
         "relation": rel.get("relation", "").strip(),
@@ -449,6 +608,11 @@ def upsert_relation(client: MCPClient, rel: dict) -> str:
     }
     if not all(args.values()):
         return f"skip (incomplete rel): {rel}"
+    if ((origin or {}).get("project") and args["relation"].upper() == "TEIL_VON"
+            and _name_norm(args["from_name"]) in (tasks or set())):
+        # Projekt des Tasks steht durch die Herkunft fest; LLM-Zuordnungen liefen
+        # auf Pseudo-Projekte ("#244") oder das falsche Repo.
+        return f"[skip]   TEIL_VON vom LLM, Projekt kommt aus der Herkunft: {args['from_name']}"
     return f"[rel]   {client.call('memory_relate', args)}"
 
 
@@ -591,6 +755,7 @@ def ingest_transcript(
     dry_run: bool = False,
     model: Optional[str] = None,
     log_dir: Optional[Path] = None,
+    cwd: Optional[str] = None,
 ) -> dict:
     if not transcript_path.exists():
         raise FileNotFoundError(transcript_path)
@@ -614,8 +779,21 @@ def ingest_transcript(
         return {"entities": [], "relations": [], "applied": [], "skipped": "locked"}
 
     try:
+        # Herkunft einmal pro Lauf: --cwd (Hook) > cwd im Transcript (catchup, opencode).
+        origin: dict = {}
+        cwd = cwd or transcript_cwd(transcript_path)
+        if cwd:
+            try:
+                origin = origin_mod.resolve_for(client, cwd)
+            except Exception as e:
+                print(f"[warn] Herkunft nicht bestimmbar ({cwd}): {e}", file=sys.stderr)
+        if origin.get("project") or origin.get("context"):
+            print(f"herkunft: Projekt={origin.get('project') or '-'} "
+                  f"Kontext={origin.get('context') or '-'} ({origin.get('repo') or cwd})",
+                  file=sys.stderr)
         known = _fetch_known_entity_names(client)
-        prompt = _build_system_prompt(known, _fetch_project_names(client))
+        prompt = _build_system_prompt(known, _fetch_project_names(client),
+                                      _fetch_recent_tasks(client), origin)
         print(
             f"transcript: {transcript_path} ({len(flat):,} Zeichen, "
             f"Modell={model}, bekannte Entities: {len(known)})",
@@ -639,17 +817,28 @@ def ingest_transcript(
 
         applied = []
         if dry_run:
+            if origin:
+                print("--- DRY-RUN: Herkunft ---")
+                print(json.dumps(origin, ensure_ascii=False, indent=2))
             print("--- DRY-RUN: extrahiert ---")
             print(json.dumps(extracted, ensure_ascii=False, indent=2))
         else:
+            if origin.get("repo"):
+                try:
+                    msg = origin_mod.ensure_project(client, origin)
+                    if msg:
+                        applied.append(f"[origin] {msg}")
+                except Exception as e:
+                    applied.append(f"[err]   origin {origin.get('project')}: {e}")
+            tasks: set = set()
             for ent in extracted.get("entities", []):
                 try:
-                    applied.append(upsert_entity(client, ent))
+                    applied.append(upsert_entity(client, ent, origin, tasks))
                 except Exception as e:
                     applied.append(f"[err]   entity {ent.get('name','?')}: {e}")
             for rel in extracted.get("relations", []):
                 try:
-                    applied.append(upsert_relation(client, rel))
+                    applied.append(upsert_relation(client, rel, origin, tasks))
                 except Exception as e:
                     applied.append(f"[err]   rel {rel}: {e}")
             for line in applied:
@@ -663,6 +852,7 @@ def ingest_transcript(
                     "transcript": str(transcript_path),
                     "model": model,
                     "dry_run": dry_run,
+                    "origin": origin,
                     "extracted": extracted,
                     "applied": applied,
                 },

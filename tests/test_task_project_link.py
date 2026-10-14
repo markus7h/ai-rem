@@ -155,3 +155,202 @@ def test_tool_darf_project_werden():
     server.memory_add("TPL_Aufstieg", "Tool")
     msg = server.memory_add("TPL_Aufstieg", "Project")
     assert "Typ bleibt" not in msg and "[Project]" in msg
+
+
+def test_extractor_erkennt_buero_abschluesse():
+    assert is_done_report("Task", "Die Anfrage wurde an René Stegmann gesendet")
+    assert is_done_report("Task", "23 Termine sind in den Kalender eingetragen")
+    assert server._done_hint("Rechnung wurde bezahlt")
+    assert not is_done_report("Task", "Termine in den Kalender eintragen")
+
+
+def test_extractor_prompt_zeigt_neueste_tasks():
+    from lib.extractor import _build_system_prompt, _fetch_recent_tasks
+
+    class _Client:
+        def call(self, tool, args):
+            assert args == {"type": "Task"}
+            return ("- **A alt**: x  _(2026-01-01)_\n"
+                    "- **Behandlungsplan eintragen**: y  _(2026-10-13)_\n"
+                    "- **Z mitte**: z  _(2026-05-01)_")
+
+    tasks = _fetch_recent_tasks(_Client())
+    assert tasks == ["Behandlungsplan eintragen", "Z mitte", "A alt"]
+    prompt = _build_system_prompt(["Behandlungsplan eintragen", "Zebra"], [], tasks)
+    assert "Bekannte Tasks (neueste zuerst):\n- Behandlungsplan eintragen" in prompt
+    # nicht doppelt in der allgemeinen Namensliste
+    assert prompt.count("- Behandlungsplan eintragen") == 1
+
+
+# ── Abschluss-Pfad und Session-Herkunft im Extractor ────────────────────────
+
+class _Srv:
+    """Fake-Client, der die echten Server-Funktionen in-process aufruft."""
+
+    def __init__(self):
+        self.calls: list = []
+
+    def call(self, tool, args):
+        self.calls.append((tool, args))
+        return server._ALL_TOOL_FUNCS[tool](**args)
+
+
+def _status(name: str) -> str:
+    import json
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.extra, e.type",
+                                       {"id": server._id(name)}))
+    return json.loads(rows[0][0] or "{}").get("status", "")
+
+
+def test_abschluss_als_decision_schliesst_bekannten_task():
+    server.memory_add("TPL_Angebot an Kunde", "Task", description="Angebot schicken")
+    c = _Srv()
+    out = upsert_entity(c, {"type": "Decision", "name": "TPL_Angebot an Kunde",
+                            "description": "Angebot an Kunde verschickt am 12.10."})
+    assert out.startswith("[done]")
+    assert _status("TPL_Angebot an Kunde") == "erledigt"
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.type",
+                                       {"id": server._id("TPL_Angebot an Kunde")}))
+    assert rows[0][0] == "Task"
+
+
+def test_abschluss_unter_anderer_schreibweise_schliesst_gespeicherten_namen():
+    server.memory_add("TPL_Mail an Bob", "Task")
+    c = _Srv()
+    upsert_entity(c, {"type": "Task", "name": "tpl_mail  an bob", "description": "Mail an Bob gesendet."})
+    assert c.calls[-1][1]["name"] == "TPL_Mail an Bob"
+    assert _status("TPL_Mail an Bob") == "erledigt"
+
+
+def test_teilstring_ist_kein_treffer():
+    # "Deploy" kam frueher als Treffer fuer "Deploy auf mystorage" durch.
+    c = _FakeClient(search_hit="[Task] **TPL Deploy auf mystorage** : …")
+    out = upsert_entity(c, {"type": "Task", "name": "TPL Deploy",
+                            "description": "Deploy wurde durchgeführt."})
+    assert out.startswith("[skip]") and not c.adds
+
+
+def test_verneinung_schliesst_nicht():
+    for t in ("Rechnung ist noch nicht bezahlt", "Versand steht noch aus",
+              "Freigabe ausstehend",
+              "Mail an Bob ist nicht versendet", "Mail an Bob noch nicht gesendet."):
+        assert not is_done_report("Task", t), t
+    assert not server._done_hint("Rechnung ist noch nicht bezahlt")
+    c = _FakeClient(search_hit="[Task] **TPL Rechnung** : …")
+    upsert_entity(c, {"type": "Task", "name": "TPL Rechnung",
+                      "description": "Rechnung ist noch nicht bezahlt"})
+    assert "extra" not in c.adds[0]
+
+
+def test_nacktes_partizip_zaehlt():
+    for t in ("Mail an Bob gesendet.", "Mail versendet", "Angebot verschickt am 12.10."):
+        assert is_done_report("Task", t), t
+        assert server._done_hint(t), t
+    assert not is_done_report("Task", "Mail wird versendet.")
+    assert not is_done_report("Task", "Deploy muss noch durchgeführt werden.")
+
+
+def test_herkunft_erzwingt_kontext_und_projekt():
+    server.memory_add("TPL_herkunft", "Project", description="Repo-Projekt")
+    origin = {"project": "TPL_herkunft", "context": "private", "repo": "markus7h/tpl_herkunft"}
+    c = _Srv()
+    tasks: set = set()
+    upsert_entity(c, {"type": "Task", "name": "TPL_Neuer Task", "description": "Doku ergänzen",
+                      "context": "work"}, origin, tasks)
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.context",
+                                       {"id": server._id("TPL_Neuer Task")}))
+    assert rows[0][0] == "private"
+    assert _projekt_von("TPL_Neuer Task") == {"TPL_herkunft"}
+    # TEIL_VON vom LLM wird verworfen, das Projekt steht durch die Herkunft fest.
+    from lib.extractor import upsert_relation
+    out = upsert_relation(c, {"from_name": "TPL_Neuer Task", "relation": "TEIL_VON",
+                              "to_name": "TPL_Pseudo #244"}, origin, tasks)
+    assert out.startswith("[skip]")
+    # Preference behaelt den LLM-Kontext.
+    upsert_entity(c, {"type": "Preference", "name": "TPL_Pref", "description": "x",
+                      "context": "work"}, origin, tasks)
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.context",
+                                       {"id": server._id("TPL_Pref")}))
+    assert rows[0][0] == "work"
+
+
+def test_herkunft_haengt_fremden_task_nicht_um():
+    server.memory_add("TPL_Fremdprojekt", "Project")
+    server.memory_add("TPL_Herkunft2", "Project")
+    server.memory_add("TPL_Alter Task", "Task", description="läuft")
+    server.memory_relate("TPL_Alter Task", "TEIL_VON", "TPL_Fremdprojekt")
+    upsert_entity(_Srv(), {"type": "Task", "name": "TPL_Alter Task", "description": "läuft weiter"},
+                  {"project": "TPL_Herkunft2", "context": "private"}, set())
+    assert _projekt_von("TPL_Alter Task") == {"TPL_Fremdprojekt"}
+
+
+def test_llm_projekte_werden_weder_angelegt_noch_ueberschrieben():
+    server.memory_add("TPL_Kueche", "Project", description="Original")
+    c = _Srv()
+    out = upsert_entity(c, {"type": "Project", "name": "TPL_Kueche", "description": "Küche renovieren"})
+    assert out.startswith("[skip]") and not any(t == "memory_add" for t, _ in c.calls)
+    out = upsert_entity(c, {"type": "Project", "name": "TPL_Release v0.23.15", "description": "x"})
+    assert out.startswith("[skip]")
+    assert not server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.name",
+                                           {"id": server._id("TPL_Release v0.23.15")}))
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.descr",
+                                       {"id": server._id("TPL_Kueche")}))
+    assert rows[0][0] == "Original"
+
+
+def test_prompt_zeigt_status_und_session():
+    from lib.extractor import _build_system_prompt, _fetch_recent_tasks
+
+    class _Client:
+        def call(self, tool, args):
+            return ("- **Mail an Bob** [erledigt]: x  _(2026-10-13)_\n"
+                    "- **Offen** [offen]: y  _(2026-10-12)_")
+
+    tasks = _fetch_recent_tasks(_Client())
+    assert tasks == ["Mail an Bob [erledigt]", "Offen [offen]"]
+    prompt = _build_system_prompt(["Mail an Bob", "Zebra"], [], tasks,
+                                  {"project": "ai-rem", "context": "private"})
+    assert "Session: Projekt ai-rem, Kontext private" in prompt
+    assert "- Mail an Bob [erledigt]" in prompt
+    assert prompt.count("Mail an Bob") == 1
+
+
+def test_ingest_nutzt_herkunft(tmp_path, monkeypatch):
+    """Ende-zu-Ende ohne LLM: cwd aus dem Transcript → Projekt angelegt, Task verknuepft."""
+    import subprocess
+    from pathlib import Path
+
+    from lib import extractor
+
+    repo = tmp_path / "tpl-ingestrepo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
+                    "git@github-personal:markus7h/tpl-ingestrepo.git"], check=True)
+    tr = tmp_path / "s.jsonl"
+    tr.write_text("\n".join(
+        '{"type":"user","cwd":"%s","message":{"content":"%s"}}' % (repo, "x" * 300)
+        for _ in range(3)) + "\n")
+
+    monkeypatch.setattr(extractor, "configure_llm", lambda c: {})
+    monkeypatch.setattr(extractor, "LOCK_FILE", tmp_path / "lock")
+    monkeypatch.setattr(extractor, "LAST_RUN", tmp_path / "last-run.json")
+    monkeypatch.setattr(extractor, "call_llm", lambda *a, **k: {
+        "entities": [{"type": "Task", "name": "TPL_Ingest-Task", "description": "README schreiben",
+                      "context": "work"},
+                     {"type": "Project", "name": "TPL_Pseudo-Release", "description": "x"}],
+        "relations": [{"from_name": "TPL_Ingest-Task", "relation": "TEIL_VON",
+                       "to_name": "TPL_Pseudo-Release"}]})
+
+    class _C(_Srv):
+        def client_config(self):
+            return {}
+
+    res = extractor.ingest_transcript(_C(), Path(tr), log_dir=tmp_path)
+    assert any(x.startswith("[origin]") for x in res["applied"])
+    assert _projekt_von("TPL_Ingest-Task") == {"tpl-ingestrepo"}
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.context, e.extra",
+                                       {"id": server._id("tpl-ingestrepo")}))
+    assert rows[0][0] == "private" and "markus7h/tpl-ingestrepo" in rows[0][1]
+    assert not server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.name",
+                                           {"id": server._id("TPL_Pseudo-Release")}))

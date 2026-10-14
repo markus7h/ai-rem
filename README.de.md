@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für KI-Coding-Agenten
 
-> Diese Dokumentation bezieht sich auf **[v1.9.0](https://github.com/markus7h/ai-rem/releases/tag/v1.9.0)**.
+> Diese Dokumentation bezieht sich auf **[v1.10.0](https://github.com/markus7h/ai-rem/releases/tag/v1.10.0)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -91,6 +91,7 @@ Vier Claude-Code-Hooks — alle vom Client-Setup deployt — halten den Graph be
 - **Auto-Memory** — ein `PreCompact`/`SessionEnd`-Hook extrahiert strukturierte Entities/Relations aus jedem Transcript via OpenAI-kompatiblem LLM-Endpoint (`AI_REM_LLAMA_URL`, per Default ein LiteLLM-Router statt eines einzelnen GPU-Hosts), mit md-Fallback + Catch-up, wenn er down ist. Er läuft detached (die Extraktion dauert Minuten) und meldet beim nächsten Sessionstart, wenn er gestört ist. Das Setup legt die CLI nach `~/.local/share/ai-rem/bin/ai-rem` und richtet `AI_REM_CLI` darauf aus — der Hook hängt damit nicht daran, wohin das Repo geklont wurde. `~/.local/bin/ai-rem` verlinkt auf dieselbe Kopie, damit `ai-rem` in der Shell als normaler Befehl verfügbar ist.
 - **Nightly-Cleanup** — ein Daemon dedupliziert/archiviert überholte Einträge **nicht-destruktiv** (archivieren statt löschen; `Preference`/gepinnt unangetastet) und schiebt Mehrdeutiges in eine Review-Queue. Erledigte Tasks werden 14 Tage, nachdem `extra.status` auf `erledigt` stand, archiviert (der Status wird gegen das Enum `offen | laufend | blockiert | erledigt` normalisiert, gängige Synonyme gemappt, nicht mappbarer Freitext bleibt in `extra.status_note`). Ein Erledigt-Marker, der nur im Beschreibungstext steht („ERLEDIGT: …", „PR #225 gemergt", „wurde geprüft"), archiviert nie von selbst - er landet in der Review-Queue, ebenso jeder offene Task, der 30 Tage unverändert blieb (`CLEANUP_TASK_STALE_DAYS`). Dazu ein **Veraltungs-Check**, der Einträge mit verderblichen Infrastruktur-Fakten (IPs, Ports, Dienste, Geräte) zur Realitäts-Prüfung vorlegt — nie automatisch.
 - **Task → Projekt** — ein neuer Task ohne Projekt-Kante wird einem Projekt zugeordnet (`TEIL_VON`), wenn genau ein aktives Projekt per Keyword passt (`extra.keywords`; Projekte ohne Keywords nehmen nicht teil). Mehrere Treffer → keine Zuordnung. `ai-rem project-keywords <Projekt> "kw1,kw2"` setzt die Keywords, `ai-rem link-projects [--dry-run]` ordnet Bestands-Tasks nach. Der Transcript-Extractor kennt die aktiven Projekte, setzt `TEIL_VON` selbst und verwirft Tasks, deren Text nur einen Abschluss meldet.
+- **Session-Herkunft** — Kontext und Projekt kommen aus cwd/git der Session statt vom Modell geraten: Remote-Owner (`git_accounts` in `setup-config.json`) → `git user.email` des Repos → gespeicherte Verzeichnis-Zuordnung; Projekt = Repo-Name (Worktrees → Haupt-Repo). Ohne Treffer fragt der SessionStart-Hook einmal nach und speichert die Antwort per `ai-rem map-dir`; `ai-rem origin --cwd <dir>` zeigt, was gilt. Der Extractor nutzt diesen Kontext für neue Einträge und hängt jeden Task per `TEIL_VON` an das Herkunftsprojekt.
 - **Plan-Speicherung** — ein `ExitPlanMode`-Hook speichert jeden finalisierten Plan als offenen `Task`, sodass Pläne eine zentrale, maschinenübergreifende Liste werden.
 - **Vault-Secret-Erinnerung** — ein `PostToolUse`-Hook durchsucht die Bash-Ausgabe nach Auth-/Credential-Fehlern und injiziert eine Erinnerung, das passende Secret via mykeyvault aus dem Vault zu holen, statt den User nach Token oder Passwort zu fragen — fail-silent, blockiert also nie einen Befehl.
 
@@ -330,6 +331,8 @@ ai-rem uninstall --client opencode   # ein Frontend wieder entfernen
 ai-rem doctor [--fix]                # Server-Version, installierte Ziele, Drift, Token-Quelle
 ai-rem pair                          # nur den Token erneuern (Freigabe im Browser)
 ai-rem token [--store|--forget]      # Token ausgeben / von stdin im Keychain ablegen / entfernen
+ai-rem origin [--cwd <dir>]          # Projekt/Kontext einer Session in <dir> (git-Remote, git-Mail, Zuordnung)
+ai-rem map-dir --dir <d> --project <P> [--context work|private]   # Verzeichnis ohne Repo einem Projekt zuordnen
 ```
 
 - **Claude Code:** mit aktiven Plugins `ai-rem` / `mykeyvault` (empfohlen, siehe [unten](#claude-code-plugins-statt-mcpservers)) bringen die Plugins die MCP-Server mit, und das Setup registriert nichts in `~/.claude.json`. Nur ohne Plugins (Fallback) registriert es `ai-rem` (und `mykeyvault`, falls gebaut) als **stdio**-MCP-Server in `~/.claude.json` — `ai-rem mcp-proxy` brückt mit dem Keychain-Token zum HTTP-Endpoint, `ai-rem vault-mcp` startet den Vault-MCP mit dem vom Server geholten Zugang —, sodass `~/.claude.json` weder Header noch `env`-Secret enthält; deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.

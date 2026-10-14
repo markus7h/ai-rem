@@ -16,6 +16,7 @@ Der Setup-Endpunkt lädt optional eine `setup-config.json` vom Server (`GET /set
   "permissions_allow_portable": ["Bash", "mcp__tools__*", ...],
   "permissions_deny": ["Bash(bw get *)", ...],
   "permissions_default_mode": "plan",
+  "git_accounts": [{"owner": "your-work-account", "emails": ["you@company.example"], "context": "work"}],
   "smb": {"mount": "/path/to/mount", "url": "smb://server/share"},
   "mcp_register": {
     "mykeyvault": {"http": {"url": "http://server:3458/mcp", "https_url": "https://keyvault.example/mcp"}, "vault_url": "http://server:8223"},
@@ -32,6 +33,8 @@ Die persönliche `setup-config.json` ist gitignored und landet daher nie im öff
 
 **`llm_api_key`** (optional) — Bearer-Token für den LLM-Router hinter `ollama_url`. Er wird nie auf einen Client geschrieben: Clients holen ihn pro Lauf von `/api/client-config` (unten). Bevorzugt am Server als Env `AI_REM_LLM_API_KEY` setzen, das hat Vorrang vor diesem Feld — dann steht der Key in keiner Datei, die den Server verlässt. Einen Virtual Key mit Budget nehmen, nicht den Master-Key.
 
+**`git_accounts`** (optional) — Kontext-Regeln für die [Session-Herkunft](hooks-and-automation.de.md#session-herkunft-cwd--projekt--kontext): `[{owner, emails[], context}]`. Ein Repo, dessen Remote-Owner zu `owner` passt (case-insensitiv), bekommt diesen `context`; sonst wird die im Repo wirksame `git user.email` gegen `emails` geprüft (für Org-Repos wie `github.com/<org>/<repo>`). An Clients geht das als `context_rules` über `/api/client-config`. Fehlt der Key, gelten die Defaults: `markusth-bi` → work, `markus7h` und `kaiguard` → private.
+
 **`mcp_register`** lässt das Setup Begleit-MCP-Server einrichten:
 - **mykeyvault** wird aus `stdio.repo` gebaut und als stdio-MCP über `ai-rem vault-mcp` registriert, das beim Start `vault_url`/`vault_token` von `/api/client-config` holt (der Server liefert sie aus `AI_REM_PAIR_VAULT_TOKEN` und `vault_url`). Ohne node oder bei Build-Fehler fällt es auf den HTTP-MCP aus `http.url` zurück (oder `https_url`, wenn ai-rem selbst über einen vertrauenswürdigen HTTPS-Endpunkt läuft), via `ai-rem mcp-proxy --endpoint`.
 - **tools** ([tools-registry](https://github.com/markus7h/tools-registry)) wird aus `stdio.repo` geklont, mit `npm` gebaut und als stdio-MCP mit `TOOLS_REGISTRY_URL=stdio.registry_url` registriert. Das benötigt **node, npm und git** auf dem Client — fehlt etwas, gibt das Setup einen Installationshinweis aus und überspringt `tools` (alles andere läuft trotzdem durch).
@@ -43,13 +46,14 @@ Seit 1.7 speichert eine Workstation genau ein Secret, den Geräte-Token im OS-Ke
 Weitere wird pro Lauf geholt, authentifiziert mit diesem Token:
 
 ```json
-{"version": "1.7.0", "llm_url": "http://router:11437", "llm_api_key": "…", "vault_url": "http://server:8223", "vault_token": "…"}
+{"version": "1.7.0", "llm_url": "http://router:11437", "llm_api_key": "…", "vault_url": "http://server:8223", "vault_token": "…", "context_rules": [{"owner": "…", "emails": ["…"], "context": "work"}]}
 ```
 
 - `llm_url` — `AI_REM_OLLAMA_URL`/`AI_REM_LLAMA_URL` am Server, sonst `ollama_url` aus der setup-config.
 - `llm_api_key` — Server-Env `AI_REM_LLM_API_KEY` (bevorzugt), sonst `llm_api_key` aus der setup-config.
 - `vault_url`, `vault_token` — `AI_REM_PAIR_VAULT_TOKEN` und die Vault-URL aus `mcp_register.mykeyvault`; leer, wenn die Variable nicht gesetzt ist — dann bleibt mykeyvault auf HTTP ohne die exec/file-Tools.
+- `context_rules` — `git_accounts` aus der setup-config (oder die Defaults), genutzt von `ai-rem origin`.
 
-Verbraucher: `ai-rem ingest`/`catchup` (Extraktor), der SessionStart-Hook `system-check.py` (Router-Probe) und `ai-rem vault-mcp`. Nichts davon wird persistiert — LLM-Key oder Vault-Token rotieren heißt: `.env` am Server ändern, Neustart, fertig; keine Workstation muss angefasst werden. `AI_REM_LLAMA_URL`/`AI_REM_LLM_API_KEY` im Env eines Clients überschreiben die gelieferten Werte weiterhin; gegen einen Server < 1.7 fallen die Clients auf `settings-template.json` zurück und sagen das auch.
+Verbraucher: `ai-rem ingest`/`catchup` (Extraktor), `ai-rem origin`, der SessionStart-Hook `system-check.py` (Router-Probe) und `ai-rem vault-mcp`. Nichts davon wird persistiert — LLM-Key oder Vault-Token rotieren heißt: `.env` am Server ändern, Neustart, fertig; keine Workstation muss angefasst werden. `AI_REM_LLAMA_URL`/`AI_REM_LLM_API_KEY` im Env eines Clients überschreiben die gelieferten Werte weiterhin; gegen einen Server < 1.7 fallen die Clients auf `settings-template.json` zurück und sagen das auch.
 
 > Der `system-check.py`-Hook liest seine Konfiguration aus `~/.claude/settings-template.json`, das beim ersten Setup angelegt wird und u. a. SMB-Pfad, MCP-Server-Koordinaten und das tools-Verzeichnis enthält.
