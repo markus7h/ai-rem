@@ -13,6 +13,12 @@ Vault). Alle vier werden vom Client-Setup-Skript deployt.
 > Dasselbe gilt für `scripts/setup.py` (ausgeliefert als `/setup.py`) und die Web-UI unter
 > `templates/*.html`.
 
+> **SessionStart-Check (`system-check.py`):** alle Checks (ai-rem, Token, SMB, MCP, Settings,
+> Tools, LLM, Embed, Auto-Memory, Client-Dateien, Session-Herkunft, Cleanup) laufen
+> **parallel** mit einer Gesamt-Deadline von 6 s. Ein Check, der dann noch läuft, erscheint
+> als `<check> ⏱` in der Statuszeile; deren Reihenfolge bleibt fest. So treibt ein hängender
+> Server oder ein hängendes Netz den Hook nie ins Hook-Timeout von Claude Code.
+
 ---
 
 ## Auto-Memory (PreCompact + SessionEnd → ai-rem)
@@ -28,7 +34,9 @@ ai-rem status
 ai-rem search "auto-memory"
 ai-rem show "<name>"   # vollständige, ungekürzte description + extra + relations (via /export)
 ai-rem list --type Decision
-ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen]
+ai-rem ingest --transcript <session.jsonl> [--cwd <dir>] [--dry-run] [--model qwen]
+ai-rem origin --cwd <dir> [--json]
+ai-rem map-dir --dir <dir> --project <Project> [--context work|private]
 ```
 
 **Anti-Rekursion:** Transcripts unter 500 Zeichen werden übersprungen, `/tmp/ai-rem-ingest.lock` verhindert verschachtelte Läufe.
@@ -51,6 +59,26 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen]
 - `AI_REM_LLM_API_KEY` — **optionaler Override** des Router-Bearer-Tokens. Quelle ist `llm_api_key` aus `/api/client-config`, das der Server aus seinem eigenen Env `AI_REM_LLM_API_KEY` (bevorzugt) oder der setup-config nimmt; auf eine Workstation schreibt ihn nichts mehr (vor 1.7 legte das Setup ihn in `~/.claude/settings.json` → `env` ab — `ai-rem update` entfernt den Eintrag). Beidseitig leer = kein `Authorization`-Header (direkter llama-server ohne `--api-key`). Bitte einen Virtual Key mit Budget, **nicht** den Master-Key: der ist zugleich das Admin-UI-Passwort. Gegen einen Server < 1.7 läuft der SessionStart-Check ohne Key und sagt das auch (`Server < 1.7`), statt einen Router-Ausfall zu melden.
 - Erreichbarkeits-Probe geht auf `/v1/models`, nicht `/health`: am LiteLLM-Router ist `/health` der Admin-Endpoint und feuert bei jedem Aufruf echte Testcalls gegen *alle* Modelle inklusive Kimi — bei jedem SessionStart bezahlter Traffic
 - `AI_REM_CLI` — expliziter CLI-Pfad (sonst Discovery über bekannte Mount-Pfade und `$PATH`). Das Setup trägt hier `~/.local/share/ai-rem/bin/ai-rem` ein, die lokal installierte Kopie. Zeigt der Wert stattdessen in einen Clone auf einem Netzlaufwerk, bricht der Hook bei jedem Session-Ende still mit `ai-rem CLI not found` ab, sobald der Mount hängt — dann `/setup` erneut laufen lassen. Gehört in den `env`-Block von `~/.claude/settings.json`, damit Hooks ihn erben.
+
+**Task-Abschluss:** Eine Erledigt-Meldung im Transcript schließt den gespeicherten `Task` über seinen exakten Namen, auch wenn das LLM die Meldung als `Decision`/`Solution` einordnet. Die Erledigt-Erkennung beachtet Verneinungen („noch nicht gemergt“ schließt nichts), und ein Merge öffnet einen `erledigt`-Task nie wieder.
+
+---
+
+## Session-Herkunft (cwd → Projekt + Kontext)
+
+Projekt und Kontext einer Session werden **aus Arbeitsverzeichnis und git abgeleitet**, nicht vom LLM geraten (`lib/origin.py`, gemeinsam genutzt von CLI, Extraktor und SessionStart-Hook).
+
+**Kontext**, der erste Treffer gewinnt:
+1. Remote-Owner des Repos gegen die `git_accounts`-Regeln (`[{owner, emails[], context}]` in der [setup-config](configuration.de.md), ausgeliefert als `context_rules` über `/api/client-config`; Defaults `markusth-bi` → work, `markus7h` und `kaiguard` → private).
+2. Die im Repo wirksame `git user.email` gegen `emails` einer Regel (Org-Repos).
+3. Eine mit `ai-rem map-dir` gespeicherte Verzeichnis-Zuordnung (`Project` `extra.dirs`).
+4. Sonst: nachfragen.
+
+**Projekt:** der Repo-Name aus dem Remote (ein Worktree gehört zum Haupt-Repo), abgeglichen gegen `Project` `extra.repos`, dann `extra.dirs`-Präfixe, dann ein gleichnamiges Projekt. Ohne Repo und Zuordnung bleibt das Projekt offen.
+
+**SessionStart:** `system-check.py` ermittelt die Herkunft in-process über `lib/origin.py` (Fallback: `ai-rem origin --cwd <cwd> --json`) und ergänzt `additionalContext` um einen Abschnitt `## Session-Herkunft` (welcher `context` bei `memory_add` zu setzen ist, zu welchem Projekt Tasks gehören). Ist die Herkunft unbekannt, fragt Claude **einmal** per `AskUserQuestion` mit Vorschlägen und legt die Antwort mit `ai-rem map-dir` ab. Das Home-Verzeichnis selbst und Temp-/Scratchpad-Verzeichnisse fragen nie.
+
+**Extraktion:** Der Auto-Memory-Hook übergibt `--cwd`, das opencode-Plugin schreibt `cwd` in seinen Export, und `catchup` liest `cwd` aus dem Transcript. Der Extraktor taggt Entities dann mit dem abgeleiteten Kontext und hängt neue `Task`s per `TEIL_VON` an das Herkunftsprojekt. `Project`s aus der LLM-Ausgabe legt er nicht mehr an und überschreibt keine Projekt-Beschreibungen; nur das Herkunftsprojekt eines erkannten Repos wird bei Bedarf angelegt (mit `extra.repos`) bzw. um das Repo ergänzt.
 
 ---
 
@@ -93,7 +121,7 @@ status: offen
 ---
 ```
 
-Der Hook liest das Frontmatter der zuletzt geänderten Plan-Datei und upsertet via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert über `name` → keine Dubletten. Erledigt wird ein Plan über den Status - `memory_add(name, "Task", extra={"status": "erledigt"})`, in der CLI `ai-rem close <name>`, in der `/tasks`-UI der Erledigt-Knopf; archiviert wird er danach vom Nightly-Lauf. Der Status liegt zentral in ai-rem (cross-machine). Fail-silent: blockiert nie `ExitPlanMode`.
+Der Hook liest das Frontmatter der zuletzt geänderten Plan-Datei und upsertet via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert über `name` → keine Dubletten; `status` und `created` werden nur beim Anlegen gesetzt, eine Plan-Revision öffnet einen erledigten Plan-Task also nicht wieder (ein explizites `status` im Frontmatter gilt weiterhin). Erledigt wird ein Plan über den Status - `memory_add(name, "Task", extra={"status": "erledigt"})`, in der CLI `ai-rem close <name>`, in der `/tasks`-UI der Erledigt-Knopf; archiviert wird er danach vom Nightly-Lauf. Der Status liegt zentral in ai-rem (cross-machine). Fail-silent: blockiert nie `ExitPlanMode`.
 
 **Installation:** wird vom Client-Setup automatisch deployt — `install_hooks()` holt `save-plan.py` nach `~/.claude/hooks/` (chmod +x) und registriert den `PostToolUse: ExitPlanMode`-Hook in `~/.claude/settings.json`. Kein manueller Schritt (der Datei-Header dokumentiert die Standalone-Installation als Referenz).
 

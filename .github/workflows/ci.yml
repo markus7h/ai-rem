@@ -122,7 +122,7 @@ jobs:
           set -euo pipefail
           mkdir -p cli-smoke/bin cli-smoke/lib
           curl -fsS http://localhost:3456/bin/ai-rem -o cli-smoke/bin/ai-rem
-          for f in __init__.py mcp_client.py extractor.py extractor_heuristic.py keychain.py; do
+          for f in __init__.py mcp_client.py extractor.py extractor_heuristic.py keychain.py origin.py; do
             curl -fsS "http://localhost:3456/lib/$f" -o "cli-smoke/lib/$f"
           done
           chmod +x cli-smoke/bin/ai-rem

@@ -148,3 +148,104 @@ if __name__ == "__main__":
     for fn in list(globals().values()):
         if callable(fn) and getattr(fn, "__name__", "").startswith("test_"):
             fn(); print("ok:", fn.__name__)
+
+
+def test_merge_behaelt_erledigt():
+    # Nightly-Merge nimmt den juengeren Eintrag als canonical — oft die offene Dublette.
+    server.memory_add("TS_Mail an Bob", "Task", extra={"status": "erledigt"})
+    server.memory_add("TS_Mail an Bob neu", "Task", description="Mail an Bob senden")
+    msg = server.memory_merge("TS_Mail an Bob neu", "TS_Mail an Bob")
+    assert "Status erledigt übernommen" in msg
+    ex = _extra("TS_Mail an Bob neu")
+    assert ex["status"] == "erledigt" and ex.get("done_at")
+
+
+def test_merge_laesst_offen_wenn_niemand_erledigt():
+    server.memory_add("TS_Offen A", "Task")
+    server.memory_add("TS_Offen B", "Task")
+    server.memory_merge("TS_Offen A", "TS_Offen B")
+    assert _extra("TS_Offen A")["status"] == "offen"
+
+
+def test_nightly_merge_behaelt_erledigt():
+    server.memory_add("TS_Nacht-Task", "Task", extra={"status": "erledigt"})
+    server.memory_add("Task TS Nacht", "Task", description="neu angelegt")  # gleiche Tokens
+    server.db_exec("MATCH (e:Entity {id: $id}) SET e.updated_at = $ts",
+                   {"id": server._id("TS_Nacht-Task"), "ts": _vor(1)})
+    merges = server._cleanup_candidates()["auto_merge"]
+    pair = next(p for p in merges if set(p) == {"TS_Nacht-Task", "Task TS Nacht"})
+    server.memory_merge(*pair)
+    assert pair[0] == "Task TS Nacht"  # die juengere, offene Dublette ist canonical
+    assert _extra(pair[0])["status"] == "erledigt"
+
+
+def test_case_kollision_gleicher_typ_ist_dieselbe_entity():
+    server.memory_add("TS_Deploy auf mystorage", "Task", description="vorher")
+    msg = server.memory_add("ts_deploy auf Mystorage", "Task", description="nachher")
+    assert "Kollision" not in msg and "Aktualisiert" in msg
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.name, e.descr",
+                                       {"id": server._id("TS_Deploy auf mystorage")}))
+    assert rows[0] == ["TS_Deploy auf mystorage", "nachher"]
+
+
+def test_kollision_bei_anderem_typ_bleibt_warnung():
+    server.memory_add("TS_Tool X", "Tool")
+    msg = server.memory_add("ts-tool-x", "Topic", description="anderes Ding")
+    assert "ID-Kollision" in msg
+
+
+def test_decision_wird_nicht_zum_task():
+    server.memory_add("TS_Redis statt Memcache", "Decision", description="entschieden")
+    msg = server.memory_add("TS_Redis statt Memcache", "Task", description="umsetzen")
+    assert "Typ bleibt Decision" in msg
+    rows = server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.type",
+                                       {"id": server._id("TS_Redis statt Memcache")}))
+    assert rows[0][0] == "Decision"
+
+
+def test_memory_list_task_status_und_einzeilig():
+    server.memory_add("TS_Listen-Task", "Task", description="Zeile eins\nZeile zwei",
+                      extra={"status": "erledigt"})
+    line = next(x for x in server.memory_list("Task").splitlines() if "TS_Listen-Task" in x)
+    assert line.startswith("- **TS_Listen-Task** [erledigt]")
+    assert "Zeile eins Zeile zwei" in line
+    alle = next(x for x in server.memory_list().splitlines() if "TS_Listen-Task" in x)
+    assert "Zeile eins Zeile zwei" in alle
+
+
+def test_merge_verschiebt_relationen_statt_zu_kopieren():
+    server.memory_add("TS_Echtprojekt", "Project", description="echt")
+    server.memory_add("TS_Pseudo #9", "Project", description="pseudo")
+    server.memory_add("TS_Issue-Task", "Task", description="offen")
+    server.memory_relate("TS_Issue-Task", "TEIL_VON", "TS_Pseudo #9")
+    server.memory_merge("TS_Echtprojekt", "TS_Pseudo #9")
+    rels = server._rows(server.db_exec(
+        "MATCH (t:Entity {id:$id})-[r:Rel]-(p:Entity) RETURN r.name, p.name",
+        {"id": server._id("TS_Issue-Task")}))
+    assert rels == [["TEIL_VON", "TS_Echtprojekt"]] or rels == [("TEIL_VON", "TS_Echtprojekt")]
+
+
+def test_archiviertes_projekt_bildet_keine_gruppe():
+    server.memory_add("TS_Lebend", "Project", description="x")
+    server.memory_add("TS_Tot", "Project", description="x")
+    server.memory_add("TS_Gruppen-Task", "Task", description="offen")
+    server.memory_relate("TS_Gruppen-Task", "TEIL_VON", "TS_Lebend")
+    server.memory_relate("TS_Gruppen-Task", "GELÖST_DURCH", "TS_Tot")
+    server.memory_archive("TS_Tot")
+    projs = {p for n, _d, _s, p in server._open_task_rows("", False) if n == "TS_Gruppen-Task"}
+    assert projs == {"TS_Lebend"}
+    server.memory_archive("TS_Lebend")
+    projs = {p for n, _d, _s, p in server._open_task_rows("", False) if n == "TS_Gruppen-Task"}
+    assert projs == {None}
+
+
+def test_unrelate_loescht_genau_eine_kante():
+    server.memory_add("TS_U_A", "Tool", description="a")
+    server.memory_add("TS_U_B", "Tool", description="b")
+    server.memory_relate("TS_U_A", "NUTZT", "TS_U_B")
+    server.memory_relate("TS_U_A", "INTEGRIERT_MIT", "TS_U_B")
+    assert server.memory_unrelate("TS_U_A", "NUTZT", "TS_U_B").startswith("Gelöscht")
+    assert server.memory_unrelate("TS_U_A", "NUTZT", "TS_U_B").startswith("Relation nicht gefunden")
+    rels = server._rows(server.db_exec(
+        "MATCH (a:Entity {id:$a})-[r:Rel]->(b:Entity) RETURN r.name", {"a": server._id("TS_U_A")}))
+    assert [r[0] for r in rels] == ["INTEGRIERT_MIT"]

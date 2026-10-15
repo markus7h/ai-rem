@@ -13,6 +13,12 @@ deployed by the client setup script.
 > The same applies to `scripts/setup.py` (served as `/setup.py`) and the web UI under
 > `templates/*.html`.
 
+> **SessionStart check (`system-check.py`):** all checks (ai-rem, token, SMB, MCP, settings,
+> tools, LLM, embed, Auto-Memory, client files, session origin, cleanup) run **in parallel**
+> under an overall deadline of 6 s. A check still running at the deadline appears as
+> `<check> ⏱` in the status line; the order of the status line stays fixed. That way a
+> hanging server or network never pushes the hook into Claude Code's hook timeout.
+
 ---
 
 ## Auto-Memory (PreCompact + SessionEnd → ai-rem)
@@ -28,7 +34,9 @@ ai-rem status
 ai-rem search "auto-memory"
 ai-rem show "<name>"   # full, untruncated description + extra + relations (via /export)
 ai-rem list --type Decision
-ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen]
+ai-rem ingest --transcript <session.jsonl> [--cwd <dir>] [--dry-run] [--model qwen]
+ai-rem origin --cwd <dir> [--json]
+ai-rem map-dir --dir <dir> --project <Project> [--context work|private]
 ```
 
 **Anti-recursion:** transcripts under 500 chars are skipped, `/tmp/ai-rem-ingest.lock` prevents nested runs.
@@ -51,6 +59,26 @@ ai-rem ingest --transcript <session.jsonl> [--dry-run] [--model qwen]
 - `AI_REM_LLM_API_KEY` — **optional override** of the router bearer token. The source is `llm_api_key` from `/api/client-config`, which the server takes from its own env `AI_REM_LLM_API_KEY` (preferred) or the setup-config; nothing writes it to a workstation any more (before 1.7 the setup put it into `~/.claude/settings.json` → `env` — `ai-rem update` removes that entry). Empty on both sides = no `Authorization` header (direct llama-server without `--api-key`). Use a virtual key with a budget, **not** the master key: it doubles as the admin UI password. Against a server < 1.7 the SessionStart check runs without a key and says so (`Server < 1.7`) instead of reporting a router failure.
 - The reachability probe hits `/v1/models`, not `/health`: on the LiteLLM router `/health` is the admin endpoint and fires real test calls against *every* model including Kimi — paid traffic on every SessionStart
 - `AI_REM_CLI` — explicit CLI path override (otherwise discovery via known mount paths and `$PATH`). The setup points this at `~/.local/share/ai-rem/bin/ai-rem`, the locally installed copy. If it points into a clone on a network share instead, the hook aborts silently with `ai-rem CLI not found` on every session end as soon as the mount stalls — rerun `/setup` in that case. Put it in the `env` block of `~/.claude/settings.json` so hooks inherit it.
+
+**Task closing:** a done report in the transcript closes the stored `Task` by its exact name, even when the LLM labels the report a `Decision`/`Solution`. Done detection is negation-aware ("not merged yet" does not close anything), and a merge never reopens an `erledigt` task.
+
+---
+
+## Session origin (cwd → project + context)
+
+Project and context of a session are **derived from the working directory and git**, not guessed by the LLM (`lib/origin.py`, shared by the CLI, the extractor and the SessionStart hook).
+
+**Context**, first match wins:
+1. Remote owner of the repo against the `git_accounts` rules (`[{owner, emails[], context}]` in the [setup-config](configuration.md), served as `context_rules` via `/api/client-config`; defaults `markusth-bi` → work, `markus7h` and `kaiguard` → private).
+2. The repo's effective `git user.email` against `emails` of a rule (org repos).
+3. A directory mapping stored with `ai-rem map-dir` (`Project` `extra.dirs`).
+4. Otherwise: ask.
+
+**Project:** the repo name from the remote (a worktree resolves to its main repo), matched against `Project` `extra.repos`, then `extra.dirs` prefixes, then a project of the same name. Without a repo or mapping the project stays open.
+
+**SessionStart:** `system-check.py` resolves the origin in-process via `lib/origin.py` (falling back to `ai-rem origin --cwd <cwd> --json`) and adds a `## Session-Herkunft` section to `additionalContext` (which `context` to set on `memory_add`, which project tasks belong to). If the origin is unknown, Claude asks **once** via `AskUserQuestion` with suggestions and stores the answer with `ai-rem map-dir`. The home directory itself and temp/scratchpad directories never ask.
+
+**Extraction:** the auto-memory hook passes `--cwd`, the opencode plugin writes `cwd` into its export, and `catchup` reads `cwd` from the transcript. The extractor then tags entities with the derived context and links new `Task`s `TEIL_VON` the origin project. It no longer creates `Project`s from the LLM output or overwrites project descriptions; only the origin project of a recognised repo is created if missing (with `extra.repos`), or gets the repo added.
 
 ---
 
@@ -93,7 +121,7 @@ status: offen
 ---
 ```
 
-The hook reads the newest plan file's frontmatter and upserts via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert is keyed by `name`, so re-finalizing a plan never duplicates. A plan is closed via its status - `memory_add(name, "Task", extra={"status": "erledigt"})`, `ai-rem close <name>` on the CLI, or the done button in the `/tasks` UI; the nightly run archives it afterwards. The status lives in ai-rem, so it stays consistent across machines. Fail-silent: never blocks `ExitPlanMode`.
+The hook reads the newest plan file's frontmatter and upserts via `memory_add` (`type: Task`, `extra.kind=plan`, `extra.plan_file`, `extra.status`). Upsert is keyed by `name`, so re-finalizing a plan never duplicates; `status` and `created` are only set on creation, so a revision never reopens a closed plan task (an explicit `status` in the frontmatter still applies). A plan is closed via its status - `memory_add(name, "Task", extra={"status": "erledigt"})`, `ai-rem close <name>` on the CLI, or the done button in the `/tasks` UI; the nightly run archives it afterwards. The status lives in ai-rem, so it stays consistent across machines. Fail-silent: never blocks `ExitPlanMode`.
 
 **Install:** deployed automatically by the client setup — `install_hooks()` fetches `save-plan.py` to `~/.claude/hooks/` (chmod +x) and registers the `PostToolUse: ExitPlanMode` hook in `~/.claude/settings.json`. No manual step (the file header documents the standalone install for reference).
 

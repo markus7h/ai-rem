@@ -13,10 +13,163 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [1.7.1] – 2026-10-09
+## [1.10.3] – 2026-10-15
 
 ### Fixed
-- **Keychain hint on headless servers.** On a server without a desktop login (SSH) the
+- Test suite: the WAL-guard probe test kills its child with `SIGTERM` instead of `SIGSEGV` — same code path in `_probe_open` (every signal except `SIGKILL` counts as a crash), but no more macOS crash-reporter dialog ("Python quit unexpectedly") on every local test run.
+
+## [1.10.2] – 2026-10-15
+
+### Changed
+- SessionStart hook (`system-check.py`) runs all checks in parallel under an overall 6 s deadline instead of one after another. A check that is still running at the deadline shows up as `<check> ⏱` in the status line, so a hanging server or network no longer pushes the hook into Claude Code's 15 s hook timeout (where nothing at all arrived, not even `ai-rem ❌`). Status line order and output JSON are unchanged.
+- Shorter per-call timeouts in the hook: MCP requests 5 → 3 s, `memory_get_context` (open-task display only) 2 s and allowed to fail without losing `ai-rem ✓`.
+- Session origin is resolved in-process via `lib/origin.py` with the hook's endpoint and token (projects and context rules fetched in parallel) instead of spawning `ai-rem origin`; the CLI remains the fallback (timeout 8 → 4 s).
+
+## [1.10.1] – 2026-10-15
+
+### Added
+- `memory_unrelate` admin tool and `ai-rem unrelate <from> <REL> <to>`: delete a single relation (previously only possible by deleting the whole entity).
+
+### Fixed
+- `memory_merge` now moves the duplicate's relations instead of copying them, so tasks no longer stay attached to a merged-away pseudo-project.
+- Open-task grouping in `memory_get_context` and the `/tasks` UI ignores archived projects; a task with a live project no longer also shows up under "_ohne Projekt_".
+- Extractor: while the session origin is still unknown (SessionStart question pending), new entries get no LLM-guessed context instead of a wrong `work`/`private`.
+
+## [1.10.0] – 2026-10-14
+
+### Added
+- **Session origin: context and project come from cwd/git, not from the LLM.** New
+  `lib/origin.py` resolves a session's working directory deterministically. Context rule
+  order: remote owner of the repo (defaults `markusth-bi` → work, `markus7h` and `kaiguard` →
+  private; configurable via `git_accounts` in `setup-config.json`, delivered to clients as
+  `context_rules` via `/api/client-config`) → the repo's effective `git user.email` → a stored
+  directory mapping → ask. Project = repo name (worktrees resolve to the main repo), else the
+  stored directory mapping. Without a match the SessionStart hook asks once via
+  AskUserQuestion (with suggestions) and stores the answer with `ai-rem map-dir`; home and
+  temp directories are never asked about. The hook injects the resolved project/context as
+  "Session-Herkunft" into the session context.
+- **New CLI commands.** `ai-rem origin --cwd <dir> [--json]` shows the resolved origin;
+  `ai-rem map-dir --dir <d> --project <P> [--context work|private]` maps a directory to a
+  project permanently (`extra.dirs`); `ai-rem ingest --cwd <dir>` passes the session
+  directory to the extractor. The auto-memory hook passes the hook's `cwd`, the opencode
+  plugin exports its working directory, and `catchup` reads the `cwd` from the transcript.
+- **Admin tool `memory_project_index`** (via `/api/tool` only): active projects with context, repos, dirs and keywords — the
+  lookup table for the session origin.
+
+### Changed
+- **Extractor no longer creates projects** or overwrites project descriptions. The origin
+  context overrides the LLM's context for new entities (except `Preference`/`Person`), and
+  every task gets `TEIL_VON` the origin project unless it is already linked.
+- **Status visible to the model.** The "Bekannte Tasks" list in the extraction prompt and
+  `memory_list` show each task's status.
+
+### Fixed
+- **Closing tasks is reliable.** Done reports match the task name exactly instead of by
+  substring; a done report closes the stored task even when the LLM reports it as a
+  `Decision`/`Solution`; a `Decision`/`Solution` is never flipped to `Task`; names that only
+  differ in case or punctuation update the same entity.
+- **Done detection respects negation** ("noch nicht bezahlt" is not a completion) and
+  recognizes bare participles ("Mail versendet").
+- **Finished tasks stay finished.** `memory_merge` and the nightly merge keep `erledigt`, and
+  the save-plan hook no longer resets a closed plan task to `offen`.
+
+## [1.9.1] – 2026-10-13
+
+### Fixed
+- **opencode: finished tasks no longer come back as open.** opencode extracts a session
+  again after every turn. The extractor only saw the alphabetical tail of all entity names,
+  so a task the model had just closed was unknown to it and got re-created under a new name
+  with status `offen`. The extraction prompt now lists the most recently changed tasks and
+  asks the model to report a finished one under exactly that name with "ERLEDIGT …", which
+  closes it.
+- **opencode: subagent sessions are no longer extracted.** A child session (`parentID`) only
+  sees the orchestrator's instruction ("send the mail now"), not the result, and produced
+  open tasks for work that was already done. Starting a subagent also no longer flushes the
+  parent session mid-turn.
+- **opencode: closing opencode no longer drops the last extraction.** Pending idle timers
+  are ingested on dispose instead of being discarded.
+- **Done detection knows office verbs.** gesendet, versendet, verschickt, eingetragen,
+  übertragen, vereinbart, gebucht, bezahlt, überwiesen, zugestellt and beantwortet count as
+  a completion report (extractor and cleanup review hint).
+
+## [1.9.0] – 2026-10-13
+
+> **Migration notice — Claude Code now uses plugins instead of `mcpServers`.**
+> The MCP servers for Claude Code come from the plugins `ai-rem` and `mykeyvault` (2.x) of
+> the [tools-registry](https://github.com/markus7h/tools-registry) marketplace. They carry no
+> secrets and start stdio via `ai-rem mcp-proxy` / `ai-rem vault-mcp`. To switch: run
+> `ai-rem update`, then `claude plugin marketplace update tools-registry`,
+> `claude plugin install ai-rem@tools-registry` and `claude plugin install
+> mykeyvault@tools-registry` (enable both), restart Claude Code. The setup removes the
+> duplicate `mcpServers` entries from `~/.claude.json`. Recap of the authentication change
+> since 1.7.0: the only secret per device is the ai-rem token in the OS keychain
+> (`ai-rem token [--store|--forget]`); vault access and the LLM-router key come from
+> `/api/client-config` at runtime — no tokens in any client config. See the README sections
+> "Claude Code: plugins instead of mcpServers" and [docs/authentication.md](docs/authentication.md).
+
+### Changed
+- **opencode entries get a local `cwd`.** `ai-rem` runs in `~/.local/share/ai-rem`,
+  `mykeyvault` in the folder of its built entry. opencode passes its own working directory
+  to stdio servers; on an SMB mount the spawn ran into a timeout.
+- **opencode 2.x config format.** If `opencode.json` already has `mcp.servers`, the setup
+  writes its entries there in the 2.x shape (`"disabled": false` instead of `"enabled": true`)
+  and removes flat 1.x duplicates `mcp.<name>`; otherwise it keeps the flat 1.x format. The
+  JSONC snippet fallback follows the same rule, and `ai-rem uninstall --client opencode`
+  handles both.
+- **`ai-rem update` refreshes the opencode `mykeyvault` entry** when the built MCP is known
+  (`vault_entry` in `client.json`) and node is available. `tools` stays untouched.
+- README/docs: new sections on the Claude Code plugins and the keychain authentication;
+  Claude Code registers stdio servers in `~/.claude.json` only without plugins (fallback).
+
+### Fixed
+- **`ai-rem update` builds a missing mykeyvault MCP.** With mykeyvault configured
+  (`mcp_register.mykeyvault.stdio`) but no `vault_entry` in `client.json` (or its file gone),
+  `ai-rem vault-mcp` failed with "`ai-rem update` holt ihn nach" — and the update never did.
+  It now builds the MCP and records `vault_entry`; the normal case still skips git/npm.
+- **`ai-rem mcp-proxy` always exits.** The final flush of stdout/stderr could raise
+  (`BrokenPipeError`, closed stream) when the client had already closed the pipe, so
+  `os._exit` was never reached. The flush errors are now ignored.
+- The release workflow's version-mismatch error no longer points at a stale line number
+  (`server.py:44`).
+
+## [1.8.1] – 2026-10-11
+
+### Fixed
+- **Projects and tasks keep their type.** `memory_add` took the type of an existing entry
+  unchecked, so the transcript extractor kept rewriting the project `ai-rem` as a `Tool` —
+  after that none of its `TEIL_VON` links counted and its tasks fell back to "_ohne
+  Projekt_". An existing `Project` or `Task` now keeps its type; the reply says so
+  ("Typ bleibt Project, 'Tool' ignoriert"). Other changes such as Tool → Project still work.
+- **`ai-rem mcp-proxy` no longer crashes on exit ("Python quit unexpectedly").** After the
+  server dropped the session (HTTP 404, e.g. on a container restart) the proxy left with
+  `sys.exit` while its stdin reader thread was still blocked in `readline()`. Interpreter
+  shutdown could not acquire the stdin buffer lock and aborted (SIGABRT). The proxy now
+  exits via `os._exit` after flushing its output.
+
+## [1.8.0] – 2026-10-10
+
+### Added
+- **Automatic task → project linking.** Nothing ever set a task's project edge, so
+  `get_context` listed most open tasks under "_ohne Projekt_". `memory_add` now links a task
+  without a project edge via `TEIL_VON` when exactly one active project matches by keyword
+  (`extra.keywords` on the project; word boundaries, case-insensitive). Projects without
+  keywords never match — a name fallback mislinked to extractor pseudo-projects such as
+  "mystorage". Several matches link nothing.
+- `ai-rem project-keywords <project> "kw1,kw2"` sets a project's keywords;
+  `ai-rem link-projects [--dry-run]` (server tool `memory_link_projects`) back-fills
+  existing open tasks.
+- The extractor prompt now offers `TEIL_VON` and always lists the active projects.
+
+### Changed
+- **Completion reports no longer pile up as open tasks.** The extractor skips new tasks whose
+  description only reports completion ("PR #225 gemergt", "wurde geprüft") and closes a known
+  task when the session reports it done.
+- The nightly cleanup also proposes (review queue, never automatic) tasks whose completion
+  marker sits anywhere in the text, and open tasks untouched for `CLEANUP_TASK_STALE_DAYS`
+  (default 30). Dismissing either keeps it out of the queue.
+
+### Fixed
+- **Keychain hint on headless servers** (#160). On a server without a desktop login (SSH) the
   login keyring stays locked, so `secret-tool store` fails and the token goes to the 0600
   file fallback — which is the intended behavior there. Setup still told the user to
   "install libsecret, then `ai-rem pair`", although `secret-tool` was already installed and
@@ -983,8 +1136,15 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.7.1...HEAD
-[1.7.1]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.7.1
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.3...HEAD
+[1.10.3]: https://github.com/markus7h/ai-rem/compare/v1.10.2...v1.10.3
+[1.10.2]: https://github.com/markus7h/ai-rem/compare/v1.10.1...v1.10.2
+[1.10.1]: https://github.com/markus7h/ai-rem/compare/v1.10.0...v1.10.1
+[1.10.0]: https://github.com/markus7h/ai-rem/compare/v1.9.1...v1.10.0
+[1.9.1]: https://github.com/markus7h/ai-rem/compare/v1.9.0...v1.9.1
+[1.9.0]: https://github.com/markus7h/ai-rem/compare/v1.8.1...v1.9.0
+[1.8.1]: https://github.com/markus7h/ai-rem/compare/v1.8.0...v1.8.1
+[1.8.0]: https://github.com/markus7h/ai-rem/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/markus7h/ai-rem/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/markus7h/ai-rem/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/markus7h/ai-rem/compare/v1.5.0...v1.6.0

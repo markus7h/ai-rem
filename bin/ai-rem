@@ -77,6 +77,11 @@ def cmd_relate(c: MCPClient, a):
     _print(c.call("memory_relate", args))
 
 
+def cmd_unrelate(c: MCPClient, a):
+    _print(c.call("memory_unrelate",
+                  {"from_name": a.from_name, "relation": a.relation, "to_name": a.to_name}))
+
+
 def cmd_search(c: MCPClient, a):
     args = {"query": a.query, "limit": a.limit}
     if a.context:
@@ -217,6 +222,16 @@ def cmd_set_project_context(c: MCPClient, a):
     _print(c.call("memory_set_project_context", args))
 
 
+def cmd_link_projects(c: MCPClient, a):
+    _print(c.call("memory_link_projects", {"dry_run": a.dry_run}))
+
+
+def cmd_project_keywords(c: MCPClient, a):
+    # Nur extra.keywords schreiben — description/context bleiben (Partial-Update).
+    kws = [k.strip() for k in a.keywords.split(",") if k.strip()]
+    _print(c.call("memory_add", {"name": a.name, "type": "Project", "extra": {"keywords": kws}}))
+
+
 def cmd_purge_archived(c: MCPClient, a):
     if not a.yes:
         sys.stderr.write("Confirm purge (destructive) with --yes\n")
@@ -232,7 +247,32 @@ def cmd_ingest(c: MCPClient, a):
         transcript_path=Path(a.transcript),
         dry_run=a.dry_run,
         model=a.model,
+        cwd=a.cwd,
     )
+
+
+def cmd_origin(c: MCPClient, a):
+    """Session-Herkunft (Projekt/Kontext) eines Verzeichnisses — --json fuer Hooks."""
+    from lib.origin import resolve_for
+
+    o = resolve_for(c, os.path.abspath(os.path.expanduser(a.cwd)))
+    if a.json:
+        print(json.dumps(o, ensure_ascii=False))
+        return
+    lines = [f"Verzeichnis: {o['cwd']}",
+             f"Repo:        {o['repo'] or '-'}" + (f"  (git-Mail {o['email']})" if o["email"] else ""),
+             f"Projekt:     {o['project'] or '-'}"
+             + (f"  [{o['project_source']}{'' if o['project_exists'] else ', neu'}]" if o["project"] else ""),
+             f"Kontext:     {o['context'] or '-'}" + (f"  [{o['source']}]" if o["source"] else "")]
+    if o["ask"]:
+        lines.append("Rückfrage:   ja — Vorschläge: " + ", ".join(o["suggestions"]))
+    _print("\n".join(lines))
+
+
+def cmd_map_dir(c: MCPClient, a):
+    from lib.origin import map_dir
+
+    _print(map_dir(c, a.dir, a.project, a.context or ""))
 
 
 def cmd_catchup(c: MCPClient, a):
@@ -483,7 +523,19 @@ def cmd_mcp_proxy(c: MCPClient, a):
     # Ohne Header nimmt der Server clientInfo.name aus dem initialize — der Default
     # "ai-rem-cli" wuerde sonst alle von Claude angelegten Entities falsch attribuieren.
     proxy = _McpProxy(endpoint, c.token, os.environ.get("AI_REM_CLIENT", ""))
-    sys.exit(proxy.run())
+    code = proxy.run()
+    # os._exit statt sys.exit: der stdin-Leser (Daemon-Thread) haengt beim Ausstieg
+    # nach HTTP 404 noch in readline() und haelt den Lock von sys.stdin.buffer. Der
+    # Interpreter-Shutdown will den Puffer schliessen, bekommt den Lock nicht und
+    # bricht per abort() ab — macOS meldet "Python quit unexpectedly".
+    # Flush darf scheitern (Client hat die Pipe schon zu: EPIPE/BrokenPipe, oder der
+    # Stream ist geschlossen) — os._exit muss trotzdem erreicht werden.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+    os._exit(code)
 
 
 def cmd_vault_mcp(c: MCPClient, a):
@@ -740,6 +792,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--extra", default=None, help="JSON object")
     s.set_defaults(func=cmd_relate)
 
+    s = sub.add_parser("unrelate", help="memory_unrelate (eine Relation loeschen)")
+    s.add_argument("from_name")
+    s.add_argument("relation")
+    s.add_argument("to_name")
+    s.set_defaults(func=cmd_unrelate)
+
     s = sub.add_parser("search", help="memory_search")
     s.add_argument("query")
     s.add_argument("--limit", "-n", type=int, default=15)
@@ -829,6 +887,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--context", "-c", choices=["", "work", "private"], default=None)
     s.set_defaults(func=cmd_set_project_context)
 
+    s = sub.add_parser("link-projects",
+                       help="offene Tasks ohne Projekt per Keywords zuordnen (TEIL_VON)")
+    s.add_argument("--dry-run", action="store_true", help="nur anzeigen, nichts verknüpfen")
+    s.set_defaults(func=cmd_link_projects)
+
+    s = sub.add_parser("project-keywords",
+                       help="Zuordnungs-Keywords eines Projects setzen (komma-getrennt)")
+    s.add_argument("name")
+    s.add_argument("keywords", help='z.B. "silbersee,diabi,fabric"')
+    s.set_defaults(func=cmd_project_keywords)
+
     s = sub.add_parser("purge-archived", help="memory_purge_archived (destruktiv, needs --yes)")
     s.add_argument("--keep-days", dest="keep_days", type=int, default=0)
     s.add_argument("--yes", action="store_true")
@@ -840,7 +909,21 @@ def build_parser() -> argparse.ArgumentParser:
     # Ohne --model gewinnt AI_REM_LLM_MODEL aus lib/extractor. Ein Default hier
     # loggte sonst ein Modell, das der llama-server gar nicht hostet.
     s.add_argument("--model", default=None)
+    # Arbeitsverzeichnis der Session (Hook-Input) → Projekt/Kontext aus git statt LLM.
+    # Ohne Angabe gilt das cwd aus dem Transcript.
+    s.add_argument("--cwd", default=None)
     s.set_defaults(func=cmd_ingest)
+
+    s = sub.add_parser("origin", help="Session-Herkunft (Projekt/Kontext) eines Verzeichnisses")
+    s.add_argument("--cwd", default=".")
+    s.add_argument("--json", action="store_true", help="maschinenlesbar (fuer Hooks)")
+    s.set_defaults(func=cmd_origin)
+
+    s = sub.add_parser("map-dir", help="Verzeichnis dauerhaft einem Project zuordnen (extra.dirs)")
+    s.add_argument("--dir", required=True)
+    s.add_argument("--project", required=True)
+    s.add_argument("--context", choices=("work", "private"), default=None)
+    s.set_defaults(func=cmd_map_dir)
 
     s = sub.add_parser("catchup", help="re-ingest md-fallback queue once Ollama is back")
     s.set_defaults(func=cmd_catchup)

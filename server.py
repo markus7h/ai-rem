@@ -77,7 +77,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.7.1"
+VERSION = "1.10.3"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -236,7 +236,7 @@ AI_REM_CLI_SRC = _pkg_text("bin/ai-rem")
 # /manifest (tests/test_client_manifest.py haengt an CLI_LIB_FILES, nicht an der Liste).
 CLI_LIB_FILES: dict[str, str] = {}
 for _lib_name in ("__init__.py", "mcp_client.py", "extractor.py", "extractor_heuristic.py",
-                  "keychain.py"):
+                  "keychain.py", "origin.py"):
     try:
         CLI_LIB_FILES[_lib_name] = _pkg_text("lib/" + _lib_name)
     except FileNotFoundError:
@@ -1238,7 +1238,9 @@ mcp = FastMCP(
         "- Task/Decision/Problem/Solution/Tool: offene Aufgaben, Architektur, Bugs, Lösungen, Tools.\n"
         "  Task abschließen: memory_add(name, 'Task', extra={'status': 'erledigt'}) — das genügt, "
         "archiviert wird automatisch nach der Karenzzeit. Status: offen | laufend | blockiert | "
-        "erledigt (Synonyme wie 'gemergt' oder 'done' werden gemappt, Freitext landet in status_note).\n\n"
+        "erledigt (Synonyme wie 'gemergt' oder 'done' werden gemappt, Freitext landet in status_note).\n"
+        "  Task → Projekt: memory_relate(task, 'TEIL_VON', projekt). Passiert automatisch, wenn genau "
+        "ein aktives Projekt per extra.keywords im Task-Text vorkommt.\n\n"
         "## Nicht speichern\n"
         "Code-Patterns/Architektur/Pfade (aus Code ableitbar), git-Historie (git log/blame), "
         "Fix-Rezepte (Code+Commit), ephemere Sitzungsdetails. "
@@ -1917,7 +1919,25 @@ async def client_config_route(request: Request) -> JSONResponse:
         "llm_api_key": AI_REM_LLM_API_KEY or (_load_setup_cfg().get("llm_api_key") or ""),
         "vault_url": _pair_vault_url(),
         "vault_token": AI_REM_PAIR_VAULT_TOKEN,
+        "context_rules": _context_rules(),
     })
+
+
+# Kontext-Regeln für die Session-Herkunft (lib/origin.py): Remote-Owner bzw. die
+# git-Mail im Repo entscheiden work/private, nicht mehr das LLM. Zentral in der
+# setup-config, damit eine neue Workstation nichts lokal pflegen muss.
+_DEFAULT_GIT_ACCOUNTS = [
+    {"owner": "markusth-bi", "emails": [], "context": "work"},
+    {"owner": "markus7h", "emails": [], "context": "private"},
+    {"owner": "kaiguard", "emails": [], "context": "private"},
+]
+
+
+def _context_rules() -> list:
+    rules = _load_setup_cfg().get("git_accounts")
+    if not isinstance(rules, list) or not rules:
+        return [dict(r) for r in _DEFAULT_GIT_ACCOUNTS]
+    return [r for r in rules if isinstance(r, dict)]
 
 
 @mcp.custom_route("/api/pair/info", methods=["GET"])
@@ -2170,6 +2190,11 @@ def _id(name: str) -> str:
     return f"{slug[:55]}_{suffix}"
 
 
+def _name_key(name: str) -> str:
+    """Schreibweisen-neutraler Vergleichsschlüssel: nur Buchstaben/Ziffern, klein."""
+    return re.sub(r"[\W_]+", "", name.lower())
+
+
 def _ctx_match(extra_json: str, context: str) -> bool:
     """True wenn Entity zum gesuchten Context passt. Ungetaggte Entities (global) passen immer.
 
@@ -2383,23 +2408,46 @@ def memory_add(
     ts = _now()
 
     prev = _rows(db_exec(
-        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned, e.updated_at",
+        "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned, e.updated_at, e.type",
         {"id": eid},
     ))
     existed = bool(prev)
+
+    cur_type = prev[0][6] if existed else ""
+
+    # Typ-Guard: Project und Task tragen Struktur (TEIL_VON-Kanten, Keywords, Status).
+    # Der Extractor schrieb "ai-rem" wiederholt als Tool zurück — danach zählte keine
+    # Projekt-Zuordnung mehr. Der bestehende Typ gewinnt; bewusster Wechsel geht über
+    # archivieren + neu anlegen. Tool → Project u.ä. bleibt erlaubt.
+    # Decision/Solution → Task ebenso nicht: der Extractor meldet Erledigtes als
+    # Decision und offene Arbeit gleichen Namens wieder als Task — der Wechsel machte
+    # aus der festgehaltenen Entscheidung einen offenen Task.
+    type_note = ""
+    if existed and type != cur_type and (
+            cur_type in ("Project", "Task")
+            or (cur_type in ("Decision", "Solution") and type == "Task")):
+        type_note = f" (Typ bleibt {cur_type}, '{type}' ignoriert)"
+        type = cur_type
 
     # Kollisions-Guard: _id() normalisiert zu [a-z0-9_], Hash-Suffix erst >64 Zeichen.
     # Darunter kollidieren verschiedene Namen ("Tool X"/"tool-x"/"tool_x" → tool_x).
     # Ohne diesen Check würde der MERGE einen fachlich anderen Eintrag still
     # überschreiben (Datenverlust). Existiert die ID bereits mit ANDEREM Namen →
     # nicht überschreiben, sondern den Konflikt melden.
+    # Ausnahme: gleicher Typ und der Name unterscheidet sich nur in Groß/Klein,
+    # Satzzeichen oder Leerraum — das ist dieselbe Entity in anderer Schreibweise
+    # (das LLM schreibt "Deploy auf Mystorage" statt "Deploy auf mystorage"). Dann
+    # wird aktualisiert, der gespeicherte Name bleibt.
     if existed and prev[0][0] != name:
-        return (f"⚠ ID-Kollision: '{eid}' ist bereits von '{prev[0][0]}' belegt. "
-                f"Bitte einen eindeutigeren Namen wählen — verschiedene Namen, die "
-                f"zur selben ID normalisieren, kollidieren.")
+        if type == cur_type and _name_key(prev[0][0]) == _name_key(name):
+            name = prev[0][0]
+        else:
+            return (f"⚠ ID-Kollision: '{eid}' ist bereits von '{prev[0][0]}' belegt. "
+                    f"Bitte einen eindeutigeren Namen wählen — verschiedene Namen, die "
+                    f"zur selben ID normalisieren, kollidieren.")
 
     cur_descr, cur_extra_raw, cur_ctx, cur_pinned, cur_updated = (
-        prev[0][1:] if existed else ("", "{}", "", "", ""))
+        prev[0][1:6] if existed else ("", "{}", "", "", ""))
 
     # Weggelassene Felder (None) beim Update beibehalten, beim Create defaulten.
     eff_descr = description if description is not None else (cur_descr or "")
@@ -2480,7 +2528,11 @@ def memory_add(
     _store_embedding(eid, name, eff_descr)
     verb = "Aktualisiert" if existed else "Angelegt"
     pin_marker = " 📌" if eff_pinned == "true" else ""
-    msg = f"{verb}: [{type}] {name}{pin_marker}"
+    msg = f"{verb}: [{type}] {name}{pin_marker}{type_note}"
+    if type == "Task" and base_extra.get("status") != "erledigt":
+        proj = _auto_link_project(eid, name, eff_descr, ts)
+        if proj:
+            msg += f" → TEIL_VON {proj}"
 
     if supersedes.strip():
         old_id = _id(supersedes)
@@ -3457,13 +3509,22 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
                {_ctx_clause('t', context)}
                {_archived_clause('t', include_archived)}
                OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
-               RETURN t.name, t.descr, t.extra, p.name
+               RETURN t.name, t.descr, t.extra, p.name, p.archived
                ORDER BY t.updated_at DESC""",
             ctx_param,
         )
     )
+    # Archivierte Projekte zählen nicht: ein Task an einem weggemergten Pseudo-Projekt
+    # erschien sonst als eigene Gruppe. Hat ein Task noch ein lebendes Projekt, fällt
+    # seine Zeile "ohne Projekt" weg — sonst stünde er doppelt da.
+    rows = [(n, d, e, None if pa == "true" else p) for n, d, e, p, pa in rows]
+    has_proj = {n for n, _d, _e, p in rows if p}
+    seen: set = set()
     out: list[tuple] = []
     for name, descr, extra_s, proj in rows:
+        if (proj is None and name in has_proj) or (name, proj) in seen:
+            continue
+        seen.add((name, proj))
         try:
             raw_status = json.loads(extra_s or "{}").get("status")
         except json.JSONDecodeError:
@@ -3495,14 +3556,17 @@ def _task_rows_full(context: str, include_archived: bool) -> list[dict]:
                {_ctx_clause('t', context)}
                {_archived_clause('t', include_archived)}
                OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
-               RETURN t.name, t.descr, t.extra, p.name, t.context, t.archived, t.updated_at
+               RETURN t.name, t.descr, t.extra, p.name, t.context, t.archived, t.updated_at,
+                      p.archived
                ORDER BY t.updated_at DESC""",
             ctx_param,
         )
     )
     out: list[dict] = []
     by_name: dict[str, dict] = {}
-    for name, descr, extra_s, proj, ctx, arch, updated in rows:
+    for name, descr, extra_s, proj, ctx, arch, updated, p_arch in rows:
+        if p_arch == "true":
+            proj = None
         item = by_name.get(name)
         if item is None:
             try:
@@ -3680,6 +3744,12 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
     return "\n\n".join(sections)
 
 
+def _one_line(text: Optional[str]) -> str:
+    """Zeilenumbrüche raus: ein mehrzeiliger descr zerriss sonst die Zeilenliste, und
+    Parser (Extractor, Hooks) lasen die Fortsetzung als eigene Zeile."""
+    return " ".join((text or "").split())
+
+
 def memory_list(type: str = "", context: str = "", include_archived: bool = False) -> str:
     """Alle Entities auflisten, optional nach Typ und/oder Context gefiltert.
 
@@ -3697,7 +3767,7 @@ def memory_list(type: str = "", context: str = "", include_archived: bool = Fals
                 f"""MATCH (e:Entity {{type: $type}})
                    {_ctx_clause('e', context, where=True)}
                    {_archived_clause('e', include_archived, where=not context)}
-                   RETURN e.name, e.descr, e.updated_at, e.context
+                   RETURN e.name, e.descr, e.updated_at, e.context, e.extra
                    ORDER BY e.name""",
                 params,
             )
@@ -3708,7 +3778,15 @@ def memory_list(type: str = "", context: str = "", include_archived: bool = Fals
         for r in rows:
             ctx_tag = r[3] or ""
             ctx_str = f" `[{ctx_tag}]`" if ctx_tag else ""
-            lines.append(f"- **{r[0]}**{ctx_str}: {r[1][:80]}  _({r[2][:10]})_")
+            # Task-Status mit ausgeben: der Extractor gibt die Liste als "Bekannte
+            # Tasks" ans Modell — ohne Status hielt es erledigte Tasks für offen.
+            st = ""
+            if type == "Task":
+                try:
+                    st = f" [{_canon_status(json.loads(r[4] or '{}').get('status'))[0]}]"
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    st = ""
+            lines.append(f"- **{r[0]}**{st}{ctx_str}: {_one_line(r[1])[:80]}  _({(r[2] or '')[:10]})_")
         return "\n".join(lines)
 
     rows = _rows(
@@ -3732,7 +3810,7 @@ def memory_list(type: str = "", context: str = "", include_archived: bool = Fals
             lines.append(f"\n### {current_type}")
         ctx_tag = r[4] or ""
         ctx_str = f" `[{ctx_tag}]`" if ctx_tag else ""
-        lines.append(f"- **{r[1]}**{ctx_str}: {r[2][:80]}")
+        lines.append(f"- **{r[1]}**{ctx_str}: {_one_line(r[2])[:80]}")
     return "\n".join(lines).strip()
 
 
@@ -3998,6 +4076,22 @@ def memory_archive(name: str, compressed_description: str = "", superseded_by: s
     return msg
 
 
+def memory_unrelate(from_name: str, relation: str, to_name: str) -> str:
+    """Eine einzelne Relation löschen (gerichtet, exakter Relationsname).
+
+    Gegenstück zu memory_relate. Bisher ging das nur über memory_delete der ganzen
+    Entity — falsche Extractor-Kanten (z.B. ai-rem -[INTEGRIERT_MIT]-> Küchenplanung)
+    blieben deshalb einfach stehen.
+    """
+    fid, tid = _id(from_name), _id(to_name)
+    q = """MATCH (a:Entity {id: $fid})-[r:Rel {name: $rel}]->(b:Entity {id: $tid})"""
+    params = {"fid": fid, "rel": relation, "tid": tid}
+    if not _rows(db_exec(q + " RETURN r.name", params)):
+        return f"Relation nicht gefunden: {from_name} -[{relation}]-> {to_name}"
+    db_exec(q + " DELETE r", params)
+    return f"Gelöscht: {from_name} -[{relation}]-> {to_name}"
+
+
 def memory_merge(canonical_name: str, duplicate_name: str) -> str:
     """Dublette in den kanonischen Eintrag falten — nicht löschen, sondern archivieren.
 
@@ -4008,8 +4102,9 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
     did = _id(duplicate_name)
     if cid == did:
         return "canonical und duplicate sind identisch."
-    crow = _rows(db_exec("MATCH (e:Entity {id:$id}) RETURN e.descr", {"id": cid}))
-    drow = _rows(db_exec("MATCH (e:Entity {id:$id}) RETURN e.descr", {"id": did}))
+    q = "MATCH (e:Entity {id:$id}) RETURN e.descr, e.type, e.extra"
+    crow = _rows(db_exec(q, {"id": cid}))
+    drow = _rows(db_exec(q, {"id": did}))
     if not crow:
         return f"Canonical nicht gefunden: {canonical_name}"
     if not drow:
@@ -4017,6 +4112,25 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
     ts = _now()
     c_descr = crow[0][0] or ""
     d_descr = drow[0][0] or ""
+
+    # Erledigt gewinnt: der Nightly-Merge nimmt den zuletzt geänderten Eintrag als
+    # canonical — oft die offene Dublette, die der Extractor nach dem Abschluss
+    # neu angelegt hat. Ohne das stand die erledigte Arbeit danach wieder offen da.
+    # Vor _set_archived lesen: das Archivieren setzt die Dublette selbst auf erledigt.
+    status_note = ""
+    if crow[0][1] == "Task" and drow[0][1] == "Task":
+        try:
+            c_extra = json.loads(crow[0][2] or "{}")
+            d_extra = json.loads(drow[0][2] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            c_extra, d_extra = {}, {}
+        if (_canon_status(d_extra.get("status"))[0] == "erledigt"
+                and _canon_status(c_extra.get("status"))[0] != "erledigt"):
+            c_extra["status"] = "erledigt"
+            c_extra["done_at"] = d_extra.get("done_at") or ts
+            db_exec("MATCH (e:Entity {id:$id}) SET e.extra = $extra, e.updated_at = $ts",
+                    {"id": cid, "extra": json.dumps(c_extra, ensure_ascii=False), "ts": ts})
+            status_note = ", Status erledigt übernommen"
 
     repointed = 0
     for rname, xid in _rows(db_exec(
@@ -4027,6 +4141,11 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
         "MATCH (y:Entity)-[r:Rel]->(d:Entity {id:$d}) RETURN r.name, y.id", {"d": did})):
         if _ensure_rel(yid, rname, cid, ts):
             repointed += 1
+    # Umhängen heißt verschieben: blieben die Kanten an der Dublette, zählte ein Task
+    # weiter zum archivierten Pseudo-Projekt ("#244 — 1 offen" in get_context).
+    # Zwei gerichtete DELETEs: ladybug kann ungerichtete Kanten nicht löschen.
+    db_exec("MATCH (d:Entity {id:$d})-[r:Rel]->(:Entity) DELETE r", {"d": did})
+    db_exec("MATCH (:Entity)-[r:Rel]->(d:Entity {id:$d}) DELETE r", {"d": did})
 
     new_c_descr = c_descr
     if d_descr and d_descr not in c_descr:
@@ -4038,7 +4157,7 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
     _set_archived(did, ts)  # entfernt die Dublette inkrementell aus der Embed-Matrix
     _ensure_rel(did, "DUPLIKAT_VON", cid, ts)
     return (f"Gemergt: '{duplicate_name}' → '{canonical_name}' "
-            f"({repointed} Relationen umgehängt, Dublette archiviert + DUPLIKAT_VON)")
+            f"({repointed} Relationen umgehängt, Dublette archiviert + DUPLIKAT_VON{status_note})")
 
 
 def _purge_archived(keep_days: int = 0) -> dict:
@@ -4126,7 +4245,60 @@ def memory_normalize_task_status(dry_run: bool = True) -> str:
     return "\n".join([kopf, *geaendert]) if geaendert else kopf
 
 
+def memory_link_projects(dry_run: bool = True) -> str:
+    """Offene Tasks ohne Projekt per Projekt-Keywords zuordnen (TEIL_VON) — Backfill.
+
+    Gleiche Regel wie beim Anlegen: genau ein Projekt-Treffer → Kante, sonst bleibt
+    der Task ohne Projekt. extra.keywords am Project steuert die Treffer.
+    """
+    ts = _now()
+    linked, offen = [], []
+    seen: set = set()
+    for name, descr, _status, proj in _open_task_rows("", False):
+        if proj or name in seen:
+            continue
+        seen.add(name)
+        hit = _match_project(name, descr)
+        if not hit:
+            offen.append(name)
+            continue
+        if not dry_run:
+            _ensure_rel(_id(name), "TEIL_VON", _id(hit), ts)
+        linked.append(f"  {name} → {hit}")
+    kopf = (f"{'Trockenlauf' if dry_run else 'Verknüpft'}: {len(linked)} zugeordnet, "
+            f"{len(offen)} ohne eindeutiges Projekt")
+    rest = ["Ohne Treffer:", *(f"  {n}" for n in offen)] if offen else []
+    return "\n".join([kopf, *linked, *rest])
+
+
+def memory_project_index() -> str:
+    """Aktive Projects als JSON-Liste [{name, context, repos, dirs, keywords}].
+
+    Für die Session-Herkunft (lib/origin.py): memory_list zeigt kein extra, /export
+    holt den ganzen Graph — hier nur das, was zur Zuordnung cwd/Repo → Projekt nötig ist."""
+    rows = _rows(db_exec(
+        "MATCH (p:Entity) WHERE p.type = 'Project'" + _archived_clause("p", False)
+        + " RETURN p.name, p.context, p.extra ORDER BY p.name"))
+    out = []
+    for name, ctx, extra_raw in rows:
+        try:
+            extra = json.loads(extra_raw or "{}")
+        except (json.JSONDecodeError, TypeError):
+            extra = {}
+        if _canon_status(extra.get("status"))[0] == "erledigt":
+            continue
+
+        def _lst(v):
+            if isinstance(v, str):
+                v = [x for x in re.split(r"[,;]", v)]
+            return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
+        out.append({"name": name, "context": ctx or "", "repos": _lst(extra.get("repos")),
+                    "dirs": _lst(extra.get("dirs")), "keywords": _lst(extra.get("keywords"))})
+    return json.dumps(out, ensure_ascii=False)
+
+
 _ADMIN_TOOL_FUNCS = {
+    "memory_project_index": memory_project_index,
     "memory_preference_update": memory_preference_update,
     "memory_set_project_context": memory_set_project_context,
     "memory_search_full": memory_search_full,
@@ -4138,10 +4310,12 @@ _ADMIN_TOOL_FUNCS = {
     "memory_delete": memory_delete,
     "memory_archive": memory_archive,
     "memory_merge": memory_merge,
+    "memory_unrelate": memory_unrelate,
     "memory_purge_archived": memory_purge_archived,
     "memory_normalize_task_status": memory_normalize_task_status,
+    "memory_link_projects": memory_link_projects,
 }
-# Alle 16 Funktionen sind ueber /api/tool aufrufbar (auch die 4 Kern-Tools, damit
+# Alle 20 Funktionen sind ueber /api/tool aufrufbar (auch die 4 Kern-Tools, damit
 # die CLI/Extractor genau einen Pfad haben). Das tools/list-Surface ist davon
 # unabhaengig: die 4 Kern-Tools bleiben oben via @mcp.tool() registriert.
 _ALL_TOOL_FUNCS = {
@@ -4201,6 +4375,8 @@ CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
                           os.getenv("CLEANUP_OLLAMA_MODEL", "qwen")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "14"))
+# Offene Tasks, die so lange niemand angefasst hat, gehen als "noch aktuell?" in die Review.
+CLEANUP_TASK_STALE_DAYS = int(os.getenv("CLEANUP_TASK_STALE_DAYS", "30"))
 # Veraltungs-Check: ab wann ein Infra-Eintrag erneut gegen die Realitaet geprueft gehoert.
 CLEANUP_VERIFY_AFTER_DAYS = int(os.getenv("CLEANUP_VERIFY_AFTER_DAYS", "90"))
 CLEANUP_VERIFY_MAX_PER_RUN = int(os.getenv("CLEANUP_VERIFY_MAX_PER_RUN", "5"))
@@ -4274,6 +4450,107 @@ def _canon_status(raw) -> tuple:
 _DONE_BODY = re.compile(
     r"^\s*(?:ERLEDIGT|GELÖST|GELOEST|GEGENSTANDSLOS|ABGESCHLOSSEN|FERTIG|DONE"
     r"|OBSOLET|ÜBERHOLT|UEBERHOLT|VERWORFEN)\b", re.I)
+# Abschluss mitten im Fließtext: "PR #225 gemergt", "wurde erfolgreich deployt",
+# "ABGESCHLOSSEN 13.09.2026". Der Extractor schreibt so, statt den Status zu setzen.
+# Zu unscharf fürs Auto-Archiv — nur Vorschlag in der Review-Queue.
+_DONE_VERB = (r"(?:gemergt|gemerged|merged|erstellt|angelegt|gelöscht|geloescht|entfernt"
+              r"|durchgeführt|durchgefuehrt|deployt|deployed|geprüft|geprueft|getaggt"
+              r"|behoben|umgesetzt|erledigt|abgeschlossen|veröffentlicht|commit(?:t)?et|commited"
+              r"|gesendet|versendet|verschickt|eingetragen|übertragen|uebertragen|vereinbart"
+              r"|gebucht|bezahlt|überwiesen|ueberwiesen|zugestellt|beantwortet)")
+# Spiegel von lib/extractor._done_text (der Extractor laeuft clientseitig ohne
+# Server-Import): nacktes Partizip am Teilsatzende zaehlt ("Mail versendet."),
+# Verneinung im selben Teilsatz blockt ("noch nicht bezahlt", "steht aus").
+_DONE_HINT = re.compile(
+    r"\b(?:wurden?|ist|sind)\s+(?:\S+\s+){0,6}?" + _DONE_VERB + r"\b"
+    r"|\bPRs?\s*#?\d+(?:\s*(?:,|und|\+)\s*#?\d+)*\s+(?:wurden?\s+)?(?:gemergt|gemerged|merged)\b"
+    r"|\b(?P<bare>" + _DONE_VERB + r")"
+    r"(?:\s+(?:am\s+)?(?:\d{1,2}\.\d{1,2}\.(?:\d{2,4})?|\d{4}-\d{2}-\d{2})|\s+(?:heute|gestern))?"
+    r"(?=\s*(?:[,;:!?\n]|\.(?!\d)|$))",
+    re.I)
+_DONE_NEG = re.compile(r"\b(?:nicht|steht\s+(?:\S+\s+){0,2}?aus|ausstehend\w*|offen|fehlt|fehlen)\b",
+                       re.I)
+_CLAUSE_END = re.compile(r"[,;:!?\n]|\.(?!\d)")
+_NOT_YET = {"wird", "werden", "soll", "sollen", "muss", "müssen", "muessen", "bitte"}
+
+
+def _done_flow(text: str) -> bool:
+    for m in _DONE_HINT.finditer(text):
+        a = max((x.end() for x in _CLAUSE_END.finditer(text, 0, m.start())), default=0)
+        e = _CLAUSE_END.search(text, m.end())
+        clause = text[a:e.start() if e else len(text)]
+        if _DONE_NEG.search(clause):
+            continue
+        if m.group("bare"):
+            before = text[a:m.start("bare")].split()
+            if before and before[-1].lower() in _NOT_YET:
+                continue
+        return True
+    return False
+
+
+# Großgeschriebene Marker zählen auch mitten im Text ("#805: … GESCHLOSSEN 16.09.").
+_DONE_SHOUT = re.compile(r"\b(?:ERLEDIGT|GESCHLOSSEN|ABGESCHLOSSEN|GELÖST|GELOEST|DONE)\b")
+
+
+def _done_hint(text: str) -> bool:
+    """True, wenn der Beschreibungstext einen Abschluss meldet (Heuristik, nur für Vorschläge)."""
+    return bool(_DONE_BODY.match(text) or _done_flow(text) or _DONE_SHOUT.search(text))
+
+
+# ─── Task → Project: automatische Zuordnung ──────────────────────────────────
+# Ohne Kante landet ein Task in get_context unter "_ohne Projekt_" — und genau dort
+# landeten fast alle, weil weder Extractor noch Client je TEIL_VON setzen. Projects
+# nehmen nur mit explizitem extra.keywords teil: ein Namens-Fallback griff im Bestand
+# auf Extractor-Pseudoprojekte wie "mystorage" oder "PR 293" und ordnete falsch zu.
+def _project_keywords() -> dict:
+    """{Projektname: [keywords]} aller aktiven Projects mit gesetzten Keywords."""
+    rows = _rows(db_exec(
+        "MATCH (p:Entity) WHERE p.type = 'Project'"
+        + _archived_clause("p", False) + " RETURN p.name, p.extra"))
+    out: dict = {}
+    for name, extra_raw in rows:
+        try:
+            extra = json.loads(extra_raw or "{}")
+        except json.JSONDecodeError:
+            extra = {}
+        if _canon_status(extra.get("status"))[0] == "erledigt":
+            continue
+        kws = extra.get("keywords")
+        if isinstance(kws, str):
+            kws = [k for k in re.split(r"[,;]", kws)]
+        if not isinstance(kws, list):
+            continue
+        kws = [str(k).strip().lower() for k in kws if str(k).strip()]
+        if kws:
+            out[name] = kws
+    return out
+
+
+def _match_project(name: str, descr: str) -> Optional[str]:
+    """Genau ein passendes Projekt → dessen Name; keins oder mehrere → None (kein Raten)."""
+    text = f"{name} {descr}".lower()
+    hits = {
+        proj for proj, kws in _project_keywords().items()
+        if any(re.search(r"(?<!\w)" + re.escape(k) + r"(?!\w)", text) for k in kws)
+    }
+    return hits.pop() if len(hits) == 1 else None
+
+
+def _has_project(eid: str) -> bool:
+    return bool(_rows(db_exec(
+        "MATCH (t:Entity {id: $id})-[:Rel]-(p:Entity) WHERE p.type = 'Project' RETURN p.name",
+        {"id": eid})))
+
+
+def _auto_link_project(eid: str, name: str, descr: str, ts: str) -> Optional[str]:
+    """Task ohne Projekt-Kante per Keyword einem Projekt zuordnen (TEIL_VON)."""
+    if _has_project(eid):
+        return None
+    proj = _match_project(name, descr)
+    if proj and _ensure_rel(eid, "TEIL_VON", _id(proj), ts):
+        return proj
+    return None
 # Verderbliche Fakten: was hier matcht, kann sich in der realen Infrastruktur geaendert haben.
 _PERISHABLE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b|\bfd[0-9a-f]{2}:|"
                          r"\b[a-z][\w.-]*:\d{2,5}\b|\bports?\s*\d{2,5}|"
@@ -4679,14 +4956,21 @@ def _cleanup_candidates() -> dict:
             age = _age_days(str(e["extra"].get("done_at") or e["updated_at"]), now)
             if age is not None and age >= CLEANUP_TASK_RETENTION_DAYS:
                 auto_archive.append({"name": e["name"], "reason": f"erledigt seit {age}d"})
-        elif (e["type"] == "Task" and _DONE_BODY.match(e["descr"])
-              and not e["extra"].get("done_marker_dismissed")):
+        elif e["type"] == "Task" and not e["extra"].get("done_marker_dismissed"):
             # Erledigt-Marker steht nur im Beschreibungstext, der Status widerspricht.
             # Das wurde früher stillschweigend archiviert; Fließtext ist dafür zu
             # unzuverlässig, deshalb geht es als Vorschlag in die Review-Queue.
-            archive_review.append(
-                {"kind": "archive", "target": e["name"],
-                 "reason": f"Erledigt-Marker im Text, Status '{status}' widerspricht"})
+            # Verwerfen setzt done_marker_dismissed und gilt für beide Gründe.
+            if _done_hint(e["descr"]):
+                archive_review.append(
+                    {"kind": "archive", "target": e["name"],
+                     "reason": f"Erledigt-Marker im Text, Status '{status}' widerspricht"})
+                continue
+            age = _age_days(e["updated_at"], now)
+            if age is not None and age >= CLEANUP_TASK_STALE_DAYS:
+                archive_review.append(
+                    {"kind": "archive", "target": e["name"],
+                     "reason": f"Task seit {age} Tagen unverändert (Status '{status}') — noch aktuell?"})
 
     archived_names = {a["name"] for a in auto_archive}
     by_type: dict = {}

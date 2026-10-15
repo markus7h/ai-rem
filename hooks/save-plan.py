@@ -126,6 +126,46 @@ def newest_plan():
     return max(files, key=os.path.getmtime) if files else None
 
 
+def build_args(fm, path, existing_type=""):
+    """memory_add-Argumente fuer den Plan-Task.
+
+    Status und created nur beim Anlegen: ExitPlanMode feuert bei jeder Plan-Revision
+    erneut, und ein fest gesetztes status=offen oeffnete damit einen laengst
+    erledigten Plan-Task wieder (created sprang auf heute). Ein explizites
+    status im Frontmatter gilt weiterhin — das ist eine bewusste Angabe."""
+    extra = {"kind": "plan", "plan_file": os.path.abspath(path)}
+    if not existing_type:
+        extra["status"] = fm.get("status", "offen") or "offen"
+        extra["created"] = datetime.date.today().isoformat()
+    elif fm.get("status"):
+        extra["status"] = fm["status"]
+    return {
+        "name": fm["name"],
+        "type": "Task",
+        "description": fm.get("description", ""),
+        "extra": extra,
+        "context": "private",
+    }
+
+
+def existing_type(search_text, name):
+    """Typ des exakt gleichnamigen Eintrags aus der memory_search-Ausgabe
+    ("[Task] **Name** …"), sonst "". Exakt statt Teilstring: "Plan: X" darf nicht
+    auf "Plan: X v2" anschlagen."""
+    want = " ".join(name.split()).lower()
+    for m in re.finditer(r"^\[([^\]]+)\] \*\*(.+?)\*\*", search_text or "", re.MULTILINE):
+        if " ".join(m.group(2).split()).lower() == want:
+            return m.group(1)
+    return ""
+
+
+def _result_text(resp):
+    raw = resp.read().decode()
+    m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
+    o = json.loads(m.group(1) if m else raw)
+    return o.get("result", {}).get("content", [{}])[0].get("text", "")
+
+
 def main():
     path = newest_plan()
     if not path:
@@ -134,18 +174,6 @@ def main():
     name = fm.get("name")
     if not name:
         return  # no frontmatter / no name -> deliberately write nothing
-    args = {
-        "name": name,
-        "type": "Task",
-        "description": fm.get("description", ""),
-        "extra": {
-            "kind": "plan",
-            "status": fm.get("status", "offen") or "offen",
-            "plan_file": os.path.abspath(path),
-            "created": datetime.date.today().isoformat(),
-        },
-        "context": "private",
-    }
 
     resp = post({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -160,9 +188,19 @@ def main():
         post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid=sid).read()
     except Exception:
         pass
+    # Archivierte mitsuchen: auch ein laengst archivierter Plan-Task soll nicht
+    # wieder auf offen springen.
+    try:
+        found = existing_type(_result_text(post({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "memory_search",
+                       "arguments": {"query": name, "limit": 10, "include_archived": True}},
+        }, sid=sid)), name)
+    except Exception:
+        found = ""
     post({
-        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": {"name": "memory_add", "arguments": args},
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "memory_add", "arguments": build_args(fm, path, found)},
     }, sid=sid).read()
 
 

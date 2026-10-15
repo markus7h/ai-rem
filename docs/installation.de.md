@@ -29,7 +29,9 @@ Das Skript erledigt automatisch:
 
 **Nur ai-rem:** Ohne Build-Blöcke in `mcp_register` (`mykeyvault.stdio`, `tools.stdio.registry_url`) baut das Setup nichts und prüft bzw. installiert deshalb auch kein node/npm/git; ohne mykeyvault entfällt der Hook `vault-secret-reminder.py` (ein Eintrag aus einem früheren Lauf wird ausgetragen), und der SessionStart-Check testet nur stdio-Server, die tatsächlich registriert sind.
 
-**Plugin-Modus:** Ist in `~/.claude/settings.json` → `enabledPlugins` ein Plugin `ai-rem@…` / `mykeyvault@…` aktiv (beliebiger Marketplace, z. B. `ai-rem@tools-registry`), bringt es den MCP-Server selbst mit (`ai-rem mcp-proxy` / `ai-rem vault-mcp`). Das Setup legt dann den gleichnamigen `mcpServers`-Eintrag in `~/.claude.json` **nicht** an und entfernt einen vorhandenen mit Hinweis (auch `ai-rem update`) — es gibt nie zwei Server gleichen Namens. Hooks und Settings werden wie gewohnt installiert; ein aktives `mykeyvault`-Plugin gilt als registriert.
+**Plugin-Modus:** Ist in `~/.claude/settings.json` → `enabledPlugins` ein Plugin `ai-rem@…` / `mykeyvault@…` aktiv (beliebiger Marketplace, z. B. `ai-rem@tools-registry`), bringt es den MCP-Server selbst mit (`ai-rem mcp-proxy` / `ai-rem vault-mcp`). Das Setup legt dann den gleichnamigen `mcpServers`-Eintrag in `~/.claude.json` **nicht** an und entfernt einen vorhandenen mit Hinweis (auch `ai-rem update`) — es gibt nie zwei Server gleichen Namens. Hooks und Settings werden wie gewohnt installiert; ein aktives `mykeyvault`-Plugin gilt als registriert. Seit 1.9.0 ist das der empfohlene Weg: `ai-rem@tools-registry` und `mykeyvault@tools-registry` (2.x) aus dem Marketplace [tools-registry](https://github.com/markus7h/tools-registry) installieren (`claude plugin marketplace update tools-registry`, `claude plugin install …`, aktivieren, Claude Code neu starten); `ai-rem update` entfernt danach die doppelten `mcpServers`-Einträge (`drop_plugin_duplicates`). Die Plugins enthalten keine Secrets — der Token kommt aus dem OS-Keychain.
+
+**opencode 2.x und `cwd`:** opencode 2.x führt MCP-Server unter `mcp.servers.<name>` mit `"disabled": false` statt flach unter `mcp.<name>` mit `"enabled": true` wie 1.x (1.x-Einträge migriert es beim Laden). Gibt es `mcp.servers` schon, schreibt das Setup dorthin in 2.x-Form und entfernt flache Dubletten gleichen Namens; sonst bleibt es beim 1.x-Format (das JSONC-Snippet folgt derselben Regel). Jeder stdio-Eintrag bekommt ein festes `cwd` — `ai-rem` das Datenverzeichnis `~/.local/share/ai-rem`, `mykeyvault` den Ordner seines gebauten Entry —, weil opencode sonst sein eigenes Arbeitsverzeichnis vererbt und der Server-Start auf einem SMB-Mount in den Timeout läuft. `ai-rem update` frischt auch `mykeyvault` auf, wenn dessen Build bekannt ist (`vault_entry` in `client.json`), und baut ihn, wenn er konfiguriert ist, aber fehlt.
 
 **Das einzige, was man sich merken muss:** die URL `<SERVER_IP>:3456/setup`. Das Skript ist idempotent — mehrfaches Ausführen auf derselben Maschine ist sicher.
 
@@ -160,9 +162,4 @@ Die eigentlichen Regeln kommen aus zwei Quellen, die automatisch beim Sitzungsst
 
 Ein **PreToolUse-Guard-Hook** (`claude-md-guard.py`, vom Setup-Skript deployt) verstärkt diese Invariante: Sobald `~/.claude/CLAUDE.md` editiert wird, injiziert er einen non-blocking Hinweis, Regeln/Wissen lieber in ai-rem zu legen, statt sie still in der CLAUDE.md anzusammeln.
 
-Projekt-spezifische CLAUDE.md-Dateien setzen den Standard-Context:
-
-| Datei | Zweck |
-|---|---|
-| `~/.claude/CLAUDE.md` | Minimaler ai-rem-Pointer (verwaltet vom Setup-Skript) |
-| `work-repo/CLAUDE.md` | `context="work"` als Standard für Arbeits-Repos |
+Projekt-spezifische CLAUDE.md-Dateien braucht es für den Context nicht mehr: Projekt und Kontext einer Session werden aus Arbeitsverzeichnis und git abgeleitet — siehe [Session-Herkunft](hooks-and-automation.de.md#session-herkunft-cwd--projekt--kontext).

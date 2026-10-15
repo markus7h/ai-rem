@@ -150,7 +150,8 @@ def test_migration_raeumt_alle_klartext_stellen(legacy, tmp_path, capsys):
     assert oc["provider"] == {"litellm": {"x": 1}} and oc["mcp"]["fremd"] == {"type": "remote", "url": "u"}
     assert oc["mcp"]["ai-rem"]["type"] == "local"
     assert oc["mcp"]["ai-rem"]["command"] == [mod.LOCAL_CLI, "mcp-proxy"]
-    assert oc["mcp"]["mykeyvault"] == {"type": "local", "command": [mod.LOCAL_CLI, "vault-mcp"], "enabled": True}
+    assert oc["mcp"]["mykeyvault"] == {"type": "local", "command": [mod.LOCAL_CLI, "vault-mcp"], "enabled": True,
+                                       "cwd": os.path.dirname(VAULT_ENTRY)}
 
     # Jede entfernte Stelle genau einmal gemeldet: 3 Dateien, 2x ~/.claude.json,
     # settings.json, 3 client.json-Felder, 2x opencode.json.

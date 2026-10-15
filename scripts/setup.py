@@ -51,6 +51,11 @@ LEGACY_VAULT_ENV = os.path.join(CLAUDE_HOME, 'ai-rem-vault.env')
 # Lokale CLI-Kopie; lib/ (inkl. keychain.py) liegt daneben unter ../lib.
 LOCAL_CLI = os.path.join(HOME, '.local', 'share', 'ai-rem', 'bin', 'ai-rem')
 
+
+def airem_data_dir():
+    """~/.local/share/ai-rem — Heimat von CLI und lib/; lokal und sicher vorhanden."""
+    return os.path.dirname(os.path.dirname(LOCAL_CLI))
+
 # Windows-Konsole (cp850/cp1252) wuerde sonst an ✓/✗ scheitern.
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -932,7 +937,7 @@ def install_cli():
         return ''
     lib_dir = os.path.join(os.path.dirname(os.path.dirname(LOCAL_CLI)), 'lib')
     for name in ('__init__.py', 'mcp_client.py', 'extractor.py', 'extractor_heuristic.py',
-                 'keychain.py'):
+                 'keychain.py', 'origin.py'):
         if not fetch_to(KG_URL + '/lib/' + name, os.path.join(lib_dir, name)):
             return ''
     if not IS_WIN:
@@ -1444,13 +1449,18 @@ def opencode_mcp_entries(vault_entry, tools_entry, tools_reg_url):
     env "environment". ai-rem und mykeyvault laufen ueber die stdio-Wrapper der
     CLI — kein Token und kein {file:…} mehr in der opencode.json.
     AI_REM_CLIENT=opencode: der Proxy macht daraus X-AI-REM-Client, damit der
-    Server Entities dem richtigen Frontend zuordnet."""
+    Server Entities dem richtigen Frontend zuordnet.
+    cwd: opencode startet stdio-Server im eigenen Arbeitsverzeichnis. Liegt das auf
+    einem SMB-Mount (Projekt im Netzlaufwerk), haengt der Spawn bis zum Timeout —
+    darum ein lokales, sicher existierendes Verzeichnis fest vorgeben."""
     cmd, cargs = cli_invocation()
     entries = {'ai-rem': {'type': 'local', 'command': [cmd] + cargs + ['mcp-proxy'],
-                          'enabled': True, 'environment': {'AI_REM_CLIENT': 'opencode'}}}
+                          'enabled': True, 'cwd': airem_data_dir(),
+                          'environment': {'AI_REM_CLIENT': 'opencode'}}}
     node = shutil.which('node')  # Homebrew: /opt/homebrew/bin/node, nicht /usr/bin/node
     if vault_entry and node:
-        entry = {'type': 'local', 'command': [cmd] + cargs + ['vault-mcp'], 'enabled': True}
+        entry = {'type': 'local', 'command': [cmd] + cargs + ['vault-mcp'], 'enabled': True,
+                 'cwd': os.path.dirname(os.path.expanduser(vault_entry))}
         if os.environ.get('NODE_EXTRA_CA_CERTS'):
             entry['environment'] = {'NODE_EXTRA_CA_CERTS': os.environ['NODE_EXTRA_CA_CERTS']}
         entries['mykeyvault'] = entry
@@ -1462,11 +1472,23 @@ def opencode_mcp_entries(vault_entry, tools_entry, tools_reg_url):
     return entries
 
 
+def opencode2_entry(entry):
+    """1.x-Eintrag in die 2.x-Form: opencode 2.x kennt kein "enabled" mehr, sondern
+    "disabled" (Default false)."""
+    e = {k: v for k, v in entry.items() if k != 'enabled'}
+    e['disabled'] = not entry.get('enabled', True)
+    return e
+
+
 def merge_opencode_json(entries, only=None):
     """mcp-Eintraege und den Fallback-Pfad in opencode.json mergen. Provider, Modelle
     und fremde MCP-Server bleiben unberuehrt. JSONC mit Kommentaren wird nicht
     umgeschrieben (Kommentare gingen verloren) — dann liegt ein Snippet bereit.
-    only: nur diese Namen anfassen. Eintrag None entfernt den Server."""
+    only: nur diese Namen anfassen. Eintrag None entfernt den Server.
+    opencode 2.x fuehrt die Server unter mcp.servers.<name> (flache 1.x-Eintraege
+    mcp.<name> migriert es beim Laden). Gibt es mcp.servers schon, schreiben wir
+    dorthin in 2.x-Form und raeumen flache Dubletten gleichen Namens weg — sonst
+    bleibt es beim flachen 1.x-Format."""
     path = opencode_config_path()
     fallback = os.path.join(state_dir(), 'fallback.md')
     data = {}
@@ -1478,8 +1500,13 @@ def merge_opencode_json(entries, only=None):
         except ValueError:
             os.makedirs(SNIPPET_DIR, exist_ok=True)
             snip = os.path.join(SNIPPET_DIR, 'opencode-mcp.json')
+            # Format wie in der Datei: steht dort ein "servers"-Block, ist es 2.x.
+            if re.search(r'"servers"\s*:\s*\{', raw):
+                block = {'servers': {n: opencode2_entry(e) for n, e in entries.items() if e}}
+            else:
+                block = {n: e for n, e in entries.items() if e}
             with open(snip, 'w', encoding='utf-8') as f:
-                json.dump({'mcp': entries, 'instructions': [fallback]}, f, indent=2, ensure_ascii=False)
+                json.dump({'mcp': block, 'instructions': [fallback]}, f, indent=2, ensure_ascii=False)
             print('⚠ %s ist kein reines JSON (Kommentare?) — nicht angefasst.' % path)
             print('  Den Block aus %s von Hand einfuegen.' % snip)
             return False
@@ -1488,19 +1515,28 @@ def merge_opencode_json(entries, only=None):
             shutil.copy2(path, bak)
     data.setdefault('$schema', 'https://opencode.ai/config.json')
     mcp = data.setdefault('mcp', {})
+    servers = mcp.get('servers')
+    v2 = isinstance(servers, dict)
     for name, entry in entries.items():
         if only is not None and name not in only:
             continue
-        if entry is None:
+        if v2:
+            mcp.pop(name, None)  # flache 1.x-Dublette
+            if entry is None:
+                servers.pop(name, None)
+            else:
+                servers[name] = opencode2_entry(entry)
+        elif entry is None:
             mcp.pop(name, None)
         else:
             mcp[name] = entry
+    target = servers if v2 else mcp
     instr = [i for i in data.get('instructions', [])
              if not (isinstance(i, str) and i.endswith('fallback.md')
                      and ('ai-rem' in i or 'auto-memory' in i))]
     data['instructions'] = instr + [fallback]
     write_json_atomic(path, data)
-    print('✓ %s: mcp %s' % (path, ', '.join(sorted(n for n in entries if n in mcp))))
+    print('✓ %s: mcp %s' % (path, ', '.join(sorted(n for n in entries if n in target))))
     return True
 
 
@@ -1544,10 +1580,12 @@ def install_opencode(vault_entry, tools_entry, tools_reg_url):
     install_opencode_files()
 
 
-def update_opencode():
-    # Nur ai-rem selbst nachziehen; mykeyvault/tools brauchen git+npm und bleiben
-    # beim Update wie sie sind (Neu-Einrichtung: ai-rem install --client opencode).
-    merge_opencode_json(opencode_mcp_entries('', '', ''), only=('ai-rem',))
+def update_opencode(vault_entry=''):
+    # ai-rem nachziehen, mykeyvault nur, wenn der gebaute MCP bekannt ist (client.json)
+    # und node da ist — der Eintrag selbst braucht kein git/npm. tools bleibt beim
+    # Update wie es ist (Neu-Einrichtung: ai-rem install --client opencode).
+    entries = opencode_mcp_entries(vault_entry, '', '')
+    merge_opencode_json(entries, only=tuple(n for n in ('ai-rem', 'mykeyvault') if n in entries))
     install_opencode_files()
 
 
@@ -1556,7 +1594,10 @@ def uninstall_opencode():
     try:
         with open(path, encoding='utf-8') as f:
             data = json.load(f)
-        data.get('mcp', {}).pop('ai-rem', None)
+        mcp = data.get('mcp', {})
+        mcp.pop('ai-rem', None)
+        if isinstance(mcp.get('servers'), dict):  # opencode 2.x
+            mcp['servers'].pop('ai-rem', None)
         instr = [i for i in data.get('instructions', [])
                  if not (isinstance(i, str) and i.endswith('fallback.md'))]
         if instr:
@@ -1845,7 +1886,8 @@ def update_only(targets):
     """Nur die ausgelieferten Dateien auffrischen — kein Bootstrap.
 
     Uebersprungen: register_mcp (laengst registriert), pull_secrets (SSH),
-    build_tools_mcp/build_mykeyvault_mcp (git+npm), update_claude_json,
+    build_tools_mcp (git+npm), build_mykeyvault_mcp (nur wenn vault_entry fehlt),
+    update_claude_json,
     create_entities (brauchen den Token), update_claude_md. Alles, was hier laeuft,
     ist idempotent, und fetch_to() schreibt atomar — ein Serverfehler laesst die
     bestehende Datei stehen. migrate_secrets() laeuft mit: ein Update von < 1.7
@@ -1858,14 +1900,25 @@ def update_only(targets):
     # CLI zuerst: der Keychain-Code (lib/keychain.py) kommt mit ihr.
     link_cli(install_cli())
     migrate_secrets()
+    # mykeyvault konfiguriert, aber nie gebaut (oder Build-Ordner weg): sonst bricht
+    # `ai-rem vault-mcp` mit "vault_entry fehlt — `ai-rem update` holt ihn nach" ab.
+    # Der Normalfall (Eintrag steht) bleibt ohne git/npm.
+    vault_entry = load_client_cfg().get('vault_entry') or ''
+    new_vault_entry = None
+    if ((((setup_cfg or {}).get('mcp_register') or {}).get('mykeyvault') or {}).get('stdio')
+            and not os.path.isfile(os.path.expanduser(vault_entry))):
+        print('--- mykeyvault-MCP fehlt — wird gebaut ---')
+        new_vault_entry = build_mykeyvault_mcp(setup_cfg) or None
+        vault_entry = new_vault_entry or vault_entry
     if 'claude' in targets:
         update_claude(setup_cfg, mcp_endpoint)
     if 'opencode' in targets:
         print('--- opencode ---')
-        update_opencode()
+        # Nur einen existierenden Build eintragen — nie einen toten Pfad als cwd.
+        update_opencode(vault_entry if os.path.isfile(os.path.expanduser(vault_entry)) else '')
     if 'generic' in targets:
         install_generic(mcp_endpoint)
-    record_client(mcp_endpoint, targets, setup_cfg)
+    record_client(mcp_endpoint, targets, setup_cfg, vault_entry=new_vault_entry)
     print('')
     print('Fertig. Clients neu starten - Hooks und Plugins werden nur beim Start geladen.')
 
