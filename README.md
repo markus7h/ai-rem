@@ -396,7 +396,9 @@ CI runs on every push and pull request (`.github/workflows/ci.yml`): a `ruff` ch
 critical error classes (syntax, undefined names), a `compileall` smoke, an import smoke
 against a throwaway env, the `pytest` suite under `tests/`, and an image-smoke that builds
 the Docker image, polls `/health` and runs Trivy as a gate on fixable CRITICAL/HIGH CVEs.
-`main` is protected — changes land via PR with green CI.
+`main` is protected — changes land via PR with green CI (required checks: `lint-compile`,
+`tests`, `image-smoke`). Dependabot patch/minor bumps are auto-merged once those checks
+pass (`.github/workflows/dependabot-automerge.yml`); major bumps stay manual.
 
 The image build cache is scoped per day on purpose. A fixed cache pins the
 `apt-get update && apt-get upgrade` layer — the one that picks up Debian patches — so the

@@ -8,6 +8,8 @@
 > [Upgrade von v0.8.x (Kuzu)](#upgrade-von-v08x-kuzu). Neuinstallationen sind nicht betroffen.
 
 > Release-Notes werden im [CHANGELOG.md](CHANGELOG.md) gepflegt und bei jedem Tag in die [GitHub Releases](https://github.com/markus7h/ai-rem/releases) und die Docker-Hub-Beschreibung veröffentlicht; frühe Versionen (≤ v0.1.5) sind in [docs/release-history.md](docs/release-history.md) archiviert.
+>
+> Dependabot-Updates (Patch/Minor) werden automatisch gemergt, sobald die Pflicht-Checks `lint-compile`, `tests` und `image-smoke` grün sind; Major-Updates bleiben manuell ([dependabot-automerge.yml](.github/workflows/dependabot-automerge.yml)).
 
 **ai-rem** ist ein persistentes Langzeit-Gedächtnis für KI-Coding-Agenten — **Claude Code**, **opencode** und jedes andere MCP-fähige Frontend (Codex, Gemini CLI, Cursor …) —, das als MCP-Server auf dem Heimserver läuft. Alle Frontends teilen sich denselben Graph: Was ein Agent lernt, weiß der nächste.
 Statische Memory-Dateien wie `CLAUDE.md` liegen vollständig im Kontext und sind an einzelne Projekte und Rechner gebunden. ai-rem geht effizienter vor: relevante Informationen – offene Tasks, getroffene Entscheidungen, gelöste Probleme, Projekte, genutzte Tools – liegen in einem Knowledge Graph auf dem Heimserver, werden gezielt statt komplett geladen und sind rechnerunabhängig von jeder Maschine aus verfügbar.
