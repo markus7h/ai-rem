@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory für KI-Coding-Agenten
 
-> Diese Dokumentation bezieht sich auf **[v1.10.0](https://github.com/markus7h/ai-rem/releases/tag/v1.10.0)**.
+> Diese Dokumentation bezieht sich auf **[v1.10.1](https://github.com/markus7h/ai-rem/releases/tag/v1.10.1)**.
 > Die englische [README.md](README.md) ist die kanonische, ausführlichste Referenz.
 > **v1.0.0 ersetzt das archivierte [Kuzu](https://github.com/kuzudb/kuzu) durch
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** Die Dateiformate sind **nicht**
@@ -333,6 +333,7 @@ ai-rem pair                          # nur den Token erneuern (Freigabe im Brows
 ai-rem token [--store|--forget]      # Token ausgeben / von stdin im Keychain ablegen / entfernen
 ai-rem origin [--cwd <dir>]          # Projekt/Kontext einer Session in <dir> (git-Remote, git-Mail, Zuordnung)
 ai-rem map-dir --dir <d> --project <P> [--context work|private]   # Verzeichnis ohne Repo einem Projekt zuordnen
+ai-rem unrelate <from> <REL> <to>                               # eine einzelne Relation löschen
 ```
 
 - **Claude Code:** mit aktiven Plugins `ai-rem` / `mykeyvault` (empfohlen, siehe [unten](#claude-code-plugins-statt-mcpservers)) bringen die Plugins die MCP-Server mit, und das Setup registriert nichts in `~/.claude.json`. Nur ohne Plugins (Fallback) registriert es `ai-rem` (und `mykeyvault`, falls gebaut) als **stdio**-MCP-Server in `~/.claude.json` — `ai-rem mcp-proxy` brückt mit dem Keychain-Token zum HTTP-Endpoint, `ai-rem vault-mcp` startet den Vault-MCP mit dem vom Server geholten Zugang —, sodass `~/.claude.json` weder Header noch `env`-Secret enthält; deployt die Hooks, schreibt den minimalen `CLAUDE.md`-Pointer und installiert die Slash-Commands.

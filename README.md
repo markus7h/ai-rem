@@ -1,6 +1,6 @@
 # ai-rem — Knowledge Graph Memory for AI coding agents
 
-> This documentation describes **[v1.10.0](https://github.com/markus7h/ai-rem/releases/tag/v1.10.0)**.
+> This documentation describes **[v1.10.1](https://github.com/markus7h/ai-rem/releases/tag/v1.10.1)**.
 > **v1.0.0 replaces the archived [Kuzu](https://github.com/kuzudb/kuzu) with
 > [LadybugDB](https://github.com/LadybugDB/ladybug).** The database file formats are **not**
 > compatible: upgrading from v0.8.x runs through `scripts/migrate.py` — see
@@ -39,7 +39,7 @@ At the start of each session, the agent loads the relevant context from the grap
   "deploy_host": "...", "deploy_cmd": "...", "skills": [...], "rules": [...] }
 ```
 
-**Lean tool surface.** Only **4 always-on MCP tools** (`memory_get_context`, `memory_search`, `memory_add`, `memory_relate`) sit in `tools/list` and cost per-session context; the other 15 admin ops (list, merge, archive, project-context, …) are reachable over HTTP via `POST /api/tool` or the [`ai-rem` CLI](bin/ai-rem), keeping the session footprint small. `AI_REM_ADMIN_TOOLS=1` re-exposes all of them as MCP tools.
+**Lean tool surface.** Only **4 always-on MCP tools** (`memory_get_context`, `memory_search`, `memory_add`, `memory_relate`) sit in `tools/list` and cost per-session context; the other 16 admin ops (list, merge, archive, project-context, …) are reachable over HTTP via `POST /api/tool` or the [`ai-rem` CLI](bin/ai-rem), keeping the session footprint small. `AI_REM_ADMIN_TOOLS=1` re-exposes all of them as MCP tools.
 
 → **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` set (4 always-on + 15 admin) with signatures, entity types and context separation.
 
@@ -136,7 +136,7 @@ EMBED_BACKFILL_PORTION=300                # vectors written per database session
 EMBED_RECONCILE_SEC=3600                  # how often the server backfills missing vectors (0 = startup/nightly only)
 KG_MAX_MB=4096                            # above this the embedding backfill stops writing entirely
 KG_MIN_FREE_MB=1024                       # free disk space the backfill requires before it writes
-AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 15 admin ops as MCP tools
+AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 16 admin ops as MCP tools
 AI_REM_LOG_RING=500                       # Lines of server log kept in memory for /logs
 EMBED_URL=                                # Empty = in-process embeddings; set to an OpenAI-compatible /v1/embeddings URL for an external service
 EMBED_HTTP_MODEL=bge-m3                   # Model name sent to EMBED_URL
@@ -328,6 +328,7 @@ ai-rem pair                          # renew just the token (browser approval)
 ai-rem token [--store|--forget]      # print the token / store it from stdin in the keychain / remove it
 ai-rem origin [--cwd <dir>]          # project/context a session in <dir> gets (git remote, git email, mapping)
 ai-rem map-dir --dir <d> --project <P> [--context work|private]   # map a non-repo dir to a project
+ai-rem unrelate <from> <REL> <to>                               # delete a single relation
 ```
 
 - **Claude Code:** with the `ai-rem` / `mykeyvault` plugins enabled (recommended, see [below](#claude-code-plugins-instead-of-mcpservers)) the plugins ship the MCP servers and the setup registers nothing in `~/.claude.json`. Only without plugins (fallback) it registers `ai-rem` (and `mykeyvault`, if built) as **stdio** MCP servers in `~/.claude.json` — `ai-rem mcp-proxy` bridges to the HTTP endpoint with the keychain token, `ai-rem vault-mcp` starts the vault MCP with access fetched from the server — so `~/.claude.json` holds no header and no `env` secret; deploys the hooks, writes the minimal `CLAUDE.md` pointer and installs the slash commands.

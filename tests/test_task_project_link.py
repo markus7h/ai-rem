@@ -354,3 +354,17 @@ def test_ingest_nutzt_herkunft(tmp_path, monkeypatch):
     assert rows[0][0] == "private" and "markus7h/tpl-ingestrepo" in rows[0][1]
     assert not server._rows(server.db_exec("MATCH (e:Entity {id: $id}) RETURN e.name",
                                            {"id": server._id("TPL_Pseudo-Release")}))
+
+
+def test_offene_herkunft_setzt_keinen_geratenen_kontext():
+    # Rückfrage steht noch aus (ask): kein LLM-Kontext, lieber global als falsch.
+    origin = {"project": "", "context": "", "ask": True}
+    c = _FakeClient()
+    upsert_entity(c, {"type": "Task", "name": "TPL_Ask Task", "description": "Issue umsetzen",
+                      "context": "work"}, origin, set())
+    assert c.adds and "context" not in c.adds[-1]
+    # Ohne Herkunft (alter Hook) bleibt der LLM-Kontext wie bisher.
+    c = _FakeClient()
+    upsert_entity(c, {"type": "Task", "name": "TPL_Alt Task", "description": "Issue umsetzen",
+                      "context": "work"})
+    assert c.adds[-1].get("context") == "work"

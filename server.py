@@ -77,7 +77,7 @@ class _RingHandler(logging.Handler):
 
 logging.getLogger().addHandler(_RingHandler())
 
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 # LADYBUG_* sind die aktuellen Namen; die KUZU_*-Fallbacks halten bestehende
 # .env-Dateien am Laufen (ai-rem lief bis v0.8.32 auf dem inzwischen
 # archivierten Kuzu, LadybugDB ist dessen gepflegter Fork).
@@ -3509,13 +3509,22 @@ def _open_task_rows(context: str, include_archived: bool) -> list[tuple]:
                {_ctx_clause('t', context)}
                {_archived_clause('t', include_archived)}
                OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
-               RETURN t.name, t.descr, t.extra, p.name
+               RETURN t.name, t.descr, t.extra, p.name, p.archived
                ORDER BY t.updated_at DESC""",
             ctx_param,
         )
     )
+    # Archivierte Projekte zählen nicht: ein Task an einem weggemergten Pseudo-Projekt
+    # erschien sonst als eigene Gruppe. Hat ein Task noch ein lebendes Projekt, fällt
+    # seine Zeile "ohne Projekt" weg — sonst stünde er doppelt da.
+    rows = [(n, d, e, None if pa == "true" else p) for n, d, e, p, pa in rows]
+    has_proj = {n for n, _d, _e, p in rows if p}
+    seen: set = set()
     out: list[tuple] = []
     for name, descr, extra_s, proj in rows:
+        if (proj is None and name in has_proj) or (name, proj) in seen:
+            continue
+        seen.add((name, proj))
         try:
             raw_status = json.loads(extra_s or "{}").get("status")
         except json.JSONDecodeError:
@@ -3547,14 +3556,17 @@ def _task_rows_full(context: str, include_archived: bool) -> list[dict]:
                {_ctx_clause('t', context)}
                {_archived_clause('t', include_archived)}
                OPTIONAL MATCH (t)-[:Rel]-(p:Entity {{type: 'Project'}})
-               RETURN t.name, t.descr, t.extra, p.name, t.context, t.archived, t.updated_at
+               RETURN t.name, t.descr, t.extra, p.name, t.context, t.archived, t.updated_at,
+                      p.archived
                ORDER BY t.updated_at DESC""",
             ctx_param,
         )
     )
     out: list[dict] = []
     by_name: dict[str, dict] = {}
-    for name, descr, extra_s, proj, ctx, arch, updated in rows:
+    for name, descr, extra_s, proj, ctx, arch, updated, p_arch in rows:
+        if p_arch == "true":
+            proj = None
         item = by_name.get(name)
         if item is None:
             try:
@@ -4064,6 +4076,22 @@ def memory_archive(name: str, compressed_description: str = "", superseded_by: s
     return msg
 
 
+def memory_unrelate(from_name: str, relation: str, to_name: str) -> str:
+    """Eine einzelne Relation löschen (gerichtet, exakter Relationsname).
+
+    Gegenstück zu memory_relate. Bisher ging das nur über memory_delete der ganzen
+    Entity — falsche Extractor-Kanten (z.B. ai-rem -[INTEGRIERT_MIT]-> Küchenplanung)
+    blieben deshalb einfach stehen.
+    """
+    fid, tid = _id(from_name), _id(to_name)
+    q = """MATCH (a:Entity {id: $fid})-[r:Rel {name: $rel}]->(b:Entity {id: $tid})"""
+    params = {"fid": fid, "rel": relation, "tid": tid}
+    if not _rows(db_exec(q + " RETURN r.name", params)):
+        return f"Relation nicht gefunden: {from_name} -[{relation}]-> {to_name}"
+    db_exec(q + " DELETE r", params)
+    return f"Gelöscht: {from_name} -[{relation}]-> {to_name}"
+
+
 def memory_merge(canonical_name: str, duplicate_name: str) -> str:
     """Dublette in den kanonischen Eintrag falten — nicht löschen, sondern archivieren.
 
@@ -4113,6 +4141,11 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
         "MATCH (y:Entity)-[r:Rel]->(d:Entity {id:$d}) RETURN r.name, y.id", {"d": did})):
         if _ensure_rel(yid, rname, cid, ts):
             repointed += 1
+    # Umhängen heißt verschieben: blieben die Kanten an der Dublette, zählte ein Task
+    # weiter zum archivierten Pseudo-Projekt ("#244 — 1 offen" in get_context).
+    # Zwei gerichtete DELETEs: ladybug kann ungerichtete Kanten nicht löschen.
+    db_exec("MATCH (d:Entity {id:$d})-[r:Rel]->(:Entity) DELETE r", {"d": did})
+    db_exec("MATCH (:Entity)-[r:Rel]->(d:Entity {id:$d}) DELETE r", {"d": did})
 
     new_c_descr = c_descr
     if d_descr and d_descr not in c_descr:
@@ -4277,11 +4310,12 @@ _ADMIN_TOOL_FUNCS = {
     "memory_delete": memory_delete,
     "memory_archive": memory_archive,
     "memory_merge": memory_merge,
+    "memory_unrelate": memory_unrelate,
     "memory_purge_archived": memory_purge_archived,
     "memory_normalize_task_status": memory_normalize_task_status,
     "memory_link_projects": memory_link_projects,
 }
-# Alle 19 Funktionen sind ueber /api/tool aufrufbar (auch die 4 Kern-Tools, damit
+# Alle 20 Funktionen sind ueber /api/tool aufrufbar (auch die 4 Kern-Tools, damit
 # die CLI/Extractor genau einen Pfad haben). Das tools/list-Surface ist davon
 # unabhaengig: die 4 Kern-Tools bleiben oben via @mcp.tool() registriert.
 _ALL_TOOL_FUNCS = {

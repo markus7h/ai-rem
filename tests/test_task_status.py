@@ -211,3 +211,41 @@ def test_memory_list_task_status_und_einzeilig():
     assert "Zeile eins Zeile zwei" in line
     alle = next(x for x in server.memory_list().splitlines() if "TS_Listen-Task" in x)
     assert "Zeile eins Zeile zwei" in alle
+
+
+def test_merge_verschiebt_relationen_statt_zu_kopieren():
+    server.memory_add("TS_Echtprojekt", "Project", description="echt")
+    server.memory_add("TS_Pseudo #9", "Project", description="pseudo")
+    server.memory_add("TS_Issue-Task", "Task", description="offen")
+    server.memory_relate("TS_Issue-Task", "TEIL_VON", "TS_Pseudo #9")
+    server.memory_merge("TS_Echtprojekt", "TS_Pseudo #9")
+    rels = server._rows(server.db_exec(
+        "MATCH (t:Entity {id:$id})-[r:Rel]-(p:Entity) RETURN r.name, p.name",
+        {"id": server._id("TS_Issue-Task")}))
+    assert rels == [["TEIL_VON", "TS_Echtprojekt"]] or rels == [("TEIL_VON", "TS_Echtprojekt")]
+
+
+def test_archiviertes_projekt_bildet_keine_gruppe():
+    server.memory_add("TS_Lebend", "Project", description="x")
+    server.memory_add("TS_Tot", "Project", description="x")
+    server.memory_add("TS_Gruppen-Task", "Task", description="offen")
+    server.memory_relate("TS_Gruppen-Task", "TEIL_VON", "TS_Lebend")
+    server.memory_relate("TS_Gruppen-Task", "GELÖST_DURCH", "TS_Tot")
+    server.memory_archive("TS_Tot")
+    projs = {p for n, _d, _s, p in server._open_task_rows("", False) if n == "TS_Gruppen-Task"}
+    assert projs == {"TS_Lebend"}
+    server.memory_archive("TS_Lebend")
+    projs = {p for n, _d, _s, p in server._open_task_rows("", False) if n == "TS_Gruppen-Task"}
+    assert projs == {None}
+
+
+def test_unrelate_loescht_genau_eine_kante():
+    server.memory_add("TS_U_A", "Tool", description="a")
+    server.memory_add("TS_U_B", "Tool", description="b")
+    server.memory_relate("TS_U_A", "NUTZT", "TS_U_B")
+    server.memory_relate("TS_U_A", "INTEGRIERT_MIT", "TS_U_B")
+    assert server.memory_unrelate("TS_U_A", "NUTZT", "TS_U_B").startswith("Gelöscht")
+    assert server.memory_unrelate("TS_U_A", "NUTZT", "TS_U_B").startswith("Relation nicht gefunden")
+    rels = server._rows(server.db_exec(
+        "MATCH (a:Entity {id:$a})-[r:Rel]->(b:Entity) RETURN r.name", {"a": server._id("TS_U_A")}))
+    assert [r[0] for r in rels] == ["INTEGRIERT_MIT"]

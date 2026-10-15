@@ -573,7 +573,9 @@ def upsert_entity(client: MCPClient, ent: dict, origin: Optional[dict] = None,
         # ein globales Tool wird nicht privat, nur weil es in einer privaten Session vorkommt.
         if not found:
             args["context"] = o_ctx
-    elif ctx:
+    elif ctx and not (origin or {}).get("ask"):
+        # Herkunft offen (Rückfrage beim SessionStart steht noch aus): lieber global
+        # als geraten — sonst landeten KaiGuard-Tasks vor dem map-dir als [work].
         args["context"] = ctx
     res = client.call("memory_add", args)
     is_task = (stored_type or typ).lower() == "task"
