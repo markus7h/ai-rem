@@ -3,7 +3,7 @@
 # Kontrollierte Bumps laufen über Dependabot-PRs (CI-gated).
 # ponytail: nur Top-Level gepinnt — Transitive floaten noch; echtes Lockfile
 # (uv/pip-compile) erst nachrüsten, wenn ein Transitiv-Bump real beißt.
-fastmcp==4.0.10
+fastmcp==4.0.11
 ladybug==0.21.2
 numpy==2.5.3
 cryptography==50.0.2
