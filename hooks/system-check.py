@@ -3,6 +3,11 @@
 
 Order: ai-rem → SMB → MCP (functional) → Settings (auto-sync) → Tools (count)
 Config is read from ~/.claude/settings-template.json — no hardcoded paths.
+
+All checks run in parallel (daemon threads) under one overall deadline
+(DEADLINE_S): a hanging server or network shows up as "<check> ⏱" in the status
+line instead of pushing the hook into Claude Code's hook timeout, where nothing
+at all would arrive. The status line keeps the fixed order above.
 """
 import hashlib
 import json
@@ -40,7 +45,14 @@ TMPL = _load_template()
 AI_REM_ENDPOINT = os.environ.get(
     "AI_REM_ENDPOINT", TMPL.get("ai_rem_endpoint", "")
 )
-AI_REM_TIMEOUT = 5
+AI_REM_TIMEOUT = 3
+# memory_get_context dient nur der Anzeige offener Tasks: eigenes, kurzes Budget,
+# darf ausfallen, ohne den Status "ai-rem ✓" zu verlieren.
+AI_REM_CTX_TIMEOUT = 2
+# Gesamtbudget aller (parallelen) Checks. Claude bricht den Hook nach 15 s ab —
+# dann kommt gar nichts an, auch kein "ai-rem ❌".
+DEADLINE_S = 6
+ORIGIN_CLI_TIMEOUT = 4
 # LLM-Router: URL und Key liefert seit Server 1.7 /api/client-config zur Laufzeit
 # (ein Secret pro Geraet, der Rest kommt vom Server). Env hat Vorrang — gleicher
 # Vorrang wie in lib/extractor.py: AI_REM_LLAMA_URL ist der aktuelle Name,
@@ -53,29 +65,37 @@ AI_REM_LLM_URL_TMPL = TMPL.get("ollama_url", "http://mystorage.lan:11437")
 AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
 
 
-def _keychain_token():
-    """Geraete-Token aus dem OS-Keychain via lib/keychain.py. Das Modul liegt nach dem
-    Setup neben der CLI (nicht neben dem Hook), darum per Pfad laden: zuerst relativ
-    zu $AI_REM_CLI, sonst die Standard-Installation. Jeder Fehler -> "" — der
-    Sessionstart darf nie daran haengen, und Secrets werden nie geloggt."""
+def _load_lib(fname, modname, cli_paths=()):
+    """Ein Modul aus lib/ der CLI-Installation laden. Die Module liegen nach dem Setup
+    neben der CLI (nicht neben dem Hook), darum per Pfad: zuerst relativ zu
+    $AI_REM_CLI bzw. den uebergebenen CLI-Pfaden, sonst die Standard-Installation.
+    Die erste vorhandene Datei gewinnt; None, wenn keine existiert. Fehler beim
+    Ausfuehren des Moduls gehen an den Aufrufer."""
     import importlib.util
 
     cands = []
-    cli = os.environ.get("AI_REM_CLI", "")
-    if cli:
-        cands.append(os.path.join(os.path.dirname(os.path.dirname(cli)), "lib", "keychain.py"))
-    cands.append(os.path.expanduser("~/.local/share/ai-rem/lib/keychain.py"))
+    for cli in (os.environ.get("AI_REM_CLI", ""), *cli_paths):
+        if cli:
+            cands.append(os.path.join(os.path.dirname(os.path.dirname(cli)), "lib", fname))
+    cands.append(os.path.expanduser(os.path.join("~/.local/share/ai-rem/lib", fname)))
     for p in cands:
         if not os.path.isfile(p):
             continue
-        try:
-            spec = importlib.util.spec_from_file_location("ai_rem_keychain", p)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return (mod.get() or "").strip()
-        except Exception:
-            return ""
-    return ""
+        spec = importlib.util.spec_from_file_location(modname, p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    return None
+
+
+def _keychain_token():
+    """Geraete-Token aus dem OS-Keychain via lib/keychain.py. Jeder Fehler -> "" —
+    der Sessionstart darf nie daran haengen, und Secrets werden nie geloggt."""
+    try:
+        mod = _load_lib("keychain.py", "ai_rem_keychain")
+        return (mod.get() or "").strip() if mod else ""
+    except Exception:
+        return ""
 
 
 def _legacy_header_token():
@@ -119,7 +139,25 @@ MCP_STDIO_TIMEOUT = 3
 
 TOOLS_SCRIPTS = TMPL.get("tools_scripts_dir", "")
 
-results = []
+_tls = threading.local()
+
+
+class _Results(list):
+    """Statuszeilen-Sammler. Die Checks laufen parallel und haengen per
+    results.append() an; im Check-Thread landet das in dessen eigener Liste
+    (_tls.buf), damit main() sie in fester Reihenfolge zusammensetzen kann —
+    egal, welcher Check zuerst fertig wird. Ausserhalb eines Check-Threads
+    (direkter Aufruf, Tests) wie eine normale Liste."""
+
+    def append(self, item):
+        buf = getattr(_tls, "buf", None)
+        if buf is None:
+            list.append(self, item)
+        else:
+            buf.append(item)
+
+
+results = _Results()
 open_tasks_md = ""  # gefuellt von check_ai_rem(): offene Tasks/Plaene fuer die Anzeige
 ai_rem_ok = False  # True sobald die MCP-Session stand: Server erreichbar, Token gueltig
 
@@ -158,7 +196,7 @@ def check_ai_rem():
     if not AI_REM_ENDPOINT:
         return
 
-    def post(body, sid=None):
+    def post(body, sid=None, timeout=AI_REM_TIMEOUT):
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -171,7 +209,7 @@ def check_ai_rem():
             AI_REM_ENDPOINT, data=json.dumps(body).encode(),
             headers=headers, method="POST",
         )
-        return urllib.request.urlopen(req, timeout=AI_REM_TIMEOUT)
+        return urllib.request.urlopen(req, timeout=timeout)
 
     try:
         resp = post({
@@ -196,7 +234,7 @@ def check_ai_rem():
             raw = post({
                 "jsonrpc": "2.0", "id": 2, "method": "tools/call",
                 "params": {"name": name, "arguments": args or {}},
-            }, sid=sid).read().decode()
+            }, sid=sid, timeout=AI_REM_CTX_TIMEOUT).read().decode()
             m = re.search(r"^data: (.+)$", raw, re.MULTILINE)
             o = json.loads(m.group(1) if m else raw)
             return o.get("result", {}).get("content", [{}])[0].get("text", "")
@@ -479,9 +517,10 @@ def check_ollama_and_catchup():
     """llama-server-Reachability; wenn erreichbar, Catch-up der md-Fallback-Queue im
     Hintergrund anstoßen (non-blocking). Nur bei Ausfall sichtbar melden.
 
-    Rueckgabe: Hinweistext, wenn der Check ohne Key lief, weil der Server die
-    LLM-Koordinaten noch nicht liefert (< 1.7) — sonst sucht man den Fehler am
-    Router statt am Server. Geht als additionalContext rein."""
+    Rueckgabe: True, wenn der Router nicht erreichbar war und der Check ohne Key
+    lief, weil der Server die LLM-Koordinaten nicht geliefert hat — Verdacht auf
+    Server < 1.7. Ob das stimmt, haengt an ai_rem_ok (Server erreichbar?), das
+    parallel ermittelt wird; den Hinweistext baut darum _llm_hint() nach dem Join."""
     url, key, from_server = _llm_target()
     # /v1/models statt /health: am LiteLLM-Router feuert /health echte Testcalls
     # gegen alle Modelle inkl. Kimi. Dieser Check laeuft bei JEDEM SessionStart.
@@ -494,10 +533,7 @@ def check_ollama_and_catchup():
         up = False
     if not up:
         results.append("llm ❌")
-        if ai_rem_ok and not from_server and not key:
-            return ("[ai-rem] Server < 1.7 — liefert /api/client-config noch nicht, der "
-                    "LLM-Check lief darum ohne Router-Key. ai-rem-Server aktualisieren.")
-        return ""
+        return not from_server and not key
     cli = _ai_rem_cli()
     if cli:
         try:
@@ -505,6 +541,16 @@ def check_ollama_and_catchup():
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
+    return False
+
+
+def _llm_hint(old_server_suspect):
+    """Hinweis fuer additionalContext: nur, wenn der Server erreichbar ist (ai_rem_ok)
+    und trotzdem keine LLM-Koordinaten lieferte — sonst sucht man den Fehler am
+    Router statt am Server. Bei ai-rem ❌ waere der Versions-Hinweis falsch."""
+    if old_server_suspect and ai_rem_ok:
+        return ("[ai-rem] Server < 1.7 — liefert /api/client-config noch nicht, der "
+                "LLM-Check lief darum ohne Router-Key. ai-rem-Server aktualisieren.")
     return ""
 
 
@@ -603,15 +649,18 @@ def check_auto_memory():
     return fault
 
 
+def _api_base():
+    return AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp") else AI_REM_ENDPOINT.rstrip("/")
+
+
 def _api_get(path):
     """JSON von einer /api-Route holen. None bei jedem Fehler — die Checks hier
     duerfen den Sessionstart nie blockieren."""
     if not AI_REM_ENDPOINT:
         return None
-    base = AI_REM_ENDPOINT[:-4] if AI_REM_ENDPOINT.endswith("/mcp") else AI_REM_ENDPOINT.rstrip("/")
     headers = {"Authorization": f"Bearer {AI_REM_TOKEN}"} if AI_REM_TOKEN else {}
     try:
-        req = urllib.request.Request(base + path, headers=headers)
+        req = urllib.request.Request(_api_base() + path, headers=headers)
         with urllib.request.urlopen(req, timeout=3) as r:
             return json.loads(r.read().decode())
     except Exception:
@@ -710,22 +759,83 @@ def _hook_input():
         return {}
 
 
+class _HookClient:
+    """Das Stueck MCPClient, das lib/origin.py braucht (call + client_config), mit
+    Endpoint und Token des Hooks — spart den Start der CLI samt Keychain-Zugriff."""
+
+    def client_config(self):
+        cfg = _api_get("/api/client-config")
+        return cfg if isinstance(cfg, dict) else {}
+
+    def call(self, tool, args=None):
+        headers = {"Content-Type": "application/json"}
+        if AI_REM_TOKEN:
+            headers["Authorization"] = f"Bearer {AI_REM_TOKEN}"
+        req = urllib.request.Request(
+            _api_base() + "/api/tool", headers=headers, method="POST",
+            data=json.dumps({"name": tool, "arguments": args or {}}).encode())
+        with urllib.request.urlopen(req, timeout=3) as r:
+            obj = json.loads(r.read().decode())
+        if isinstance(obj, dict) and obj.get("error"):
+            raise RuntimeError(obj["error"])
+        return obj.get("result", "") if isinstance(obj, dict) else ""
+
+
+def _origin_lib(cli):
+    """lib/origin.py der installierten CLI (bzw. des Checkouts, aus dem die CLI
+    laeuft) oder None."""
+    try:
+        return _load_lib("origin.py", "ai_rem_origin",
+                         (os.path.realpath(cli),) if cli else ())
+    except Exception:
+        return None
+
+
+def _origin_in_process(mod, cwd):
+    """Herkunft direkt ueber lib/origin.py. Projects und Kontext-Regeln parallel
+    holen (je ein Server-Call), damit ein haengender Server nur einmal zaehlt.
+    Server nicht erreichbar -> origin faellt selbst auf DEFAULT_RULES/[] zurueck,
+    git-basiert kommt trotzdem ein Ergebnis."""
+    client = _HookClient()
+    box = {}
+    t = threading.Thread(target=lambda: box.update(p=mod.fetch_projects(client)), daemon=True)
+    t.start()
+    rules = mod.fetch_rules(client)
+    t.join(4)
+    return mod.resolve_origin(cwd, rules, box.get("p") or [])
+
+
+def _origin_via_cli(cli, cwd):
+    p = subprocess.run(_cli_cmd(cli, "origin", "--cwd", cwd, "--json"),
+                       capture_output=True, text=True, timeout=ORIGIN_CLI_TIMEOUT)
+    return json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
+
+
 def session_origin_section(cwd):
-    """Projekt/Kontext der Session aus cwd + git (ai-rem origin) als additionalContext.
+    """Projekt/Kontext der Session aus cwd + git (lib/origin.py) als additionalContext.
 
     Damit setzt Claude bei memory_add selbst den richtigen Kontext und haengt Tasks ans
     richtige Projekt — vorher riet das jeweils das Modell. Ohne Zuordnung (kein Repo,
     keine gespeicherte Verzeichnis-Zuordnung) einmal nachfragen und die Antwort per
-    map-dir dauerhaft ablegen. Jeder Fehler -> "" (blockiert den Sessionstart nie)."""
+    map-dir dauerhaft ablegen. Bevorzugt in-process ueber lib/origin.py; ohne lib oder
+    Endpoint ueber `ai-rem origin`. Jeder Fehler -> "" (blockiert den Sessionstart nie)."""
+    if not cwd:
+        return ""
     cli = _ai_rem_cli()
-    if not cli or not cwd:
-        return ""
-    try:
-        p = subprocess.run(_cli_cmd(cli, "origin", "--cwd", cwd, "--json"),
-                           capture_output=True, text=True, timeout=8)
-        o = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
-    except Exception:
-        return ""
+    o = None
+    mod = _origin_lib(cli) if AI_REM_ENDPOINT else None
+    if mod is not None:
+        try:
+            o = _origin_in_process(mod, cwd)
+        except Exception:
+            o = None
+    if o is None:
+        if not cli:
+            return ""
+        try:
+            o = _origin_via_cli(cli, cwd)
+        except Exception:
+            return ""
     if not isinstance(o, dict):
         return ""
     proj, ctx = o.get("project") or "", o.get("context") or ""
@@ -752,32 +862,83 @@ def session_origin_section(cwd):
     return "## Session-Herkunft\n" + "\n".join(lines)
 
 
-# check_ai_rem() ist der erste Top-Level-Aufruf — tests/test_system_check_parser.py
-# schneidet den Quelltext an dieser Zeile ab, um den Hook ohne Ausfuehrung zu laden.
-check_ai_rem()
-check_token()
-check_smb()
-check_mcp_servers()
-check_and_sync_settings()
-check_tools()
-_llm_hint = check_ollama_and_catchup()
-check_embed_pending()
-_am_fault = check_auto_memory()
-_client_stale = check_client_artifacts()
-# cwd aus dem Hook-Input; Claude startet den Hook im Projektverzeichnis, darum getcwd als Fallback.
-_origin = session_origin_section(_hook_input().get("cwd") or os.getcwd())
-_extra_ctx = "\n".join(
-    x for x in (_origin, _am_fault, _client_stale, _llm_hint, check_cleanup_pending()) if x)
+def _start(label, fn, *args):
+    """Check in einem Daemon-Thread starten. Daemon, damit ein haengender Check das
+    Prozessende nicht aufhaelt; ein ThreadPoolExecutor wuerde beim Interpreter-Ende
+    auf seine Worker warten. Fehler im Check -> keine Zeile, Rueckgabe None."""
+    job = {"label": label, "buf": [], "ret": None, "done": threading.Event()}
 
-_out = {"suppressOutput": True}
-_msg = " | ".join(results) if results else ""
-if open_tasks_md:  # offene Tasks/Plaene als eigener Block unter die Status-Zeile
-    _msg = (_msg + "\n\n" + open_tasks_md) if _msg else open_tasks_md
-if _msg:
-    _out["systemMessage"] = _msg
-if _extra_ctx:
-    _out["hookSpecificOutput"] = {
-        "hookEventName": "SessionStart", "additionalContext": _extra_ctx}
-if _msg or _extra_ctx:
-    print(json.dumps(_out))
-sys.exit(0)
+    def run():
+        _tls.buf = job["buf"]
+        try:
+            job["ret"] = fn(*args)
+        except Exception:
+            pass
+        finally:
+            job["done"].set()
+
+    threading.Thread(target=run, name=f"check-{label}", daemon=True).start()
+    return job
+
+
+def main():
+    """Alle Checks parallel, Gesamt-Deadline DEADLINE_S. Liefert das Hook-JSON als
+    dict (oder None, wenn nichts zu melden ist)."""
+    # stdin synchron lesen, bevor die Threads starten. cwd aus dem Hook-Input; Claude
+    # startet den Hook im Projektverzeichnis, darum getcwd als Fallback.
+    cwd = _hook_input().get("cwd") or os.getcwd()
+    # Reihenfolge = Reihenfolge der Statuszeile (wie vor der Parallelisierung).
+    jobs = [
+        _start("ai-rem", check_ai_rem),
+        _start("token", check_token),
+        _start("SMB", check_smb),
+        _start("MCP", check_mcp_servers),
+        _start("settings", check_and_sync_settings),
+        _start("tools", check_tools),
+        _start("llm", check_ollama_and_catchup),
+        _start("embed", check_embed_pending),
+        _start("Auto-Memory", check_auto_memory),
+        _start("client", check_client_artifacts),
+        _start("origin", session_origin_section, cwd),
+        _start("cleanup", check_cleanup_pending),
+    ]
+    end = time.monotonic() + DEADLINE_S
+    for j in jobs:
+        j["done"].wait(max(0.0, end - time.monotonic()))
+
+    lines, ret = [], {}
+    for j in jobs:
+        if j["done"].is_set():
+            lines.extend(j["buf"])
+            ret[j["label"]] = j["ret"]
+        elif j["buf"]:
+            # Teilergebnis, z.B. "ai-rem ✓", waehrend die offenen Tasks noch laden.
+            lines.extend(list(j["buf"]))
+        else:
+            lines.append(f"{j['label']} ⏱")
+
+    extra_ctx = "\n".join(x for x in (
+        ret.get("origin"), ret.get("Auto-Memory"), ret.get("client"),
+        _llm_hint(ret.get("llm")), ret.get("cleanup")) if x)
+
+    out = {"suppressOutput": True}
+    msg = " | ".join(lines)
+    if open_tasks_md:  # offene Tasks/Plaene als eigener Block unter die Status-Zeile
+        msg = (msg + "\n\n" + open_tasks_md) if msg else open_tasks_md
+    if msg:
+        out["systemMessage"] = msg
+    if extra_ctx:
+        out["hookSpecificOutput"] = {
+            "hookEventName": "SessionStart", "additionalContext": extra_ctx}
+    return out if (msg or extra_ctx) else None
+
+
+# Tests laden die Datei per exec unter eigenem __name__ — dann laeuft nichts.
+if __name__ == "__main__":
+    _out = main()
+    if _out:
+        print(json.dumps(_out))
+    sys.stdout.flush()
+    # os._exit statt sys.exit: nach der Deadline noch laufende Check-Threads
+    # (haengender Socket/Subprozess) duerfen das Prozessende nicht verzoegern.
+    os._exit(0)

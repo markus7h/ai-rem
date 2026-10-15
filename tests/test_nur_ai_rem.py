@@ -134,11 +134,10 @@ def test_main_ruft_ensure_deps_nur_bei_build(setup, monkeypatch, reg, called):
 
 def _load_system_check(monkeypatch):
     src = (ROOT / "hooks" / "system-check.py").read_text()
-    cut = src.index("\ncheck_ai_rem()\n")
     spec = importlib.util.spec_from_loader("system_check_nur", loader=None)
     sc = importlib.util.module_from_spec(spec)
     monkeypatch.setenv("AI_REM_TOKEN", "load-dummy")  # pragma: allowlist secret
-    exec(compile(src[:cut], "system-check.py", "exec"), sc.__dict__)
+    exec(compile(src, "system-check.py", "exec"), sc.__dict__)
     return sc
 
 

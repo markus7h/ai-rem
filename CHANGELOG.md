@@ -13,6 +13,13 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.10.2] – 2026-10-15
+
+### Changed
+- SessionStart hook (`system-check.py`) runs all checks in parallel under an overall 6 s deadline instead of one after another. A check that is still running at the deadline shows up as `<check> ⏱` in the status line, so a hanging server or network no longer pushes the hook into Claude Code's 15 s hook timeout (where nothing at all arrived, not even `ai-rem ❌`). Status line order and output JSON are unchanged.
+- Shorter per-call timeouts in the hook: MCP requests 5 → 3 s, `memory_get_context` (open-task display only) 2 s and allowed to fail without losing `ai-rem ✓`.
+- Session origin is resolved in-process via `lib/origin.py` with the hook's endpoint and token (projects and context rules fetched in parallel) instead of spawning `ai-rem origin`; the CLI remains the fallback (timeout 8 → 4 s).
+
 ## [1.10.1] – 2026-10-15
 
 ### Added
@@ -1124,7 +1131,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.2...HEAD
+[1.10.2]: https://github.com/markus7h/ai-rem/compare/v1.10.1...v1.10.2
 [1.10.1]: https://github.com/markus7h/ai-rem/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/markus7h/ai-rem/compare/v1.9.1...v1.10.0
 [1.9.1]: https://github.com/markus7h/ai-rem/compare/v1.9.0...v1.9.1

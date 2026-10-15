@@ -13,6 +13,12 @@ deployed by the client setup script.
 > The same applies to `scripts/setup.py` (served as `/setup.py`) and the web UI under
 > `templates/*.html`.
 
+> **SessionStart check (`system-check.py`):** all checks (ai-rem, token, SMB, MCP, settings,
+> tools, LLM, embed, Auto-Memory, client files, session origin, cleanup) run **in parallel**
+> under an overall deadline of 6 s. A check still running at the deadline appears as
+> `<check> ⏱` in the status line; the order of the status line stays fixed. That way a
+> hanging server or network never pushes the hook into Claude Code's hook timeout.
+
 ---
 
 ## Auto-Memory (PreCompact + SessionEnd → ai-rem)
@@ -70,7 +76,7 @@ Project and context of a session are **derived from the working directory and gi
 
 **Project:** the repo name from the remote (a worktree resolves to its main repo), matched against `Project` `extra.repos`, then `extra.dirs` prefixes, then a project of the same name. Without a repo or mapping the project stays open.
 
-**SessionStart:** `system-check.py` runs `ai-rem origin --cwd <cwd> --json` and adds a `## Session-Herkunft` section to `additionalContext` (which `context` to set on `memory_add`, which project tasks belong to). If the origin is unknown, Claude asks **once** via `AskUserQuestion` with suggestions and stores the answer with `ai-rem map-dir`. The home directory itself and temp/scratchpad directories never ask.
+**SessionStart:** `system-check.py` resolves the origin in-process via `lib/origin.py` (falling back to `ai-rem origin --cwd <cwd> --json`) and adds a `## Session-Herkunft` section to `additionalContext` (which `context` to set on `memory_add`, which project tasks belong to). If the origin is unknown, Claude asks **once** via `AskUserQuestion` with suggestions and stores the answer with `ai-rem map-dir`. The home directory itself and temp/scratchpad directories never ask.
 
 **Extraction:** the auto-memory hook passes `--cwd`, the opencode plugin writes `cwd` into its export, and `catchup` reads `cwd` from the transcript. The extractor then tags entities with the derived context and links new `Task`s `TEIL_VON` the origin project. It no longer creates `Project`s from the LLM output or overwrites project descriptions; only the origin project of a recognised repo is created if missing (with `extra.repos`), or gets the repo added.
 
