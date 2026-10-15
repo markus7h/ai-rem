@@ -13,6 +13,16 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.10.1] – 2026-10-15
+
+### Added
+- `memory_unrelate` admin tool and `ai-rem unrelate <from> <REL> <to>`: delete a single relation (previously only possible by deleting the whole entity).
+
+### Fixed
+- `memory_merge` now moves the duplicate's relations instead of copying them, so tasks no longer stay attached to a merged-away pseudo-project.
+- Open-task grouping in `memory_get_context` and the `/tasks` UI ignores archived projects; a task with a live project no longer also shows up under "_ohne Projekt_".
+- Extractor: while the session origin is still unknown (SessionStart question pending), new entries get no LLM-guessed context instead of a wrong `work`/`private`.
+
 ## [1.10.0] – 2026-10-14
 
 ### Added
@@ -1114,7 +1124,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/markus7h/ai-rem/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/markus7h/ai-rem/compare/v1.9.1...v1.10.0
 [1.9.1]: https://github.com/markus7h/ai-rem/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/markus7h/ai-rem/compare/v1.8.1...v1.9.0

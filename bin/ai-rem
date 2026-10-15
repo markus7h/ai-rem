@@ -77,6 +77,11 @@ def cmd_relate(c: MCPClient, a):
     _print(c.call("memory_relate", args))
 
 
+def cmd_unrelate(c: MCPClient, a):
+    _print(c.call("memory_unrelate",
+                  {"from_name": a.from_name, "relation": a.relation, "to_name": a.to_name}))
+
+
 def cmd_search(c: MCPClient, a):
     args = {"query": a.query, "limit": a.limit}
     if a.context:
@@ -786,6 +791,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("to_name")
     s.add_argument("--extra", default=None, help="JSON object")
     s.set_defaults(func=cmd_relate)
+
+    s = sub.add_parser("unrelate", help="memory_unrelate (eine Relation loeschen)")
+    s.add_argument("from_name")
+    s.add_argument("relation")
+    s.add_argument("to_name")
+    s.set_defaults(func=cmd_unrelate)
 
     s = sub.add_parser("search", help="memory_search")
     s.add_argument("query")
