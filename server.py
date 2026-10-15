@@ -4143,7 +4143,9 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
             repointed += 1
     # Umhängen heißt verschieben: blieben die Kanten an der Dublette, zählte ein Task
     # weiter zum archivierten Pseudo-Projekt ("#244 — 1 offen" in get_context).
-    db_exec("MATCH (d:Entity {id:$d})-[r:Rel]-(:Entity) DELETE r", {"d": did})
+    # Zwei gerichtete DELETEs: ladybug kann ungerichtete Kanten nicht löschen.
+    db_exec("MATCH (d:Entity {id:$d})-[r:Rel]->(:Entity) DELETE r", {"d": did})
+    db_exec("MATCH (:Entity)-[r:Rel]->(d:Entity {id:$d}) DELETE r", {"d": did})
 
     new_c_descr = c_descr
     if d_descr and d_descr not in c_descr:
