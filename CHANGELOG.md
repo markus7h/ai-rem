@@ -13,6 +13,11 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.10.3] – 2026-10-15
+
+### Fixed
+- Test suite: the WAL-guard probe test kills its child with `SIGTERM` instead of `SIGSEGV` — same code path in `_probe_open` (every signal except `SIGKILL` counts as a crash), but no more macOS crash-reporter dialog ("Python quit unexpectedly") on every local test run.
+
 ## [1.10.2] – 2026-10-15
 
 ### Changed
@@ -1131,7 +1136,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.2...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.3...HEAD
+[1.10.3]: https://github.com/markus7h/ai-rem/compare/v1.10.2...v1.10.3
 [1.10.2]: https://github.com/markus7h/ai-rem/compare/v1.10.1...v1.10.2
 [1.10.1]: https://github.com/markus7h/ai-rem/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/markus7h/ai-rem/compare/v1.9.1...v1.10.0

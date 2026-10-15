@@ -123,8 +123,11 @@ def test_segfault_beim_open_wird_erkannt(tmp_path, monkeypatch):
     _harter_tod(p, 300, 340)
     assert os.path.exists(p + ".wal"), "ohne liegengebliebene WAL testet das hier nichts"
 
+    # SIGTERM statt SIGSEGV: fuer _probe_open ist jedes Signal ausser SIGKILL
+    # derselbe Tod, aber SIGSEGV loest unter macOS bei jedem Testlauf den
+    # Crashreporter aus ("Python quit unexpectedly").
     monkeypatch.setattr(server, "_PROBE_SRC",
-                        "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)")
+                        "import os, signal; os.kill(os.getpid(), signal.SIGTERM)")
     db = server._open_database(p)
     assert _zeilen(db) == 50, "der Stand bis zum letzten Merge muss stehen"
     db.close()
