@@ -10,18 +10,16 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Hook laden ohne ihn auszufuehren: die Datei startet ihre Checks auf Modulebene,
-# darum nur den Quelltext bis zur ersten Top-Level-Ausfuehrung (check_ai_rem())
-# importieren. AI_REM_TOKEN waehrend des Ladens setzen, sonst fragt die Token-
+# Hook laden ohne ihn auszufuehren: die Checks starten nur unter
+# __name__ == "__main__", exec unter eigenem Modulnamen fuehrt nichts aus. AI_REM_TOKEN waehrend des Ladens setzen, sonst fragt die Token-
 # Aufloesung auf Modulebene den echten OS-Keychain der Entwickler-Maschine.
 _src = open(os.path.join(ROOT, "hooks", "system-check.py")).read()
-_cut = _src.index("\ncheck_ai_rem()\n")
 _spec = importlib.util.spec_from_loader("system_check_parser", loader=None)
 sc = importlib.util.module_from_spec(_spec)
 _prev_tok = os.environ.get("AI_REM_TOKEN")
 os.environ["AI_REM_TOKEN"] = "load-dummy"  # pragma: allowlist secret
 try:
-    exec(compile(_src[:_cut], "system-check.py", "exec"), sc.__dict__)
+    exec(compile(_src, "system-check.py", "exec"), sc.__dict__)
 finally:
     if _prev_tok is None:
         del os.environ["AI_REM_TOKEN"]
@@ -210,7 +208,7 @@ def test_llm_check_nutzt_url_und_key_vom_server(monkeypatch):
     seen = []
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen(seen))
     sc.results[:] = []
-    assert sc.check_ollama_and_catchup() == ""
+    assert sc.check_ollama_and_catchup() is False
     assert sc.results == []
     assert seen[0].full_url == "http://router.test:11437/v1/models"
     assert seen[0].get_header("Authorization") == "Bearer " + LLM_KEY
@@ -243,7 +241,7 @@ def test_llm_check_alter_server_hinweis(monkeypatch):
     seen = []
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen(seen, ok=False))
     sc.results[:] = []
-    hint = sc.check_ollama_and_catchup()
+    hint = sc._llm_hint(sc.check_ollama_and_catchup())
     assert sc.results == ["llm ❌"]
     assert "Server < 1.7" in hint and "aktualisieren" in hint
     assert seen[0].full_url == "http://tmpl.test:11437/v1/models"
@@ -252,7 +250,7 @@ def test_llm_check_alter_server_hinweis(monkeypatch):
     # Server gar nicht erreichbar (ai-rem ❌): kein Versions-Hinweis, der waere falsch.
     monkeypatch.setattr(sc, "ai_rem_ok", False)
     sc.results[:] = []
-    assert sc.check_ollama_and_catchup() == ""
+    assert sc._llm_hint(sc.check_ollama_and_catchup()) == ""
     assert sc.results == ["llm ❌"]
     sc.results[:] = []
 
@@ -261,6 +259,7 @@ def test_session_herkunft_abschnitt(monkeypatch):
     import subprocess
 
     monkeypatch.setattr(sc, "_ai_rem_cli", lambda: "/x/ai-rem")
+    monkeypatch.setattr(sc, "_origin_lib", lambda cli: None)  # CLI-Fallback pruefen
     seen = []
 
     def fake_run(origin):
@@ -291,3 +290,126 @@ def test_session_herkunft_abschnitt(monkeypatch):
         raise OSError("weg")
     monkeypatch.setattr(sc.subprocess, "run", boom)
     assert sc.session_origin_section("/w") == ""
+
+
+def _load_origin_lib():
+    spec = importlib.util.spec_from_file_location("origin_for_test", os.path.join(ROOT, "lib", "origin.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_session_herkunft_in_process_ohne_cli(tmp_path, monkeypatch):
+    """Mit Endpoint und lib/origin.py: kein CLI-Unterprozess, Server-Daten ueber den
+    Hook-Client (Token/Endpoint des Hooks)."""
+    import subprocess
+
+    repo = tmp_path / "demo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
+                    "git@github.com:markus7h/demo.git"], check=True)
+
+    class FakeClient:
+        def client_config(self):
+            return {"context_rules": [{"owner": "markus7h", "emails": [], "context": "private"}]}
+
+        def call(self, tool, args=None):
+            assert tool == "memory_project_index"
+            return json.dumps([{"name": "Demo-Projekt", "repos": ["markus7h/demo"]}])
+
+    monkeypatch.setattr(sc, "AI_REM_ENDPOINT", "https://x.test/mcp")
+    monkeypatch.setattr(sc, "_ai_rem_cli", lambda: "/x/ai-rem")
+    monkeypatch.setattr(sc, "_origin_lib", lambda cli: _load_origin_lib())
+    monkeypatch.setattr(sc, "_HookClient", FakeClient)
+
+    def no_cli(*a, **kw):
+        raise AssertionError("CLI darf nicht laufen")
+    monkeypatch.setattr(sc, "_origin_via_cli", no_cli)
+    out = sc.session_origin_section(str(repo))
+    assert out.startswith("## Session-Herkunft\nProjekt: Demo-Projekt · Kontext: private")
+
+
+def test_session_herkunft_in_process_fehler_faellt_auf_cli(monkeypatch):
+    class Kaputt:
+        def fetch_projects(self, c):
+            return []
+
+        def fetch_rules(self, c):
+            raise RuntimeError("weg")
+
+    monkeypatch.setattr(sc, "AI_REM_ENDPOINT", "https://x.test/mcp")
+    monkeypatch.setattr(sc, "_ai_rem_cli", lambda: "/x/ai-rem")
+    monkeypatch.setattr(sc, "_origin_lib", lambda cli: Kaputt())
+    monkeypatch.setattr(sc, "_origin_via_cli", lambda cli, cwd: {"project": "P", "context": "work"})
+    assert sc.session_origin_section("/w").startswith("## Session-Herkunft\nProjekt: P · Kontext: work")
+
+
+_CHECKS = ["check_ai_rem", "check_token", "check_smb", "check_mcp_servers",
+           "check_and_sync_settings", "check_tools", "check_ollama_and_catchup",
+           "check_embed_pending", "check_auto_memory", "check_client_artifacts",
+           "session_origin_section", "check_cleanup_pending"]
+
+
+def _stub_checks(monkeypatch, **override):
+    monkeypatch.setattr(sc, "_hook_input", lambda: {"cwd": "/w"})
+    monkeypatch.setattr(sc, "open_tasks_md", "")
+    for name in _CHECKS:
+        monkeypatch.setattr(sc, name, override.get(name, lambda *a: None))
+
+
+def test_haengender_check_haelt_den_hook_nicht_auf(monkeypatch):
+    """Ein Check, der haengt (Netz/Server weg), darf die Ausgabe nicht ueber die
+    Deadline hinaus verzoegern — er erscheint als '<name> ⏱'."""
+    import time
+
+    def haengt():
+        time.sleep(30)
+
+    def ok():
+        sc.results.append("settings ✓")
+
+    _stub_checks(monkeypatch, check_smb=haengt, check_and_sync_settings=ok,
+                 check_cleanup_pending=lambda: "[ai-rem] cleanup-hinweis")
+    monkeypatch.setattr(sc, "DEADLINE_S", 1)
+    t0 = time.monotonic()
+    out = sc.main()
+    assert time.monotonic() - t0 < sc.DEADLINE_S + 1
+    assert out["systemMessage"] == "SMB ⏱ | settings ✓"
+    assert out["hookSpecificOutput"]["additionalContext"] == "[ai-rem] cleanup-hinweis"
+    assert out["suppressOutput"] is True
+
+
+def test_reihenfolge_bleibt_trotz_paralleler_checks(monkeypatch):
+    """Die Statuszeile folgt der festen Check-Reihenfolge, nicht der Laufzeit."""
+    import time
+
+    def langsam_ai_rem():
+        time.sleep(0.3)
+        sc.results.append("ai-rem ✓")
+
+    def schnell_llm():
+        sc.results.append("llm ❌")
+        return False
+
+    _stub_checks(monkeypatch, check_ai_rem=langsam_ai_rem, check_ollama_and_catchup=schnell_llm,
+                 check_token=lambda: sc.results.append("token ✓ (Env)"),
+                 session_origin_section=lambda cwd: "## Session-Herkunft\nX",
+                 check_auto_memory=lambda: "am-fault")
+    out = sc.main()
+    assert out["systemMessage"] == "ai-rem ✓ | token ✓ (Env) | llm ❌"
+    assert out["hookSpecificOutput"]["additionalContext"] == "## Session-Herkunft\nX\nam-fault"
+    assert list(sc.results) == []  # nichts in die globale Liste durchgerutscht
+
+
+def test_ai_rem_teilergebnis_bei_langsamen_tasks(monkeypatch):
+    """Steht die MCP-Session, haengt aber memory_get_context: 'ai-rem ✓' bleibt."""
+    import time
+
+    def ai_rem():
+        sc.results.append("ai-rem ✓")
+        time.sleep(30)
+
+    _stub_checks(monkeypatch, check_ai_rem=ai_rem)
+    monkeypatch.setattr(sc, "DEADLINE_S", 0.5)
+    assert sc.main()["systemMessage"] == "ai-rem ✓"

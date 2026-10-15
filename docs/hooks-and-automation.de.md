@@ -13,6 +13,12 @@ Vault). Alle vier werden vom Client-Setup-Skript deployt.
 > Dasselbe gilt für `scripts/setup.py` (ausgeliefert als `/setup.py`) und die Web-UI unter
 > `templates/*.html`.
 
+> **SessionStart-Check (`system-check.py`):** alle Checks (ai-rem, Token, SMB, MCP, Settings,
+> Tools, LLM, Embed, Auto-Memory, Client-Dateien, Session-Herkunft, Cleanup) laufen
+> **parallel** mit einer Gesamt-Deadline von 6 s. Ein Check, der dann noch läuft, erscheint
+> als `<check> ⏱` in der Statuszeile; deren Reihenfolge bleibt fest. So treibt ein hängender
+> Server oder ein hängendes Netz den Hook nie ins Hook-Timeout von Claude Code.
+
 ---
 
 ## Auto-Memory (PreCompact + SessionEnd → ai-rem)
@@ -70,7 +76,7 @@ Projekt und Kontext einer Session werden **aus Arbeitsverzeichnis und git abgele
 
 **Projekt:** der Repo-Name aus dem Remote (ein Worktree gehört zum Haupt-Repo), abgeglichen gegen `Project` `extra.repos`, dann `extra.dirs`-Präfixe, dann ein gleichnamiges Projekt. Ohne Repo und Zuordnung bleibt das Projekt offen.
 
-**SessionStart:** `system-check.py` ruft `ai-rem origin --cwd <cwd> --json` auf und ergänzt `additionalContext` um einen Abschnitt `## Session-Herkunft` (welcher `context` bei `memory_add` zu setzen ist, zu welchem Projekt Tasks gehören). Ist die Herkunft unbekannt, fragt Claude **einmal** per `AskUserQuestion` mit Vorschlägen und legt die Antwort mit `ai-rem map-dir` ab. Das Home-Verzeichnis selbst und Temp-/Scratchpad-Verzeichnisse fragen nie.
+**SessionStart:** `system-check.py` ermittelt die Herkunft in-process über `lib/origin.py` (Fallback: `ai-rem origin --cwd <cwd> --json`) und ergänzt `additionalContext` um einen Abschnitt `## Session-Herkunft` (welcher `context` bei `memory_add` zu setzen ist, zu welchem Projekt Tasks gehören). Ist die Herkunft unbekannt, fragt Claude **einmal** per `AskUserQuestion` mit Vorschlägen und legt die Antwort mit `ai-rem map-dir` ab. Das Home-Verzeichnis selbst und Temp-/Scratchpad-Verzeichnisse fragen nie.
 
 **Extraktion:** Der Auto-Memory-Hook übergibt `--cwd`, das opencode-Plugin schreibt `cwd` in seinen Export, und `catchup` liest `cwd` aus dem Transcript. Der Extraktor taggt Entities dann mit dem abgeleiteten Kontext und hängt neue `Task`s per `TEIL_VON` an das Herkunftsprojekt. `Project`s aus der LLM-Ausgabe legt er nicht mehr an und überschreibt keine Projekt-Beschreibungen; nur das Herkunftsprojekt eines erkannten Repos wird bei Bedarf angelegt (mit `extra.repos`) bzw. um das Repo ergänzt.
 
