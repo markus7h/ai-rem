@@ -18,6 +18,10 @@ Vault). Alle vier werden vom Client-Setup-Skript deployt.
 > **parallel** mit einer Gesamt-Deadline von 6 s. Ein Check, der dann noch läuft, erscheint
 > als `<check> ⏱` in der Statuszeile; deren Reihenfolge bleibt fest. So treibt ein hängender
 > Server oder ein hängendes Netz den Hook nie ins Hook-Timeout von Claude Code.
+> Der SMB-Check nutzt einen installierten `smb_automount`-Wächter (tools-registry): hängt
+> oder fehlt die Freigabe, wird er sofort angestoßen (`SMB ↻`), und Claude bekommt den
+> Hinweis, bei Dateifehlern `smb_automount mode=reconnect` aufzurufen. Das opencode-Plugin
+> stößt ihn beim Laden an.
 
 ---
 

@@ -13,6 +13,12 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [1.11.0] – 2026-10-18
+
+### Added
+- SMB reconnect at client start: if a `smb_automount` watchdog from the tools-registry is installed (LaunchAgent / systemd user unit `tools.smb-automount.*`), the SessionStart hook (`system-check.py`) checks the share with a bounded `stat` and, if it hangs or is missing, kicks the watchdog right away (`launchctl kickstart` / `systemctl --user start`) instead of waiting for its next interval. Status line: `SMB ✓`, `SMB ✓ (neu eingehängt)` or `SMB ↻ Wächter angestoßen` — in the last case Claude gets a hint to call `smb_automount mode=reconnect` on file errors. The share URL is read from the installed job, no extra config. Without a watchdog the old `smb` template entry (`open smb://…`) still applies.
+- opencode plugin kicks the same watchdog once when it loads (fire-and-forget, without the ai-rem CLI, which may itself live on the share).
+
 ## [1.10.3] – 2026-10-15
 
 ### Fixed
