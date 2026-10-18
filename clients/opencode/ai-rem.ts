@@ -9,6 +9,9 @@
 //   `ai-rem ingest` ins Gedächtnis extrahieren. Nur wenn seit dem letzten Ingest neue
 //   Nachrichten dazugekommen sind.
 // - session.compacted: sofort exportieren, bevor der Kontext weg ist.
+// - Plugin-Start: installierte smb_automount-Waechter (tools-registry) sofort
+//   anstossen, damit ein haengender/fehlender SMB-Mount nicht erst im naechsten
+//   Intervall repariert wird.
 // - Subagent-Sessions (parentID gesetzt) werden nie extrahiert: Sie sehen nur den
 //   Auftrag ("sende jetzt die Mail"), nicht das Ergebnis — daraus wurden offene Tasks
 //   fuer laengst erledigte Arbeit. Die Eltern-Session enthaelt alles Relevante.
@@ -20,7 +23,7 @@
 // Beide Wege normalisieren auf dasselbe Export-Format ({info:{role}, parts:[…]}), das
 // lib/extractor.py liest — Server und Extractor bleiben unberuehrt.
 import { spawn } from "node:child_process"
-import { mkdirSync, writeFileSync, existsSync } from "node:fs"
+import { mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -42,6 +45,33 @@ function runCli(args: string[]): void {
     child.unref()
   } catch {
     // CLI nicht startbar: still bleiben, opencode darf nicht hängen.
+  }
+}
+
+// smb_automount-Waechter (LaunchAgent bzw. systemd-user-Unit) einmal laufen lassen.
+// Fire-and-forget: laeuft er schon, ist kickstart/start ein No-op. Bewusst ohne die
+// ai-rem-CLI — die kann selbst auf dem haengenden Mount liegen.
+function kickSmb(): void {
+  const mac = process.platform === "darwin"
+  if (!mac && process.platform !== "linux") return
+  const dir = mac ? join(HOME, "Library", "LaunchAgents") : join(HOME, ".config", "systemd", "user")
+  const suffix = mac ? ".plist" : ".service"
+  let names: string[] = []
+  try {
+    names = readdirSync(dir).filter((n) => n.startsWith("tools.smb-automount.") && n.endsWith(suffix))
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const label = name.slice(0, -suffix.length)
+    const [cmd, argv] = mac
+      ? ["launchctl", ["kickstart", `gui/${process.getuid!()}/${label}`]]
+      : ["systemctl", ["--user", "start", "--no-block", `${label}.service`]]
+    try {
+      spawn(cmd as string, argv as string[], { detached: true, stdio: "ignore" }).unref()
+    } catch {
+      // launchctl/systemctl fehlt: still bleiben.
+    }
   }
 }
 
@@ -91,6 +121,7 @@ function normalize(raw: any[]): Msg[] {
 // cwd: Arbeitsverzeichnis der Instanz — daraus leitet der Extractor Projekt (Repo) und
 // Kontext (git-Remote/-Mail) ab, statt das LLM raten zu lassen (lib/origin.py).
 function createCore(getMessages: (sessionID: string) => Promise<any[]>, cwd: string) {
+  kickSmb()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const ingested = new Map<string, number>() // sessionID → Nachrichtenzahl beim letzten Ingest
   const segment = new Map<string, number>() // sessionID → Compaction-Zaehler (eigene Datei je Abschnitt)

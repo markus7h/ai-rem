@@ -18,6 +18,9 @@ deployed by the client setup script.
 > under an overall deadline of 6 s. A check still running at the deadline appears as
 > `<check> ⏱` in the status line; the order of the status line stays fixed. That way a
 > hanging server or network never pushes the hook into Claude Code's hook timeout.
+> The SMB check uses an installed `smb_automount` watchdog (tools-registry): a hanging or
+> missing share kicks it immediately (`SMB ↻`), and Claude is told to call
+> `smb_automount mode=reconnect` on file errors. The opencode plugin kicks it on load.
 
 ---
 

@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import re
 import subprocess
 import sys
@@ -133,6 +134,16 @@ SMB_CFG = TMPL.get("smb", {})
 SMB_MOUNT = SMB_CFG.get("mount", "")
 SMB_URL = SMB_CFG.get("url", "")
 SMB_RETRIES = 5
+# Waechter aus der tools-registry (smb_automount mode=apply): LaunchAgent bzw.
+# systemd-user-Unit mit diesem Label-Praefix. Der Hook stoesst ihn nur an.
+SMB_JOB_PREFIX = "tools.smb-automount."
+SMB_STAT_TIMEOUT = 2
+# Gesamtbudget je Freigabe inkl. Nachpollen — muss unter DEADLINE_S bleiben, sonst
+# geht der Hinweis fuer Claude verloren und die Zeile zeigt nur "SMB ⏱".
+SMB_BUDGET_S = 4.5
+SMB_HINT = ("SMB-Freigabe {url} hängt oder fehlt — der Wächter ist angestoßen. "
+            "Bei Dateifehlern unter {mp} (Timeout, 'Resource busy', Pfad fehlt) "
+            "das Tool smb_automount mit mode=reconnect aufrufen.")
 
 MCP_STDIO_SERVERS = TMPL.get("mcp_stdio_servers", {})
 MCP_STDIO_TIMEOUT = 3
@@ -267,7 +278,120 @@ def check_token():
     }.get(AI_REM_TOKEN_SOURCE, "token ❌ fehlt → ai-rem pair"))
 
 
+def _smb_jobs():
+    """Installierte smb_automount-Waechter: [(label, url)]. Die URL steht im Job
+    selbst — so gibt es keine zweite Konfiguration, die auseinanderlaufen kann."""
+    jobs = []
+    system = platform.system()
+    if system == "Darwin":
+        d = os.path.expanduser("~/Library/LaunchAgents")
+        suffix = ".plist"
+    elif system == "Linux":
+        d = os.path.expanduser("~/.config/systemd/user")
+        suffix = ".service"
+    else:
+        return jobs
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return jobs
+    for name in names:
+        if not (name.startswith(SMB_JOB_PREFIX) and name.endswith(suffix)):
+            continue
+        path = os.path.join(d, name)
+        try:
+            if suffix == ".plist":
+                with open(path, "rb") as f:
+                    args = plistlib.load(f).get("ProgramArguments") or []
+            else:
+                with open(path) as f:
+                    args = next((l.split("=", 1)[1].split() for l in f
+                                 if l.startswith("ExecStart=")), [])
+        except Exception:
+            continue
+        url = next((a for a in reversed(args) if a.startswith("smb://")), "")
+        if url:
+            jobs.append((name[: -len(suffix)], url))
+    return jobs
+
+
+def _smb_mountpoint(url):
+    """Mountpunkt der Freigabe smb://[user@]host/share oder ""."""
+    rest = url[len("smb://"):].split("@", 1)[-1]
+    host, _, share = rest.partition("/")
+    share = share.rstrip("/")
+    if platform.system() != "Darwin":
+        base = f"/run/user/{os.getuid()}/gvfs/smb-share:server={host},share={share}"
+        return base if os.path.isdir(base) else ""
+    try:
+        out = subprocess.check_output(["mount"], text=True, timeout=3)
+    except Exception:
+        return ""
+    for line in out.splitlines():
+        m = re.match(r"^//(?:[^@ ]*@)?(\S+) on (.+) \(smbfs", line)
+        if m and m.group(1).lower() == f"{host}/{share}".lower():
+            return m.group(2)
+    return ""
+
+
+def _smb_responsive(mp, timeout=SMB_STAT_TIMEOUT):
+    """stat mit Timeout: ein haengender SMB-Mount blockiert stat beliebig lange.
+    Der Thread ist Daemon — bleibt er haengen, raeumt os._exit am Ende ihn ab."""
+    res = []
+    t = threading.Thread(target=lambda: res.append(os.stat(mp)), daemon=True)
+    t.start()
+    t.join(max(0.1, timeout))
+    return bool(res)
+
+
+def _smb_kick(label):
+    """Waechter sofort laufen lassen. Laeuft er schon, ist das ein No-op (launchd/
+    systemd starten ihn nicht doppelt); blockiert nicht bis zum Mount."""
+    if platform.system() == "Darwin":
+        cmd = ["launchctl", "kickstart", f"gui/{os.getuid()}/{label}"]
+    else:
+        cmd = ["systemctl", "--user", "start", "--no-block", f"{label}.service"]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=2)
+        return True
+    except Exception:
+        return False
+
+
 def check_smb():
+    """SMB-Freigaben beim Start: haengt oder fehlt eine, den smb_automount-Waechter
+    sofort anstossen statt bis zu dessen naechstem Intervall zu warten. Liefert einen
+    Hinweis fuer Claude (additionalContext), wenn der Mount noch nicht zurueck ist."""
+    jobs = _smb_jobs()
+    if not jobs:
+        return _check_smb_legacy()
+    hints = []
+    for label, url in jobs:
+        tag = "SMB" if len(jobs) == 1 else f"SMB {url.rsplit('/', 1)[-1]}"
+        end = time.monotonic() + SMB_BUDGET_S
+        mp = _smb_mountpoint(url)
+        if mp and _smb_responsive(mp):
+            results.append(f"{tag} ✓")
+            continue
+        if not _smb_kick(label):
+            results.append(f"{tag} ❌")
+            continue
+        while time.monotonic() < end:
+            time.sleep(0.5)
+            mp = _smb_mountpoint(url)
+            if mp and _smb_responsive(mp, min(SMB_STAT_TIMEOUT, end - time.monotonic())):
+                break
+        else:
+            results.append(f"{tag} ↻ Wächter angestoßen")
+            hints.append(SMB_HINT.format(url=url, mp=mp or "dem Mountpunkt"))
+            continue
+        results.append(f"{tag} ✓ (neu eingehängt)")
+    return "\n".join(hints)
+
+
+def _check_smb_legacy():
+    """Ohne Waechter: alter Weg ueber smb-Eintrag im Template und `open smb://…`."""
     if platform.system() != "Darwin" or not SMB_MOUNT or not SMB_URL:
         return
 
@@ -918,7 +1042,7 @@ def main():
             lines.append(f"{j['label']} ⏱")
 
     extra_ctx = "\n".join(x for x in (
-        ret.get("origin"), ret.get("Auto-Memory"), ret.get("client"),
+        ret.get("SMB"), ret.get("origin"), ret.get("Auto-Memory"), ret.get("client"),
         _llm_hint(ret.get("llm")), ret.get("cleanup")) if x)
 
     out = {"suppressOutput": True}

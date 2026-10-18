@@ -413,3 +413,68 @@ def test_ai_rem_teilergebnis_bei_langsamen_tasks(monkeypatch):
     _stub_checks(monkeypatch, check_ai_rem=ai_rem)
     monkeypatch.setattr(sc, "DEADLINE_S", 0.5)
     assert sc.main()["systemMessage"] == "ai-rem ✓"
+
+
+# ── SMB: smb_automount-Waechter beim Start anstossen ─────────────────────────
+
+def _smb_setup(monkeypatch, tmp_path, mounted, after_kick=None):
+    """Fake-LaunchAgent unter tmp_path, `mount`-Ausgabe und kickstart gestubbt.
+    after_kick: Mount-Zustand nach dem Anstossen (None = unveraendert)."""
+    import plistlib
+    import subprocess as sp
+    la = tmp_path / "Library" / "LaunchAgents"
+    la.mkdir(parents=True)
+    label = "tools.smb-automount.nas.lan-share"
+    with open(la / f"{label}.plist", "wb") as f:
+        plistlib.dump({"Label": label, "ProgramArguments":
+                       ["/bin/bash", "/x/smb-automount", "smb://u@nas.lan/share"]}, f)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(sc.platform, "system", lambda: "Darwin")
+    state = {"mounted": mounted, "kicked": []}
+    line = "//u@nas.lan/share on /Volumes/share (smbfs, nodev, nosuid, mounted by u)\n"
+    monkeypatch.setattr(sc.subprocess, "check_output",
+                        lambda cmd, **k: line if state["mounted"] else "/dev/disk1 on / (apfs)\n")
+
+    def run(cmd, **k):
+        state["kicked"].append(cmd)
+        if after_kick is not None:
+            state["mounted"] = after_kick
+        return sp.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sc.subprocess, "run", run)
+    monkeypatch.setattr(sc, "_smb_responsive", lambda mp, timeout=2: mp == "/Volumes/share")
+    monkeypatch.setattr(sc, "results", sc._Results())
+    monkeypatch.setattr(sc, "SMB_BUDGET_S", 1)
+    return label, state
+
+
+def test_smb_eingehaengt_kein_anstoss(monkeypatch, tmp_path):
+    _, state = _smb_setup(monkeypatch, tmp_path, mounted=True)
+    assert sc.check_smb() == ""
+    assert list(sc.results) == ["SMB ✓"]
+    assert state["kicked"] == []
+
+
+def test_smb_fehlt_waechter_haengt_neu_ein(monkeypatch, tmp_path):
+    label, state = _smb_setup(monkeypatch, tmp_path, mounted=False, after_kick=True)
+    assert sc.check_smb() == ""
+    assert list(sc.results) == ["SMB ✓ (neu eingehängt)"]
+    assert state["kicked"][0][:2] == ["launchctl", "kickstart"]
+    assert state["kicked"][0][2].endswith("/" + label)
+
+
+def test_smb_noch_weg_hinweis_fuer_claude(monkeypatch, tmp_path):
+    _, state = _smb_setup(monkeypatch, tmp_path, mounted=False)
+    hint = sc.check_smb()
+    assert list(sc.results) == ["SMB ↻ Wächter angestoßen"]
+    assert "smb_automount" in hint and "mode=reconnect" in hint
+    assert "smb://u@nas.lan/share" in hint
+
+
+def test_smb_ohne_waechter_und_template_still(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(sc.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(sc, "SMB_MOUNT", "")
+    monkeypatch.setattr(sc, "results", sc._Results())
+    assert not sc.check_smb()
+    assert list(sc.results) == []
