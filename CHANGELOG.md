@@ -19,6 +19,10 @@ German).
 - SMB reconnect at client start: if a `smb_automount` watchdog from the tools-registry is installed (LaunchAgent / systemd user unit `tools.smb-automount.*`), the SessionStart hook (`system-check.py`) checks the share with a bounded `stat` and, if it hangs or is missing, kicks the watchdog right away (`launchctl kickstart` / `systemctl --user start`) instead of waiting for its next interval. Status line: `SMB ✓`, `SMB ✓ (neu eingehängt)` or `SMB ↻ Wächter angestoßen` — in the last case Claude gets a hint to call `smb_automount mode=reconnect` on file errors. The share URL is read from the installed job, no extra config. Without a watchdog the old `smb` template entry (`open smb://…`) still applies.
 - opencode plugin kicks the same watchdog once when it loads (fire-and-forget, without the ai-rem CLI, which may itself live on the share).
 
+### Changed
+- CI: Dependabot patch/minor bumps are merged automatically once checks pass (#170).
+- Dependency bumps: `fastmcp` 4.0.10 → 4.0.11 → 4.1.0 (#161, #173), `fastembed` 0.8.1 → 0.9.0 (#174), `numpy` 2.5.3 → 2.5.4 (#172).
+
 ## [1.10.3] – 2026-10-15
 
 ### Fixed
@@ -1142,7 +1146,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.10.3...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/markus7h/ai-rem/compare/v1.10.3...v1.11.0
 [1.10.3]: https://github.com/markus7h/ai-rem/compare/v1.10.2...v1.10.3
 [1.10.2]: https://github.com/markus7h/ai-rem/compare/v1.10.1...v1.10.2
 [1.10.1]: https://github.com/markus7h/ai-rem/compare/v1.10.0...v1.10.1
