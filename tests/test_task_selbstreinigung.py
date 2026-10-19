@@ -84,7 +84,7 @@ def test_extractor_filtert_arbeitsschritte():
 
 
 def test_extractor_laesst_echte_tasks_durch():
-    for name in ("doc-graph: Failed-Docs sichtbar machen + Retry",
+    for name in ("projekt-x: Failed-Docs sichtbar machen + Retry",
                  "Silbersee #463: Beziehungsschluessel auf int64",
                  "Reisekostenabrechnung erstellen", "Statusbericht für Thomas"):
         assert not is_step_task(name, "Task"), name

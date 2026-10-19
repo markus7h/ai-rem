@@ -93,7 +93,7 @@ ruff noch ein Test je gesehen hat. Als Dateien werden sie normal geprüft.
 | Vaultwarden | mystorage | 8222→80 | `https://mykeyvault.lan` (Caddy, alle übrigen Pfade) | Eigentlicher Secrets-Store |
 | tools-registry | mystorage | 3457 | reines HTTP (LAN-only, keine Auth) | Verteilt die Scripts (`/registry`, `/registry/file`) |
 | tools-registry | Mac (lokal) | — | MCP stdio (Node-Prozess) | Registriert Scripts als Tools; pollt den Registry alle 5 s |
-| LiteLLM-Router | mystorage | 11437 | HTTP (OpenAI-kompatibel) | Transcript-Extraktion + Nightly-Cleanup-Urteile für ai-rem. Routet auf die GPU-Hosts myai/myubuntu und fällt auf Kimi zurück, wenn beide schlafen (Container `llm-gateway`, geteilt mit doc-graph/case-assist/paperless-ai) |
+| LiteLLM-Router | mystorage | 11437 | HTTP (OpenAI-kompatibel) | Transcript-Extraktion + Nightly-Cleanup-Urteile für ai-rem. Routet auf die GPU-Hosts myai/myubuntu und fällt auf Kimi zurück, wenn beide schlafen (Container `llm-gateway`, geteilt mit weiteren Diensten/paperless-ai) |
 | Caddy | mystorage | — | Reverse-Proxy, `tls internal` | Terminiert TLS für alle `*.lan`-Endpunkte |
 
 **Auth:** ai-rem und mykeyvault-mcp teilen sich denselben Bearer-Token (`ai-rem-api-token`, als `MCP_AUTH_TOKEN`); `vault-api` verwendet ihn als `VAULT_API_TOKEN`. Der Token stammt aus Vaultwarden; der Server bekommt ihn per `deploy.sh` in die `.env`, Clients einmal per Geräte-Kopplung (oder SSH) in den OS-Keychain. Vault-Zugang und LLM-Router-Key holen Clients seit 1.7 pro Lauf über `GET /api/client-config`, gespeichert wird davon nichts.

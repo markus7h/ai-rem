@@ -543,7 +543,7 @@ def _run_proxy(proxy: "_McpProxy") -> None:
     os._exit(code)
 
 
-# ── Fremddienste (doc-graph, case-assist, …) ───────────────────────────────
+# ── Fremddienste ─────────────────────────────────────────────────────────
 # Gleiches Modell wie ai-rem selbst, serverseitig ueber lib/svc_auth.py: Token per
 # Kopplung holen, im Keychain ablegen (Konto svc-<name>), MCP-Frontends starten
 # `ai-rem svc proxy <name>` statt den Token in ihre Config zu schreiben. Die
@@ -1120,11 +1120,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="MCP-Endpoint (Default: client.json / $AI_REM_ENDPOINT)")
     s.set_defaults(func=cmd_mcp_proxy)
 
-    s = sub.add_parser("svc", help="Fremddienste (doc-graph, case-assist): koppeln, Proxy, Token")
+    s = sub.add_parser("svc", help="Fremddienste mit svc_auth: koppeln, Proxy, Token")
     ssub = s.add_subparsers(dest="svc_cmd", required=True)
     t = ssub.add_parser("pair", help="Token per Freigabe im Browser holen")
     t.add_argument("name")
-    t.add_argument("--url", default="", help="Basis-URL des Dienstes, z.B. https://docgraph.lan")
+    t.add_argument("--url", default="", help="Basis-URL des Dienstes, z.B. https://dienst.lan")
     t.set_defaults(func=cmd_svc_pair)
     t = ssub.add_parser("proxy", help="stdio-MCP-Server fuer Claude Code/opencode")
     t.add_argument("name")

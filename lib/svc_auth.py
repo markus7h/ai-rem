@@ -1,4 +1,4 @@
-"""svc_auth — gemeinsames Auth-Gate für MCP-Dienste neben ai-rem (doc-graph, case-assist).
+"""svc_auth — gemeinsames Auth-Gate für weitere MCP-Dienste neben ai-rem.
 
 Kanonische Quelle: ai-rem/lib/svc_auth.py. In den Diensten liegt eine KOPIE — dort nicht
 ändern, sondern hier und dann `scripts/sync-svc-auth.sh` laufen lassen. Vendoring statt
