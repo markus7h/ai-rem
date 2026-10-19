@@ -92,9 +92,12 @@ def test_url_normalisierung(cli):
 
 def test_token_env_vor_keychain(cli, monkeypatch):
     cli._store["svc-demo"] = "aus-keychain"
-    assert cli._svc_token("demo") == ("aus-keychain", "Keychain (Test)")
+    assert (cli._svc_token("demo"), cli._svc_token_source("demo")) == ("aus-keychain", "Keychain (Test)")
     monkeypatch.setenv("DEMO_TOKEN", "aus-env")
-    assert cli._svc_token("demo") == ("aus-env", "Env DEMO_TOKEN")
+    assert (cli._svc_token("demo"), cli._svc_token_source("demo")) == ("aus-env", "Env DEMO_TOKEN")
+    monkeypatch.delenv("DEMO_TOKEN")
+    del cli._store["svc-demo"]
+    assert (cli._svc_token("demo"), cli._svc_token_source("demo")) == ("", "")
 
 
 def test_pair_holt_token_und_merkt_url(cli, server, monkeypatch):

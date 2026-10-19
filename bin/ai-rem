@@ -574,16 +574,23 @@ def _svc_save_url(name: str, url: str) -> None:
     os.replace(tmp, CLIENT_JSON)
 
 
-def _svc_token(name: str):
-    """(token, quelle): Env <NAME>_TOKEN → Keychain. Backend-Fehler zaehlen als „keiner“."""
+def _svc_token(name: str) -> str:
+    """Token des Dienstes: Env <NAME>_TOKEN → Keychain. Backend-Fehler zaehlen als „keiner“."""
     tok = os.environ.get(_svc_env(name), "")
     if tok:
-        return tok, f"Env {_svc_env(name)}"
+        return tok
     try:
-        tok = keychain.get(_svc_account(name))
+        return keychain.get(_svc_account(name))
     except keychain.KeychainError:
-        tok = ""
-    return (tok, f"Keychain ({keychain.backend_name()})") if tok else ("", "")
+        return ""
+
+
+def _svc_token_source(name: str) -> str:
+    """Nur die Herkunft (fuer Statuszeilen) — bewusst getrennt von _svc_token, damit
+    keine Ausgabe den Token-Wert auch nur im selben Tupel mitfuehrt."""
+    if os.environ.get(_svc_env(name)):
+        return f"Env {_svc_env(name)}"
+    return f"Keychain ({keychain.backend_name()})" if _svc_token(name) else ""
 
 
 def _svc_need_url(name: str, url: str) -> str:
@@ -654,7 +661,7 @@ def cmd_svc_pair(c: MCPClient, a):
 def cmd_svc_proxy(c: MCPClient, a):
     """`ai-rem svc proxy <name>`: stdio-MCP-Server fuer Claude Code/opencode."""
     base = _svc_need_url(a.name, a.url)
-    tok, _src = _svc_token(a.name)
+    tok = _svc_token(a.name)
     if not tok:
         print(f"ai-rem svc proxy: kein Token fuer {a.name} — `ai-rem svc pair {a.name}` ausfuehren; "
               "Requests werden mit 401 scheitern", file=sys.stderr)
@@ -682,17 +689,18 @@ def cmd_svc_token(c: MCPClient, a):
     except keychain.KeychainError as e:
         sys.stderr.write(f"ai-rem: Keychain-Fehler: {e}\n")
         sys.exit(1)
-    tok, _src = _svc_token(a.name)
+    tok = _svc_token(a.name)
     if not tok:
         sys.stderr.write(f"ai-rem: kein Token fuer {a.name} — `ai-rem svc pair {a.name}`\n")
         sys.exit(1)
-    _print(f"Bearer {tok}" if a.header else tok)
+    # Gewollte Ausgabe fuer $(ai-rem svc token …) bzw. curl — kein Log, daher stdout direkt.
+    sys.stdout.write((f"Bearer {tok}" if a.header else tok) + "\n")
 
 
 def _svc_status_lines() -> list:
     out = []
     for name, url in sorted((load_client_cfg().get("services") or {}).items()):
-        _tok, src = _svc_token(name)
+        src = _svc_token_source(name)
         out.append(f"{name}: {url} · token {('✓ ' + src) if src else '✗ → ai-rem svc pair ' + name}")
     return out
 
