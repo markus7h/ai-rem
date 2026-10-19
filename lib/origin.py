@@ -44,7 +44,7 @@ def _git(cwd: str, *args: str) -> str:
 
 def parse_remote(url: str) -> tuple:
     """(owner, name) aus https-, ssh://- und scp-artigen Remotes
-    (git@github-personal:markus7h/doc-graph.git). Bei Subgruppen zählt das letzte
+    (git@github-personal:owner/projekt.git). Bei Subgruppen zählt das letzte
     Pfadpaar; ein lokaler Pfad liefert nur den Namen."""
     url = (url or "").strip()
     if not url:

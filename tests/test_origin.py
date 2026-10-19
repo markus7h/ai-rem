@@ -40,7 +40,7 @@ def _repo(path, remote=None, email=None):
 
 def test_parse_remote_formen():
     assert parse_remote("https://github.com/markus7h/ai-rem.git") == ("markus7h", "ai-rem")
-    assert parse_remote("git@github-personal:markus7h/doc-graph.git") == ("markus7h", "doc-graph")
+    assert parse_remote("git@github-personal:markus7h/projekt-x.git") == ("markus7h", "projekt-x")
     assert parse_remote("ssh://git@host:22/Org/x.git") == ("Org", "x")
     assert parse_remote("/srv/git/foo.git") == ("", "foo")
     assert parse_remote("") == ("", "")
@@ -56,10 +56,10 @@ def test_https_remote_owner_regel(tmp_path):
 
 
 def test_ssh_alias_remote(tmp_path):
-    r = _repo(tmp_path / "dg", "git@github-work:markusth-bi/doc-graph.git")
+    r = _repo(tmp_path / "dg", "git@github-work:markusth-bi/projekt-y.git")
     (r / "sub").mkdir()
     o = resolve_origin(str(r / "sub"), RULES, [], **NO_ADHOC)
-    assert o["project"] == "doc-graph"  # Repo-Name, nicht Ordnername
+    assert o["project"] == "projekt-y"  # Repo-Name, nicht Ordnername
     assert o["context"] == "work"
 
 

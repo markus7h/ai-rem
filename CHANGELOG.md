@@ -13,10 +13,15 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
+## [Unreleased]
+
+### Changed
+- Docs, help texts and tests no longer name specific services; `scripts/sync-svc-auth.sh` takes the target repo directories as arguments.
+
 ## [1.12.0] – 2026-10-19
 
 ### Added
-- `lib/svc_auth.py`: the ai-rem security model as a reusable auth gate for other MCP services (doc-graph, case-assist). Fail-closed instance token, Bearer (constant-time), loopback only without `X-Forwarded-For`, HMAC-derived `HttpOnly/Secure/SameSite=Strict` UI cookie, device pairing (`/api/pair/*`, approval in the logged-in UI, one-time pickup, rate limit per IP). Credential checks sit behind a verifier interface so an OIDC/JWT verifier can replace the static token later. Adapters for pure ASGI (FastMCP, SSE unbuffered) and `http.server`. The services vendor a copy; `scripts/sync-svc-auth.sh` keeps it in sync (#176).
+- `lib/svc_auth.py`: the ai-rem security model as a reusable auth gate for other MCP services. Fail-closed instance token, Bearer (constant-time), loopback only without `X-Forwarded-For`, HMAC-derived `HttpOnly/Secure/SameSite=Strict` UI cookie, device pairing (`/api/pair/*`, approval in the logged-in UI, one-time pickup, rate limit per IP). Credential checks sit behind a verifier interface so an OIDC/JWT verifier can replace the static token later. Adapters for pure ASGI (FastMCP, SSE unbuffered) and `http.server`. The services vendor a copy; `scripts/sync-svc-auth.sh` keeps it in sync (#176).
 - `ai-rem svc pair|proxy|token|list <name>`: pair a service, keep its token in the OS keychain (account `svc-<name>`), and run it as a stdio MCP server for Claude Code/opencode — same flow as ai-rem itself. Base URLs live in `client.json` → `services`; `ai-rem doctor` lists them with their token status.
 
 ### Changed

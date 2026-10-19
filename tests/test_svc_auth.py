@@ -1,4 +1,4 @@
-"""lib/svc_auth: Auth-Gate fuer doc-graph/case-assist (Matrix, Cookie, Login, Kopplung, Adapter)."""
+"""lib/svc_auth: Auth-Gate fuer Fremddienste (Matrix, Cookie, Login, Kopplung, Adapter)."""
 import asyncio
 import hashlib
 import hmac
@@ -20,11 +20,11 @@ LAN = "192.168.1.20"
 def _auth(**kw):
     kw.setdefault("public_paths", ("/health",))
     kw.setdefault("https_base", "https://svc.lan")
-    return SvcAuth("doc-graph", TOKEN, **kw)
+    return SvcAuth("demo-svc", TOKEN, **kw)
 
 
 def _session(a):
-    return hmac.new(TOKEN.encode(), b"doc-graph-ui-session", hashlib.sha256).hexdigest()
+    return hmac.new(TOKEN.encode(), b"demo-svc-ui-session", hashlib.sha256).hexdigest()
 
 
 def test_matrix():
@@ -43,20 +43,20 @@ def test_matrix():
 
 def test_cookie_ist_abgeleitet_nicht_der_token():
     a = _auth()
-    assert a.cookie == "doc_graph_session"
+    assert a.cookie == "demo_svc_session"
     assert a.session_value == _session(a) != TOKEN
-    assert a.authorized("/x", LAN, {"cookie": f"foo=1; doc_graph_session={a.session_value}"})
-    assert not a.authorized("/x", LAN, {"cookie": f"doc_graph_session={TOKEN}"})
+    assert a.authorized("/x", LAN, {"cookie": f"foo=1; demo_svc_session={a.session_value}"})
+    assert not a.authorized("/x", LAN, {"cookie": f"demo_svc_session={TOKEN}"})
     # Falscher Bearer schlaegt auch bei gueltigem Cookie fehl (Header hat Vorrang).
     assert not a.authorized("/x", LAN, {"authorization": "Bearer x",
-                                        "cookie": f"doc_graph_session={a.session_value}"})
+                                        "cookie": f"demo_svc_session={a.session_value}"})
 
 
 def test_ohne_token_alles_zu():
-    a = SvcAuth("doc-graph", "")
+    a = SvcAuth("demo-svc", "")
     assert not a.configured
     assert not a.authorized("/mcp", LAN, {"authorization": "Bearer "})
-    assert not a.authorized("/mcp", LAN, {"cookie": "doc_graph_session="})
+    assert not a.authorized("/mcp", LAN, {"cookie": "demo_svc_session="})
 
 
 def test_deny_browser_vs_api():
@@ -74,7 +74,7 @@ def test_login_logout():
     r = a.handle("POST", "/login", "", {}, f"token={TOKEN}&next=//evil.com".encode(), LAN)
     h = dict(r.headers)
     assert r.status == 302 and h["Location"] == "/"
-    assert h["Set-Cookie"].startswith(f"doc_graph_session={a.session_value};")
+    assert h["Set-Cookie"].startswith(f"demo_svc_session={a.session_value};")
     for flag in ("HttpOnly", "Secure", "SameSite=Strict"):
         assert flag in h["Set-Cookie"]
     r = a.handle("GET", "/logout", "", {}, b"", LAN)
@@ -102,7 +102,7 @@ def test_pair_flow():
     # Freigabe nur eingeloggt.
     body = json.dumps({"code": s["code"].lower(), "approve": True}).encode()
     assert a.handle("POST", "/api/pair/approve", "", {}, body, LAN).status == 401
-    ck = {"cookie": f"doc_graph_session={a.session_value}"}
+    ck = {"cookie": f"demo_svc_session={a.session_value}"}
     assert a.handle("GET", "/api/pair/info", "code=" + s["code"], ck, b"", LAN).status == 200
     assert a.handle("POST", "/api/pair/approve", "", ck, body, LAN).status == 200
     assert poll() == {"state": "approved", "token": TOKEN}
@@ -114,7 +114,7 @@ def test_pair_flow():
 def test_pair_ablauf_und_ablehnung(monkeypatch):
     a = _auth()
     _, s = _start(a)
-    ck = {"cookie": f"doc_graph_session={a.session_value}"}
+    ck = {"cookie": f"demo_svc_session={a.session_value}"}
     a.handle("POST", "/api/pair/approve", "", ck,
              json.dumps({"code": s["code"], "approve": False}).encode(), LAN)
     r = a.handle("POST", "/api/pair/poll", "", {}, json.dumps({"pair_id": s["pair_id"]}).encode(), LAN)
@@ -145,7 +145,7 @@ def test_pair_seite_verlangt_login():
 def test_history_datei(tmp_path):
     a = _auth(history_path=str(tmp_path / "sub" / "paired-devices.json"))
     _, s = _start(a)
-    ck = {"cookie": f"doc_graph_session={a.session_value}"}
+    ck = {"cookie": f"demo_svc_session={a.session_value}"}
     a.handle("POST", "/api/pair/approve", "", ck, json.dumps({"code": s["code"], "approve": True}).encode(), LAN)
     assert json.loads((tmp_path / "sub" / "paired-devices.json").read_text())[0]["device"] == "mac"
 
@@ -208,7 +208,7 @@ def test_stdlib_adapter():
     assert stdlib_guard(a, h) and h.status == 401
     h = _FakeHandler("GET", "/", {"Accept": "text/html"})
     assert stdlib_guard(a, h) and h.status == 302
-    h = _FakeHandler("POST", "/delete", {"Cookie": f"doc_graph_session={a.session_value}"})
+    h = _FakeHandler("POST", "/delete", {"Cookie": f"demo_svc_session={a.session_value}"})
     assert stdlib_guard(a, h) is False                       # Handler macht weiter
     h = _FakeHandler("GET", "/x/export", {"Authorization": f"Bearer {TOKEN}"})
     assert stdlib_guard(a, h) is False

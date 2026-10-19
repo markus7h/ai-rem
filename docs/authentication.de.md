@@ -91,8 +91,8 @@ Token manuell erzeugen (ohne Vault): `openssl rand -hex 32`.
 
 ## Weitere Dienste — `svc_auth` und `ai-rem svc`
 
-doc-graph und case-assist nutzen dasselbe Modell über `lib/svc_auth.py`. Jeder Dienst
-hat eine eigene Kopie; `scripts/sync-svc-auth.sh` kopiert sie, `--check` meldet Abweichungen.
+Weitere MCP-Dienste können dasselbe Modell nutzen über `lib/svc_auth.py`. Jeder Dienst
+hat eine eigene Kopie; `scripts/sync-svc-auth.sh <verzeichnis>…` kopiert sie, `--check` meldet Abweichungen.
 Jede Instanz liest `<PREFIX>_API_TOKEN` (fail-closed), optional `<PREFIX>_PUBLIC_URL`
 (Basis für den Kopplungslink) und `<PREFIX>_UI_SESSION_TTL`. Es gelten die Regeln von
 oben: öffentliche Login-/Kopplungspfade, Loopback ohne `X-Forwarded-For`, Bearer und das
@@ -102,11 +102,11 @@ Auf dem Client übernimmt die ai-rem-CLI diese Dienste mit:
 
 | Befehl | Zweck |
 |---|---|
-| `ai-rem svc pair doc-graph --url https://docgraph.lan` | Kopplung im Browser; Token → Keychain-Konto `svc-doc-graph`, URL → `client.json` `services` |
-| `ai-rem svc proxy doc-graph` | stdio-MCP-Server für Claude Code/opencode (`<url>/mcp`) |
-| `ai-rem svc token doc-graph [--header\|--store\|--forget]` | Token ausgeben oder pflegen (`--store` liest von stdin) |
+| `ai-rem svc pair <name> --url https://<dienst>` | Kopplung im Browser; Token → Keychain-Konto `svc-<name>`, URL → `client.json` `services` |
+| `ai-rem svc proxy <name>` | stdio-MCP-Server für Claude Code/opencode (`<url>/mcp`) |
+| `ai-rem svc token <name> [--header\|--store\|--forget]` | Token ausgeben oder pflegen (`--store` liest von stdin) |
 | `ai-rem svc list` | gekoppelte Dienste und Token-Status (auch in `ai-rem doctor`) |
 
-Token-Reihenfolge: Env `<NAME>_TOKEN` (z. B. `DOC_GRAPH_TOKEN`) → Keychain. Geprüft wird
+Token-Reihenfolge: Env `<NAME>_TOKEN` (z. B. `MY_SVC_TOKEN` für `my-svc`) → Keychain. Geprüft wird
 über eine Verifier-Schnittstelle (heute `StaticTokenVerifier`). Ein späterer OIDC/JWT-Verifier
 lässt sich einstecken, ohne das Gate zu ändern.
