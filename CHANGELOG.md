@@ -13,7 +13,7 @@ Older versions: [GitHub Releases](https://github.com/markus7h/ai-rem/releases)
 (from v0.2.0) and [docs/release-history.md](docs/release-history.md) (v0.0.4–v0.1.5,
 German).
 
-## [1.12.0] – 2026-10-19
+## [Unreleased]
 
 ### Added
 - `lib/svc_auth.py`: the ai-rem security model as a reusable auth gate for other MCP services (doc-graph, case-assist). Fail-closed instance token, Bearer (constant-time), loopback only without `X-Forwarded-For`, HMAC-derived `HttpOnly/Secure/SameSite=Strict` UI cookie, device pairing (`/api/pair/*`, approval in the logged-in UI, one-time pickup, rate limit per IP). Credential checks sit behind a verifier interface so an OIDC/JWT verifier can replace the static token later. Adapters for pure ASGI (FastMCP, SSE unbuffered) and `http.server`. The services vendor a copy; `scripts/sync-svc-auth.sh` keeps it in sync.
