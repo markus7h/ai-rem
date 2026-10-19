@@ -335,8 +335,10 @@ class _McpProxy:
     ausschliesslich Protokoll."""
 
     def __init__(self, endpoint: str, token: str, client_name: str = "",
-                 stdin=None, stdout=None, timeout: float = 600.0):
+                 stdin=None, stdout=None, timeout: float = 600.0,
+                 pair_hint: str = "ai-rem pair"):
         self.endpoint = endpoint
+        self.pair_hint = pair_hint
         self.token = token
         self.client_name = client_name
         self.stdin = stdin if stdin is not None else getattr(sys.stdin, "buffer", sys.stdin)
@@ -433,9 +435,9 @@ class _McpProxy:
         except Exception:
             pass
         if e.code == 401:
-            print("ai-rem mcp-proxy: Token ungueltig (HTTP 401) — `ai-rem pair` ausfuehren",
+            print(f"ai-rem mcp-proxy: Token ungueltig (HTTP 401) — `{self.pair_hint}` ausfuehren",
                   file=sys.stderr)
-            self._emit_error(rid, -32001, "ai-rem: Token ungültig — `ai-rem pair` ausführen")
+            self._emit_error(rid, -32001, f"ai-rem: Token ungültig — `{self.pair_hint}` ausführen")
             return
         if e.code == 404 and self._sid:
             # Server neu gestartet, Session weg: Fehler durchreichen und beenden —
@@ -522,7 +524,10 @@ def cmd_mcp_proxy(c: MCPClient, a):
     # X-AI-REM-Client nur, wenn explizit gesetzt (opencode-Plugin: AI_REM_CLIENT=opencode).
     # Ohne Header nimmt der Server clientInfo.name aus dem initialize — der Default
     # "ai-rem-cli" wuerde sonst alle von Claude angelegten Entities falsch attribuieren.
-    proxy = _McpProxy(endpoint, c.token, os.environ.get("AI_REM_CLIENT", ""))
+    _run_proxy(_McpProxy(endpoint, c.token, os.environ.get("AI_REM_CLIENT", "")))
+
+
+def _run_proxy(proxy: "_McpProxy") -> None:
     code = proxy.run()
     # os._exit statt sys.exit: der stdin-Leser (Daemon-Thread) haengt beim Ausstieg
     # nach HTTP 404 noch in readline() und haelt den Lock von sys.stdin.buffer. Der
@@ -536,6 +541,172 @@ def cmd_mcp_proxy(c: MCPClient, a):
         except (OSError, ValueError):
             pass
     os._exit(code)
+
+
+# ── Fremddienste (doc-graph, case-assist, …) ───────────────────────────────
+# Gleiches Modell wie ai-rem selbst, serverseitig ueber lib/svc_auth.py: Token per
+# Kopplung holen, im Keychain ablegen (Konto svc-<name>), MCP-Frontends starten
+# `ai-rem svc proxy <name>` statt den Token in ihre Config zu schreiben. Die
+# Basis-URL je Dienst steht in client.json → services.<name>.
+
+def _svc_account(name: str) -> str:
+    return f"svc-{name}"
+
+
+def _svc_env(name: str) -> str:
+    return name.upper().replace("-", "_") + "_TOKEN"
+
+
+def _svc_url(name: str, url: str = "") -> str:
+    url = (url or (load_client_cfg().get("services") or {}).get(name, "")).rstrip("/")
+    return url[:-4] if url.endswith("/mcp") else url  # kein removesuffix: CLI laeuft ab 3.8
+
+
+def _svc_save_url(name: str, url: str) -> None:
+    cfg = load_client_cfg()
+    services = cfg.get("services") if isinstance(cfg.get("services"), dict) else {}
+    services[name] = url
+    cfg["services"] = services
+    os.makedirs(os.path.dirname(CLIENT_JSON), exist_ok=True)
+    tmp = CLIENT_JSON + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, CLIENT_JSON)
+
+
+def _svc_token(name: str) -> str:
+    """Token des Dienstes: Env <NAME>_TOKEN → Keychain. Backend-Fehler zaehlen als „keiner“."""
+    tok = os.environ.get(_svc_env(name), "")
+    if tok:
+        return tok
+    try:
+        return keychain.get(_svc_account(name))
+    except keychain.KeychainError:
+        return ""
+
+
+def _svc_token_source(name: str) -> str:
+    """Nur die Herkunft (fuer Statuszeilen) — bewusst getrennt von _svc_token, damit
+    keine Ausgabe den Token-Wert auch nur im selben Tupel mitfuehrt."""
+    if os.environ.get(_svc_env(name)):
+        return f"Env {_svc_env(name)}"
+    return f"Keychain ({keychain.backend_name()})" if _svc_token(name) else ""
+
+
+def _svc_need_url(name: str, url: str) -> str:
+    base = _svc_url(name, url)
+    if not base:
+        sys.stderr.write(f"ai-rem: keine URL fuer {name} — `ai-rem svc pair {name} --url https://…`\n")
+        sys.exit(2)
+    return base
+
+
+def _post_json(url: str, body: dict, timeout: float = 10) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "User-Agent": "ai-rem-svc"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def cmd_svc_pair(c: MCPClient, a):
+    """Token eines Dienstes per Freigabe im Browser holen (Device-Flow wie `ai-rem pair`)."""
+    import platform
+    import socket
+    import time
+    import webbrowser
+    name, base = a.name, _svc_need_url(a.name, a.url)
+    try:
+        start = _post_json(base + "/api/pair/start",
+                           {"device": socket.gethostname(),
+                            "platform": f"{sys.platform} {platform.release()}"})
+    except Exception as e:
+        sys.stderr.write(f"ai-rem: Kopplung mit {base} nicht moeglich: {e}\n")
+        sys.exit(1)
+    print(f"┌─ {name} koppeln ─────────────────────────────────────")
+    print(f"│  Code:  {start['code']}")
+    print("│  Im Browser freigeben (eingeloggt in der Web-UI des Dienstes):")
+    print(f"│  {start['verify_url']}")
+    print("└──────────────────────────────────────────────────────")
+    try:
+        webbrowser.open(start["verify_url"])
+    except Exception:
+        pass
+    deadline = time.time() + int(start.get("expires_in", 600))
+    tok = ""
+    try:
+        while time.time() < deadline and not tok:
+            time.sleep(3)
+            try:
+                r = _post_json(base + "/api/pair/poll", {"pair_id": start["pair_id"]})
+            except Exception:
+                continue
+            if r.get("state") == "approved":
+                tok = r.get("token", "")
+            elif r.get("state") in ("denied", "expired"):
+                break
+    except KeyboardInterrupt:
+        print("")
+    if not tok:
+        sys.stderr.write("✗ Kopplung abgelehnt, abgelaufen oder abgebrochen\n")
+        sys.exit(1)
+    try:
+        keychain.set(tok, _svc_account(name))
+    except keychain.KeychainError as e:
+        sys.stderr.write(f"ai-rem: Keychain-Fehler: {e}\n")
+        sys.exit(1)
+    _svc_save_url(name, base)
+    _print(f"✓ {name} gekoppelt — Token im {keychain.backend_name()}, URL {base}")
+
+
+def cmd_svc_proxy(c: MCPClient, a):
+    """`ai-rem svc proxy <name>`: stdio-MCP-Server fuer Claude Code/opencode."""
+    base = _svc_need_url(a.name, a.url)
+    tok = _svc_token(a.name)
+    if not tok:
+        print(f"ai-rem svc proxy: kein Token fuer {a.name} — `ai-rem svc pair {a.name}` ausfuehren; "
+              "Requests werden mit 401 scheitern", file=sys.stderr)
+    _run_proxy(_McpProxy(base + "/mcp", tok, pair_hint=f"ai-rem svc pair {a.name}"))
+
+
+def cmd_svc_token(c: MCPClient, a):
+    """Wie `ai-rem token`, aber fuer das Keychain-Konto des Dienstes (stdin, nie argv)."""
+    acct = _svc_account(a.name)
+    try:
+        if a.store:
+            tok = sys.stdin.read().strip()
+            if not tok:
+                sys.stderr.write(f"ai-rem: kein Token auf stdin (echo <token> | ai-rem svc token {a.name} --store)\n")
+                sys.exit(2)
+            keychain.set(tok, acct)
+            if a.url:
+                _svc_save_url(a.name, _svc_url(a.name, a.url))
+            _print(f"✓ Token fuer {a.name} im {keychain.backend_name()} gespeichert")
+            return
+        if a.forget:
+            keychain.delete(acct)
+            _print(f"✓ Token fuer {a.name} aus {keychain.backend_name()} entfernt")
+            return
+    except keychain.KeychainError as e:
+        sys.stderr.write(f"ai-rem: Keychain-Fehler: {e}\n")
+        sys.exit(1)
+    tok = _svc_token(a.name)
+    if not tok:
+        sys.stderr.write(f"ai-rem: kein Token fuer {a.name} — `ai-rem svc pair {a.name}`\n")
+        sys.exit(1)
+    # Gewollte Ausgabe fuer $(ai-rem svc token …) bzw. curl — kein Log, daher stdout direkt.
+    sys.stdout.write((f"Bearer {tok}" if a.header else tok) + "\n")
+
+
+def _svc_status_lines() -> list:
+    out = []
+    for name, url in sorted((load_client_cfg().get("services") or {}).items()):
+        src = _svc_token_source(name)
+        out.append(f"{name}: {url} · token {('✓ ' + src) if src else '✗ → ai-rem svc pair ' + name}")
+    return out
+
+
+def cmd_svc_list(c: MCPClient, a):
+    _print("\n".join(_svc_status_lines()) or "keine Dienste gekoppelt — `ai-rem svc pair <name> --url …`")
 
 
 def cmd_vault_mcp(c: MCPClient, a):
@@ -717,6 +888,8 @@ def cmd_doctor(c: MCPClient, a):
     else:
         src = c.token_source
     print(f"Token:     {src}")
+    for line in _svc_status_lines():
+        print(f"Dienst:    {line}")
     try:
         _print("Server:    " + c.call("memory_check_update").replace("\n", "\n           "))
     except MCPError as e:
@@ -946,6 +1119,27 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--endpoint", dest="proxy_endpoint", default=None, metavar="URL",
                    help="MCP-Endpoint (Default: client.json / $AI_REM_ENDPOINT)")
     s.set_defaults(func=cmd_mcp_proxy)
+
+    s = sub.add_parser("svc", help="Fremddienste (doc-graph, case-assist): koppeln, Proxy, Token")
+    ssub = s.add_subparsers(dest="svc_cmd", required=True)
+    t = ssub.add_parser("pair", help="Token per Freigabe im Browser holen")
+    t.add_argument("name")
+    t.add_argument("--url", default="", help="Basis-URL des Dienstes, z.B. https://docgraph.lan")
+    t.set_defaults(func=cmd_svc_pair)
+    t = ssub.add_parser("proxy", help="stdio-MCP-Server fuer Claude Code/opencode")
+    t.add_argument("name")
+    t.add_argument("--url", default="", help="Basis-URL (Default: client.json → services)")
+    t.set_defaults(func=cmd_svc_proxy)
+    t = ssub.add_parser("token", help="Token ausgeben bzw. mit --store/--forget pflegen")
+    t.add_argument("name")
+    t.add_argument("--url", default="", help="mit --store: Basis-URL mit ablegen")
+    t.add_argument("--header", action="store_true", help="als 'Bearer <token>' ausgeben")
+    g = t.add_mutually_exclusive_group()
+    g.add_argument("--store", action="store_true", help="Token von stdin in den Keychain")
+    g.add_argument("--forget", action="store_true", help="Token aus dem Keychain entfernen")
+    t.set_defaults(func=cmd_svc_token)
+    t = ssub.add_parser("list", help="gekoppelte Dienste und Token-Status")
+    t.set_defaults(func=cmd_svc_list)
 
     s = sub.add_parser("vault-mcp", help="mykeyvault-MCP (stdio) mit Vault-Zugang vom Server starten")
     s.set_defaults(func=cmd_vault_mcp)

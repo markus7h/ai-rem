@@ -85,3 +85,25 @@ the vault for the ai-rem token at all; they get it through pairing (or SSH) once
 it in the keychain.
 
 Generate a token manually (if not using the vault): `openssl rand -hex 32`.
+
+## Other services — `svc_auth` and `ai-rem svc`
+
+doc-graph and case-assist use the same model through `lib/svc_auth.py` (vendored into
+each service; `scripts/sync-svc-auth.sh` copies it, `--check` reports drift). Each
+instance reads `<PREFIX>_API_TOKEN` (fail-closed), optionally `<PREFIX>_PUBLIC_URL`
+(base for the pairing link) and `<PREFIX>_UI_SESSION_TTL`. Rules are those listed
+above: public login/pairing paths, loopback without `X-Forwarded-For`, Bearer, and the
+UI cookie `<name>_session` = `HMAC(token, "<name>-ui-session")`.
+
+On the client, the ai-rem CLI handles these services too:
+
+| Command | Purpose |
+|---|---|
+| `ai-rem svc pair doc-graph --url https://docgraph.lan` | pairing in the browser; token → keychain account `svc-doc-graph`, URL → `client.json` `services` |
+| `ai-rem svc proxy doc-graph` | stdio MCP server for Claude Code/opencode (`<url>/mcp`) |
+| `ai-rem svc token doc-graph [--header\|--store\|--forget]` | print or maintain the token (`--store` reads stdin) |
+| `ai-rem svc list` | paired services and token status (also in `ai-rem doctor`) |
+
+Token order: env `<NAME>_TOKEN` (e.g. `DOC_GRAPH_TOKEN`) → keychain. Credentials are
+checked through a verifier interface (`StaticTokenVerifier` today), so a later OIDC/JWT
+verifier plugs in without changing the gate.

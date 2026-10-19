@@ -323,17 +323,19 @@ class _WindowsBackend:
 _BACKEND = None  # Modul-Cache; _reset_backend() für Tests
 
 
-def _select_backend(platform: Optional[str] = None, which: Optional[Callable] = None):
+def _select_backend(platform: Optional[str] = None, which: Optional[Callable] = None,
+                    account: Optional[str] = None):
     # sys.platform/shutil.which erst hier auflösen, damit Tests sie monkeypatchen können.
     platform = platform or sys.platform
     which = which or shutil.which
+    account = account or ACCOUNT
     if platform == "darwin":
-        return _MacBackend(ACCOUNT)
+        return _MacBackend(account)
     if platform == "win32":
-        return _WindowsBackend(ACCOUNT)
+        return _WindowsBackend(account)
     if which("secret-tool"):
-        return _LibsecretBackend(ACCOUNT)
-    return _FileBackend(ACCOUNT)
+        return _LibsecretBackend(account)
+    return _FileBackend(account)
 
 
 def _backend():
@@ -348,19 +350,26 @@ def _reset_backend() -> None:
     _BACKEND = None
 
 
-def get() -> str:
-    """Geräte-Token; "" wenn keiner abgelegt ist (nie Exception bei „nicht gefunden“)."""
-    return _backend().get()
+def _for(account: Optional[str]):
+    # Fremddienste (`ai-rem svc`, Konto svc-<name>) bekommen ein eigenes Backend-Objekt;
+    # der Modul-Cache bleibt dem Geräte-Token vorbehalten.
+    return _select_backend(account=account) if account else _backend()
 
 
-def set(value: str) -> None:  # noqa: A001 — bewusst wie keyring.set_password benannt
+def get(account: Optional[str] = None) -> str:
+    """Geräte-Token (bzw. Token des Kontos); "" wenn keiner abgelegt ist
+    (nie Exception bei „nicht gefunden“)."""
+    return _for(account).get()
+
+
+def set(value: str, account: Optional[str] = None) -> None:  # noqa: A001 — wie keyring.set_password
     """Token ablegen, bestehenden überschreiben."""
-    _backend().set(value)
+    _for(account).set(value)
 
 
-def delete() -> None:
+def delete(account: Optional[str] = None) -> None:
     """Token entfernen; idempotent."""
-    _backend().delete()
+    _for(account).delete()
 
 
 def backend_name() -> str:
