@@ -88,3 +88,25 @@ ai-rem-Token gar nicht mehr mit dem Vault; sie bekommen ihn einmal per Kopplung 
 und halten ihn im Keychain.
 
 Token manuell erzeugen (ohne Vault): `openssl rand -hex 32`.
+
+## Weitere Dienste — `svc_auth` und `ai-rem svc`
+
+doc-graph und case-assist nutzen dasselbe Modell über `lib/svc_auth.py`. Jeder Dienst
+hat eine eigene Kopie; `scripts/sync-svc-auth.sh` kopiert sie, `--check` meldet Abweichungen.
+Jede Instanz liest `<PREFIX>_API_TOKEN` (fail-closed), optional `<PREFIX>_PUBLIC_URL`
+(Basis für den Kopplungslink) und `<PREFIX>_UI_SESSION_TTL`. Es gelten die Regeln von
+oben: öffentliche Login-/Kopplungspfade, Loopback ohne `X-Forwarded-For`, Bearer und das
+UI-Cookie `<name>_session` = `HMAC(token, "<name>-ui-session")`.
+
+Auf dem Client übernimmt die ai-rem-CLI diese Dienste mit:
+
+| Befehl | Zweck |
+|---|---|
+| `ai-rem svc pair doc-graph --url https://docgraph.lan` | Kopplung im Browser; Token → Keychain-Konto `svc-doc-graph`, URL → `client.json` `services` |
+| `ai-rem svc proxy doc-graph` | stdio-MCP-Server für Claude Code/opencode (`<url>/mcp`) |
+| `ai-rem svc token doc-graph [--header\|--store\|--forget]` | Token ausgeben oder pflegen (`--store` liest von stdin) |
+| `ai-rem svc list` | gekoppelte Dienste und Token-Status (auch in `ai-rem doctor`) |
+
+Token-Reihenfolge: Env `<NAME>_TOKEN` (z. B. `DOC_GRAPH_TOKEN`) → Keychain. Geprüft wird
+über eine Verifier-Schnittstelle (heute `StaticTokenVerifier`). Ein späterer OIDC/JWT-Verifier
+lässt sich einstecken, ohne das Gate zu ändern.
