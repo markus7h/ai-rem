@@ -15,6 +15,9 @@ German).
 
 ## [Unreleased]
 
+### Fixed
+- `ai-rem mcp-proxy` / `ai-rem svc proxy`: when the server drops the session (HTTP 404, e.g. after sleep, a network change or a server restart), the proxy now re-initializes on its own with the client's original `initialize` and retries the request once, instead of failing and exiting. Parallel requests share a single re-initialization, so Claude no longer shows "Session verloren (HTTP 404) — Reconnect" once per in-flight call. Error and exit 1 remain the fallback if re-initialization fails.
+
 ### Changed
 - Docs, help texts and tests no longer name specific services; `scripts/sync-svc-auth.sh` takes the target repo directories as arguments.
 
