@@ -3,8 +3,8 @@
 Claude Code/opencode starten die CLI als stdio-MCP-Server; der Proxy traegt den
 Token aus dem Keychain in die HTTP-Requests. Geprueft wird das Protokollverhalten:
 Session-ID ab dem zweiten Request, 202 ohne Ausgabe, SSE-Events als je eine
-NDJSON-Zeile, 401 als JSON-RPC-Error mit der richtigen id, DELETE beim EOF und
-Exit 1 bei verlorener Session.
+NDJSON-Zeile, 401 als JSON-RPC-Error mit der richtigen id, DELETE beim EOF,
+stille Neu-Initialisierung bei verlorener Session und Exit 1, wenn die scheitert.
 """
 import importlib.machinery
 import importlib.util
@@ -14,6 +14,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 
@@ -79,6 +80,13 @@ class FakeServer:
         self.requests = []  # (http_method, headers_lowercase, body_dict|None)
         self.reject_token = False
         self.lose_session = False
+        # Server-Neustart beim ersten tools/call: Session tot, naechstes initialize
+        # vergibt eine neue ID. restart_barrier haelt die ersten n Calls an, damit sie
+        # garantiert alle mit der alten ID ankommen (paralleler 404).
+        self.restart_on_call = False
+        self.restart_barrier = None
+        self.dead = set()
+        self._lock = threading.Lock()
 
     def __call__(self, req, timeout=None):
         headers = {k.lower(): v for k, v in req.header_items()}
@@ -88,9 +96,19 @@ class FakeServer:
             return FakeResponse(200)
         if self.reject_token:
             raise _http_error(401, b'{"error":"unauthorized"}')
-        if self.lose_session and headers.get("mcp-session-id"):
+        sid = headers.get("mcp-session-id")
+        if self.lose_session and sid:
             raise _http_error(404, b"Session not found")
         method = body.get("method") if isinstance(body, dict) else None
+        if method == "tools/call" and sid == self.sid and self.restart_barrier:
+            self.restart_barrier.wait(timeout=5)
+        with self._lock:
+            if method == "tools/call" and self.restart_on_call and sid == self.sid:
+                self.restart_on_call = False
+                self.dead.add(self.sid)
+                self.sid = self.sid + "-neu"
+        if sid in self.dead:
+            raise _http_error(404, b"Session not found")
         if method == "initialize":
             result = {"jsonrpc": "2.0", "id": body["id"],
                       "result": {"protocolVersion": "2025-03-26", "capabilities": {},
@@ -175,9 +193,41 @@ def test_session_verloren_404_beendet_mit_exit_1(monkeypatch):
     assert rc == 0 and lines[0]["id"] == 1
     server.lose_session = True
     rc, lines = _run(monkeypatch, server, [INIT, CALL])
-    # initialize geht ohne Session durch, der tools/call mit Session kriegt 404.
+    # initialize geht ohne Session durch, der tools/call mit Session kriegt 404 —
+    # und die Neu-Initialisierung auch (notifications/initialized mit neuer ID).
     assert rc == 1
     assert lines[-1]["id"] == 2 and lines[-1]["error"]["code"] == -32000
+
+
+def test_session_verloren_404_initialisiert_neu_und_wiederholt(monkeypatch):
+    server = FakeServer()
+    server.restart_on_call = True
+    rc, lines = _run(monkeypatch, server, [INIT, INITIALIZED, CALL])
+    assert rc == 0
+    assert [line.get("id") for line in lines] == [1, None, 2], lines
+    assert lines[-1]["result"]["content"][0]["text"] == "ok ✓"
+    posts = [(r[1].get("mcp-session-id"), r[2].get("method")) for r in server.requests if r[0] == "POST"]
+    assert posts == [(None, "initialize"), ("sess-1", "notifications/initialized"),
+                     ("sess-1", "tools/call"),
+                     (None, "initialize"), ("sess-1-neu", "notifications/initialized"),
+                     ("sess-1-neu", "tools/call")]
+    # Die Antwort des internen initialize geht nicht an den Client.
+    assert sum(1 for line in lines if line.get("id") == 1) == 1
+
+
+def test_paralleler_404_initialisiert_nur_einmal_und_ohne_doppelten_fehler(monkeypatch):
+    """Regression: zwei parallele tools/call liefen beide in den 404, jeder meldete
+    'Session verloren' — Claude zeigte den Fehler doppelt."""
+    server = FakeServer()
+    server.restart_on_call = True
+    server.restart_barrier = threading.Barrier(2)
+    call3 = dict(CALL, id=3)
+    rc, lines = _run(monkeypatch, server, [INIT, CALL, call3])
+    assert rc == 0
+    assert not [line for line in lines if "error" in line], lines
+    assert sorted(line["id"] for line in lines if line.get("id") in (2, 3)) == [2, 3]
+    inits = [r for r in server.requests if r[0] == "POST" and r[2].get("method") == "initialize"]
+    assert len(inits) == 2, "parallele 404 duerfen nur einmal neu initialisieren"
 
 
 def test_cmd_mcp_proxy_nutzt_keychain_token_und_stdio(monkeypatch):

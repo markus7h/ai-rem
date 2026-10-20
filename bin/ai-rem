@@ -329,9 +329,12 @@ class _McpProxy:
 
     Pro Nachricht ein Thread: Claude Code schickt nach `initialize` mehrere
     Requests parallel, und ein langsamer tools/call darf tools/list nicht blockieren.
-    stdin liest ein eigener Thread in eine Queue, damit die Hauptschleife auch dann
-    aussteigen kann (Session verloren → Exit 1, Claude Code startet den Server neu),
-    wenn gerade keine Zeile ankommt. Alle Diagnosen gehen nach stderr; stdout ist
+    Verwirft der Server die Session (HTTP 404, z.B. Neustart oder abgelaufene Session
+    nach Schlaf/Netzwechsel), initialisiert der Proxy selbst neu und wiederholt den
+    Request einmal — parallele Requests teilen sich dabei eine Neu-Initialisierung.
+    Erst wenn die scheitert: Fehler an den Client und Exit 1, Claude Code startet den
+    Server neu. stdin liest ein eigener Thread in eine Queue, damit die Hauptschleife
+    auch dann aussteigen kann, wenn gerade keine Zeile ankommt. Alle Diagnosen gehen nach stderr; stdout ist
     ausschliesslich Protokoll."""
 
     def __init__(self, endpoint: str, token: str, client_name: str = "",
@@ -349,6 +352,8 @@ class _McpProxy:
         self._out_lock = threading.Lock()
         self._sid = None
         self._proto = None
+        self._init_line = None  # initialize des Clients, fuer die Neu-Initialisierung
+        self._session_lock = threading.Lock()
         self._stop = threading.Event()
         self._exit_code = 0
         self._threads = []
@@ -401,16 +406,24 @@ class _McpProxy:
     def _handle(self, line: bytes, msg) -> None:
         rid = msg.get("id") if isinstance(msg, dict) else None
         is_init = isinstance(msg, dict) and msg.get("method") == "initialize"
-        req = urllib.request.Request(self.endpoint, data=line, headers=self._headers(), method="POST")
-        try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout)
-        except urllib.error.HTTPError as e:
-            self._http_error(e, rid)
-            return
-        except Exception as e:  # URLError, socket.timeout, …
-            print(f"ai-rem mcp-proxy: {self.endpoint} nicht erreichbar: {e}", file=sys.stderr)
-            self._emit_error(rid, -32000, f"ai-rem: Endpoint nicht erreichbar ({e})")
-            return
+        if is_init:
+            self._init_line = line
+        for attempt in (0, 1):
+            headers = self._headers()
+            req = urllib.request.Request(self.endpoint, data=line, headers=headers, method="POST")
+            try:
+                resp = urllib.request.urlopen(req, timeout=self.timeout)
+                break
+            except urllib.error.HTTPError as e:
+                stale = headers.get("mcp-session-id")
+                if attempt == 0 and e.code == 404 and stale and not is_init and self._reinit(stale):
+                    continue
+                self._http_error(e, rid)
+                return
+            except Exception as e:  # URLError, socket.timeout, …
+                print(f"ai-rem mcp-proxy: {self.endpoint} nicht erreichbar: {e}", file=sys.stderr)
+                self._emit_error(rid, -32000, f"ai-rem: Endpoint nicht erreichbar ({e})")
+                return
         with resp:
             if is_init:
                 sid = resp.headers.get("mcp-session-id")
@@ -428,6 +441,38 @@ class _McpProxy:
             else:
                 self._emit_payload(resp.read().decode("utf-8", "replace"), is_init)
 
+    def _reinit(self, stale_sid: str) -> bool:
+        """Neue Session mit dem gemerkten initialize des Clients aufbauen. Die Antwort
+        wird verworfen — der Client hat sein initialize-Result laengst. Unter Lock:
+        laufen mehrere Requests gleichzeitig in den 404, initialisiert nur der erste;
+        die anderen sehen danach eine neue Session-ID und wiederholen damit."""
+        with self._session_lock:
+            if self._sid != stale_sid:
+                return bool(self._sid)  # schon von einem anderen Thread erneuert
+            if not self._init_line:
+                return False
+            try:
+                h = self._headers()
+                h.pop("mcp-session-id", None)
+                req = urllib.request.Request(self.endpoint, data=self._init_line, headers=h, method="POST")
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    sid = resp.headers.get("mcp-session-id")
+                    resp.read()
+                if not sid:
+                    return False
+                h["mcp-session-id"] = sid
+                note = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
+                req = urllib.request.Request(self.endpoint, data=note, headers=h, method="POST")
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    resp.read()
+            except Exception as e:
+                print(f"ai-rem mcp-proxy: Neu-Initialisierung gescheitert: {e}", file=sys.stderr)
+                return False
+            self._sid = sid
+            print("ai-rem mcp-proxy: Session vom Server verworfen (HTTP 404) — neu initialisiert",
+                  file=sys.stderr)
+            return True
+
     def _http_error(self, e, rid) -> None:
         body = b""
         try:
@@ -440,8 +485,8 @@ class _McpProxy:
             self._emit_error(rid, -32001, f"ai-rem: Token ungültig — `{self.pair_hint}` ausführen")
             return
         if e.code == 404 and self._sid:
-            # Server neu gestartet, Session weg: Fehler durchreichen und beenden —
-            # Claude Code startet den stdio-Server neu und initialisiert sauber.
+            # Session weg und Neu-Initialisierung gescheitert: Fehler durchreichen und
+            # beenden — Claude Code startet den stdio-Server neu und initialisiert sauber.
             print("ai-rem mcp-proxy: Session vom Server verworfen (HTTP 404) — beende, "
                   "Client verbindet neu", file=sys.stderr)
             self._emit_error(rid, -32000, "ai-rem: Session verloren (HTTP 404) — Reconnect")
