@@ -15,8 +15,10 @@ German).
 
 ## [Unreleased]
 
+## [1.12.1] – 2026-10-20
+
 ### Fixed
-- `ai-rem mcp-proxy` / `ai-rem svc proxy`: when the server drops the session (HTTP 404, e.g. after sleep, a network change or a server restart), the proxy now re-initializes on its own with the client's original `initialize` and retries the request once, instead of failing and exiting. Parallel requests share a single re-initialization, so Claude no longer shows "Session verloren (HTTP 404) — Reconnect" once per in-flight call. Error and exit 1 remain the fallback if re-initialization fails.
+- `ai-rem mcp-proxy` / `ai-rem svc proxy`: when the server drops the session (HTTP 404, e.g. after sleep, a network change or a server restart), the proxy now re-initializes on its own with the client's original `initialize` and retries the request once, instead of failing and exiting. Parallel requests share a single re-initialization, so Claude no longer shows "Session verloren (HTTP 404) — Reconnect" once per in-flight call. Error and exit 1 remain the fallback if re-initialization fails (#178).
 
 ### Changed
 - Docs, help texts and tests no longer name specific services; `scripts/sync-svc-auth.sh` takes the target repo directories as arguments.
@@ -1163,7 +1165,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.12.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.12.1...HEAD
+[1.12.1]: https://github.com/markus7h/ai-rem/compare/v1.12.0...v1.12.1
 [1.12.0]: https://github.com/markus7h/ai-rem/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/markus7h/ai-rem/compare/v1.10.3...v1.11.0
 [1.10.3]: https://github.com/markus7h/ai-rem/compare/v1.10.2...v1.10.3
