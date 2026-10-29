@@ -29,12 +29,18 @@ def _scenario() -> None:
 
     # anna koppeln: nur der Admin darf für einen anderen Nutzer freigeben
     s = anon.post("/api/pair/start", json={"device": "annas-laptop"}).json()
-    assert admin.post("/api/pair/approve",
-                      json={"code": s["code"], "approve": True, "user": "anna"}).status_code == 200
+    # Unbekannter Name: erst Rückfrage (409), angelegt wird erst mit create_user
+    r = admin.post("/api/pair/approve", json={"code": s["code"], "approve": True, "user": "anna"})
+    assert r.status_code == 409 and r.json()["new_user"] == "anna", r.text
+    assert admin.post("/api/pair/approve", json={"code": s["code"], "approve": True, "user": "anna",
+                                                 "create_user": True}).status_code == 200
     anna_tok = anon.post("/api/pair/poll", json={"pair_id": s["pair_id"]}).json()["ai_rem_token"]
     assert server._user_for_token(anna_tok) == "anna"
     anna = TestClient(app, base_url="https://testserver",
                       headers={**xff, "Authorization": f"Bearer {anna_tok}"})
+    s2 = anon.post("/api/pair/start", json={"device": "annas-desktop"}).json()
+    assert admin.post("/api/pair/approve",
+                      json={"code": s2["code"], "approve": True, "user": "anna"}).status_code == 200
 
     def tool(c, _tool, **args):
         r = c.post("/api/tool", json={"name": _tool, "arguments": args})

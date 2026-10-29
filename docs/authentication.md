@@ -60,7 +60,10 @@ otherwise the user name.
   as admin, entering the user name in the "Nutzer" field. The server mints a new
   **device token** for that user. Only its SHA-256 is stored, in `backups/users.json`, and
   pairing never hands out `AI_REM_API_TOKEN` any more. Non-admins can pair further devices
-  for themselves only.
+  for themselves only. The page states whose data the device will get, and a name that does
+  not exist yet needs an extra confirmation ("create new user …?"), so a typo does not
+  silently create a user. ai-rem cannot verify who is at the new device: comparing the code
+  and knowing the person is up to whoever approves.
 - **Names stay globally unique.** If a user writes to a name that belongs to someone else,
   `memory_add` refuses with a hint to pick another name. The same goes for relate, delete,
   archive and merge on another user's entity. The nightly cleanup never merges entries of

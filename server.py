@@ -2158,6 +2158,12 @@ async def pair_approve(request: Request) -> JSONResponse:
         if user != me and not _is_admin():
             return JSONResponse({"error": "Nur der Admin kann für andere Nutzer koppeln."},
                                 status_code=403)
+        # Unbekannter Name → erst bestätigen lassen, sonst legt ein Tippfehler
+        # ("ana" statt "anna") still einen neuen Nutzer an.
+        known = {AI_REM_ADMIN_USER} | {u.get("user") for u in _load_users().values()}
+        if body.get("approve") and user not in known and not body.get("create_user"):
+            return JSONResponse({"error": f"Nutzer '{user}' existiert noch nicht.",
+                                 "new_user": user}, status_code=409)
         if body.get("approve"):
             try:
                 e["token"] = _issue_token(user, e["device"])

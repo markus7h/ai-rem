@@ -63,7 +63,11 @@ Decision, Problem, Topic, Person) bleibt geteilt. Jede Entity hat eine Spalte `o
   Admin unter `/pair` freigeben, dabei im Feld „Nutzer“ den Namen eintragen. Der Server
   erzeugt einen neuen **Gerätetoken** für diesen Nutzer. Gespeichert wird nur dessen
   SHA-256, in `backups/users.json`; `AI_REM_API_TOKEN` gibt die Kopplung nicht mehr heraus.
-  Nicht-Admins können weitere Geräte nur für sich selbst koppeln.
+  Nicht-Admins können weitere Geräte nur für sich selbst koppeln. Die Seite nennt, auf
+  wessen Daten das Gerät Zugriff bekommt. Ein noch unbekannter Name braucht eine
+  Bestätigung („Neuen Nutzer … anlegen?“), damit ein Tippfehler nicht still einen Nutzer
+  anlegt. Wer am neuen Gerät sitzt, kann ai-rem nicht prüfen: Code-Vergleich und Kenntnis
+  der Person liegen beim Freigebenden.
 - **Namen bleiben global eindeutig.** Schreibt ein Nutzer auf einen Namen, der einem
   anderen gehört, lehnt `memory_add` ab und bittet um einen anderen Namen. Dasselbe gilt
   für relate, delete, archive und merge auf fremden Entities. Der Nightly-Cleanup mergt nie
