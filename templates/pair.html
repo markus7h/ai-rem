@@ -48,17 +48,20 @@ async function load() {
       '<div class="code">' + esc(d.code) + '</div>' +
       '<p class="warn">Nur freigeben, wenn derselbe Code gerade im Terminal angezeigt wird.</p>' +
       '<dl><dt>Gerät</dt><dd>' + esc(d.device) + '</dd><dt>System</dt><dd>' + esc(d.platform) +
-      '</dd><dt>IP</dt><dd>' + esc(d.ip) + '</dd><dt>Läuft ab</dt><dd>in ' + Math.round(d.expires_in / 60) + ' min</dd></dl>' +
+      '</dd><dt>IP</dt><dd>' + esc(d.ip) + '</dd><dt>Läuft ab</dt><dd>in ' + Math.round(d.expires_in / 60) + ' min</dd>' +
+      '<dt>Nutzer</dt><dd>' + (d.admin
+        ? '<input id="user" value="' + esc(d.me) + '" pattern="[a-z0-9_-]{1,32}" style="width:100%;box-sizing:border-box">'
+        : esc(d.me)) + '</dd></dl>' +
       (d.state === 'pending'
         ? '<div class="row"><button class="ok" onclick="decide(true)">Freigeben</button><button class="no" onclick="decide(false)">Ablehnen</button></div>'
         : '<p>Status: ' + esc(d.state) + '</p>');
   }
   const h = await (await fetch('/api/pair/history')).json();
-  $('hist').innerHTML = h.length ? h.map(e => '<li>' + esc(e.ts) + ' · ' + esc(e.device) + ' · ' + esc(e.platform) + ' · ' + esc(e.ip) + '</li>').join('') : '<li>—</li>';
+  $('hist').innerHTML = h.length ? h.map(e => '<li>' + esc(e.ts) + ' · ' + esc(e.user || '') + ' · ' + esc(e.device) + ' · ' + esc(e.platform) + ' · ' + esc(e.ip) + '</li>').join('') : '<li>—</li>';
 }
 async function decide(approve) {
   const r = await fetch('/api/pair/approve', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({code, approve})});
+    body: JSON.stringify({code, approve, user: $('user') ? $('user').value : ''})});
   const d = await r.json();
   $('msg').textContent = r.ok ? (approve ? 'Freigegeben — der Installer läuft jetzt weiter.' : 'Abgelehnt.') : (d.error || 'Fehler');
   load();

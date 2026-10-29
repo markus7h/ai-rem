@@ -121,6 +121,7 @@ Umgebungsvariablen werden aus einer `.env`-Datei im Compose-Verzeichnis geladen:
 
 ```env
 AI_REM_API_TOKEN=...                     # PFLICHT — API-Token (fail-closed, siehe Authentifizierung)
+AI_REM_ADMIN_USER=markus                 # Nutzername des AI_REM_API_TOKEN-Inhabers (Admin); siehe Mehrere Nutzer
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Öffentliche URL des Servers
 PORT=3456                                # TCP-Port (Standard: 3456)
 HOST=::                                  # Bind-Adresse (Standard: ::) — dual-stack Socket, IPv6 und der published IPv4-Port funktionieren beide; 0.0.0.0 für reines IPv4
@@ -279,6 +280,8 @@ diesen Pfad.
 ## Authentifizierung
 
 Alle sensiblen Routen (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) verlangen einen Token. Der Server ist **fail-closed** — ohne `AI_REM_API_TOKEN` startet er nicht. MCP-Clients authentifizieren sich mit `Authorization: Bearer <token>`; die Browser-Web-UI nutzt ein abgeleitetes, HttpOnly-Cookie, das `/login` setzt. Der Token liegt einmalig in [mykeyvault](https://github.com/markus7h/mykeyvault) (`ai-rem-api-token`) und wird von `deploy.sh` / dem Client-Hook bezogen.
+
+**Mehrere Nutzer:** Tasks und Preferences sind persönlich (owner = Anleger), alles andere Wissen ist geteilt. Weitere Nutzer bekommen per `/pair` einen eigenen Gerätetoken → [Mehrere Nutzer](docs/authentication.de.md#mehrere-nutzer).
 
 → **[Auth-Modell, Web-UI-Login & Token-Quelle](docs/authentication.de.md)**
 

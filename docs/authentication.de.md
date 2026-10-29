@@ -34,11 +34,11 @@ Gerät, auch vom Handy — und der Installer holt den Token genau einmal ab
 begrenzt, die Freigabe verlangt den UI-Login, und jede Entscheidung wird protokolliert
 (`/pair` „Zuletzt gekoppelte Geräte“, `backups/paired-devices.json`).
 
-Was übergeben wird: der ai-rem-Token — und mehr wird auf dem Rechner nicht gespeichert.
+Was übergeben wird: ein frischer Gerätetoken für den freigebenden Nutzer (oder, als Admin, für den im Dialog eingetragenen Nutzer; siehe [Mehrere Nutzer](#mehrere-nutzer)) — und mehr wird auf dem Rechner nicht gespeichert.
 Der Installer legt ihn im OS-Keychain ab; alles Weitere, was ein Client braucht
 (LLM-Router-Key, mykeyvault-URL und -Token), kommt pro Lauf von `GET /api/client-config`,
 authentifiziert mit genau diesem Token (siehe [Konfiguration](configuration.de.md)).
-`/api/pair/poll` liefert bei gesetztem `AI_REM_PAIR_VAULT_TOKEN` weiterhin
+`/api/pair/poll` liefert bei gesetztem `AI_REM_PAIR_VAULT_TOKEN` und Admin-Token weiterhin
 `vault_token`/`vault_url` — deprecated, nur für Installer vor 1.7; der aktuelle Installer
 ignoriert die Felder.
 
@@ -46,6 +46,35 @@ Reihenfolge im Installer: Env `AI_REM_TOKEN` → SSH-Pull von `ssh_host` (still,
 SSH-Key eingerichtet ist) → Token bereits im Keychain → Kopplung → Eingabe. `ai-rem pair`
 überspringt die Keychain-Stufe und erneuert auf einem eingerichteten Rechner nur den
 Token — so rotiert man auch einen Geräte-Token.
+
+## Mehrere Nutzer
+
+Ein Server, ein gemeinsamer Graph, mehrere Personen. **Tasks und Preferences gehören dem
+Nutzer, der sie anlegt**, und nur er sieht sie: in `memory_get_context`, in der Suche, in
+den Relationen sowie unter `/tasks` und `/prefs`. Alles andere (Project, Tool, Solution,
+Decision, Problem, Topic, Person) bleibt geteilt. Jede Entity hat eine Spalte `owner`:
+`''` = geteilt, sonst der Nutzername.
+
+- **Admin** ist, wer `AI_REM_API_TOKEN` hat; den Namen liefert `AI_REM_ADMIN_USER`
+  (Default `markus`). Loopback ohne `X-Forwarded-For` zählt ebenfalls als Admin. Beim
+  Update gehen alle bestehenden Tasks und Preferences an den Admin, für ihn ändert sich
+  also nichts.
+- **Nutzer anlegen:** Den Installer auf dem Rechner der Person starten und den Code als
+  Admin unter `/pair` freigeben, dabei im Feld „Nutzer“ den Namen eintragen. Der Server
+  erzeugt einen neuen **Gerätetoken** für diesen Nutzer. Gespeichert wird nur dessen
+  SHA-256, in `backups/users.json`; `AI_REM_API_TOKEN` gibt die Kopplung nicht mehr heraus.
+  Nicht-Admins können weitere Geräte nur für sich selbst koppeln.
+- **Namen bleiben global eindeutig.** Schreibt ein Nutzer auf einen Namen, der einem
+  anderen gehört, lehnt `memory_add` ab und bittet um einen anderen Namen. Dasselbe gilt
+  für relate, delete, archive und merge auf fremden Entities. Der Nightly-Cleanup mergt nie
+  Einträge zweier verschiedener Nutzer.
+- **Nur Admin:** `/export`, `/import`, Backups/Restore, `/cleanup`, `/logs`, `/browse`,
+  `/graph`, `memory_purge_archived`, `memory_normalize_task_status` und
+  `memory_link_projects`. `/api/client-config` liefert den Vault-Zugang nur an den Admin.
+- **Verwaltung:** über die `ai-rem`-CLI oder `POST /api/tool` mit `memory_user_list`
+  (Nutzer und Geräte) und `memory_token_revoke` (`token_id` = Hash-Präfix aus der Liste,
+  oder `user` = alle Tokens des Nutzers). Ein widerrufener Token und sein Web-UI-Cookie
+  sind sofort ungültig; die Daten bleiben erhalten.
 
 ## Ein Secret pro Gerät — der OS-Keychain
 

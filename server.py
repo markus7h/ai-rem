@@ -185,6 +185,151 @@ _UI_SESSION_VALUE = (
 )
 _UI_COOKIE_TTL = int(os.getenv("AI_REM_UI_SESSION_TTL", str(30 * 24 * 3600)))  # 30 Tage
 
+# ─── Mehrbenutzer ─────────────────────────────────────────────────────────────
+# AI_REM_API_TOKEN gehört dem Admin (AI_REM_ADMIN_USER). Weitere Gerätetokens
+# entstehen per Kopplung und liegen nur als SHA-256 in users.json
+# ({hash: {user, device, created}}). Task + Preference haben einen owner und sind
+# nur für ihn sichtbar; alles andere bleibt geteilt (owner='').
+_USER_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+AI_REM_ADMIN_USER = os.getenv("AI_REM_ADMIN_USER", "markus").strip().lower()
+if not _USER_RE.match(AI_REM_ADMIN_USER):
+    raise RuntimeError(f"AI_REM_ADMIN_USER ungültig: {AI_REM_ADMIN_USER!r} (erlaubt: a-z 0-9 _ -)")
+PERSONAL_TYPES = ("Task", "Preference")
+_USERS_FILE = os.path.join(BACKUP_DIR, "users.json")
+_users_lock = threading.Lock()
+_users_cache: tuple[float, dict] = (-1.0, {})
+# Aktueller Nutzer des Requests. "" = kein Request (In-Process, Scheduler) → kein
+# owner-Filter. Jeder autorisierte HTTP-Request setzt ihn (AuthMiddleware).
+_REQUEST_USER: contextvars.ContextVar[str] = contextvars.ContextVar("ai_rem_user", default="")
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _load_users() -> dict:
+    # ponytail: mtime-Cache statt Store — die Datei hat eine Handvoll Einträge.
+    global _users_cache
+    try:
+        mtime = os.stat(_USERS_FILE).st_mtime
+    except OSError:
+        return {}
+    if mtime != _users_cache[0]:
+        try:
+            with open(_USERS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        _users_cache = (mtime, data if isinstance(data, dict) else {})
+    return _users_cache[1]
+
+
+def _save_users(data: dict) -> None:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    tmp = _USERS_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, _USERS_FILE)
+    global _users_cache
+    _users_cache = (os.stat(_USERS_FILE).st_mtime, data)  # grobe mtime-Auflösung abfangen
+
+
+def _issue_token(user: str, device: str = "") -> str:
+    """Neuen Gerätetoken für user anlegen; der Klartext verlässt den Server genau einmal."""
+    if not _USER_RE.match(user):
+        raise ValueError(f"Ungültiger Nutzername: {user!r} (erlaubt: a-z 0-9 _ -, max. 32)")
+    token = secrets.token_hex(32)
+    with _users_lock:
+        data = dict(_load_users())
+        data[_token_hash(token)] = {"user": user, "device": device[:80], "created": _now()}
+        _save_users(data)
+    return token
+
+
+def _user_for_token(token: str) -> str:
+    """Nutzer zu einem Bearer-Token, "" wenn unbekannt."""
+    if not token:
+        return ""
+    if AI_REM_API_TOKEN and hmac.compare_digest(token, AI_REM_API_TOKEN):
+        return AI_REM_ADMIN_USER
+    # Lookup über den Hash: wer Zeitunterschiede misst, lernt höchstens etwas über
+    # den Hash eines 256-Bit-Tokens.
+    user = (_load_users().get(_token_hash(token)) or {}).get("user", "")
+    return user if _USER_RE.match(user) else ""
+
+
+def _ui_session_value(token: str) -> str:
+    """Cookie-Wert für das Web-UI. Admin: HMAC(token) wie bisher (alte Cookies bleiben
+    gültig). Gerätetoken: "<hash>.<HMAC(admin-token, hash)>" — stateless, und ein
+    Revoke (Hash raus aus users.json) macht den Cookie sofort ungültig."""
+    if AI_REM_API_TOKEN and hmac.compare_digest(token, AI_REM_API_TOKEN):
+        return _UI_SESSION_VALUE
+    h = _token_hash(token)
+    sig = hmac.new(AI_REM_API_TOKEN.encode(), h.encode(), hashlib.sha256).hexdigest()
+    return f"{h}.{sig}"
+
+
+def _user_for_cookie(value: str) -> str:
+    if _UI_SESSION_VALUE and hmac.compare_digest(value, _UI_SESSION_VALUE):
+        return AI_REM_ADMIN_USER
+    h, _, sig = value.partition(".")
+    if not (AI_REM_API_TOKEN and h and sig):
+        return ""
+    want = hmac.new(AI_REM_API_TOKEN.encode(), h.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, want):
+        return ""
+    user = (_load_users().get(h) or {}).get("user", "")
+    return user if _USER_RE.match(user) else ""
+
+
+def _current_user() -> str:
+    """Nutzer des laufenden Requests. Bei MCP-Calls zuerst der HTTP-Request der
+    Nachricht selbst — die ContextVar könnte aus dem Request stammen, der die
+    MCP-Session eröffnet hat."""
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        auth = get_http_request().headers.get("authorization", "")
+        if auth:
+            tok = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+            return _user_for_token(tok)
+    except Exception:
+        pass
+    return _REQUEST_USER.get()
+
+
+def _is_admin() -> bool:
+    """Admin = Admin-Token, Loopback oder kein Request (In-Process/Scheduler)."""
+    return _current_user() in ("", AI_REM_ADMIN_USER)
+
+
+def _owner_pred(alias: str) -> str:
+    """Cypher-Prädikat: geteilt oder vom aktuellen Nutzer, '' ohne Nutzer."""
+    user = _current_user()
+    if not user:
+        return ""
+    # ponytail: Literal statt Parameter — user ist per _USER_RE auf [a-z0-9_-]
+    # beschränkt, so muss keines der params-Dicts der Aufrufer angefasst werden.
+    return f"({alias}.owner IS NULL OR {alias}.owner = '' OR {alias}.owner = '{user}')"
+
+
+def _foreign_owner(eid: str) -> str:
+    """owner der Entity, wenn sie einem ANDEREN Nutzer gehört, sonst ''."""
+    user = _current_user()
+    if not user:
+        return ""
+    rows = _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.owner", {"id": eid}))
+    owner = (rows[0][0] or "") if rows else ""
+    return owner if owner and owner != user else ""
+
+
+def _owner_guard(*names: str) -> str:
+    """Fehlermeldung, wenn eine der Entities einem anderen Nutzer gehört, sonst ''."""
+    for n in names:
+        if n and _foreign_owner(_id(n)):
+            return f"⚠ '{n}' gehört einem anderen Nutzer — kein Zugriff."
+    return ""
+
 # Routen, die ohne Token erreichbar bleiben (Onboarding/Healthcheck/Login — keine
 # privaten Daten). Alles andere verlangt Bearer-Token, Session-Cookie ODER Loopback.
 _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/install",
@@ -193,6 +338,10 @@ _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/insta
                          "/manifest",
                          "/favicon.ico", "/assets/")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+# Ganzer Graph bzw. serverweite Wartung — nur der Admin (Prefix-Match je Segment).
+_ADMIN_ONLY_PATHS = ("/export", "/import", "/api/backup", "/api/restore", "/api/import",
+                     "/api/cleanup", "/cleanup", "/logs", "/api/logs", "/browse", "/graph",
+                     "/api/users")
 
 # ─── Setup-Endpunkt Inhalte ──────────────────────────────────────────────────
 
@@ -674,6 +823,7 @@ def init_schema() -> None:
     _migrate_sort_order_column()
     _migrate_archived_column()
     _migrate_embedding_column()
+    _migrate_owner_column()
     log.info("Schema ready — DB at %s", DB_PATH)
 
 
@@ -810,6 +960,23 @@ def _migrate_archived_column() -> None:
         log.error("ALTER TABLE Entity ADD archived failed: %s", e)
 
 
+def _migrate_owner_column() -> None:
+    """One-off migration: add `owner` column. Bestehende Tasks und Preferences
+    gehören danach dem Admin — für ihn ändert sich nichts, neue Nutzer sehen sie nicht."""
+    if _entity_has_column("owner"):
+        return
+    try:
+        db_exec("ALTER TABLE Entity ADD owner STRING DEFAULT ''")
+    except Exception as e:
+        # Kritische Spalte: ohne sie schlagen alle Lese-Queries mit owner-Filter fehl.
+        log.error("ALTER TABLE Entity ADD owner failed: %s", e)
+        raise RuntimeError("Schema-Migration der kritischen Spalte 'owner' "
+                           "fehlgeschlagen") from e
+    db_exec("MATCH (e:Entity) WHERE e.type IN $types SET e.owner = $owner",
+            {"types": list(PERSONAL_TYPES), "owner": AI_REM_ADMIN_USER})
+    log.info("Schema migration: owner column added, Task/Preference → %s", AI_REM_ADMIN_USER)
+
+
 def _migrate_embedding_column() -> None:
     """One-off migration: add `embedding` column (JSON-Float-Liste). Backfill läuft
     separat im Hintergrund-Thread (_embed_backfill) nach dem Startup."""
@@ -884,21 +1051,22 @@ def _dump_graph() -> dict:
     """Serialize the entire Entity+Rel graph into a plain dict (JSON-ready)."""
     entities = _rows(db_exec(
         "MATCH (e:Entity) RETURN e.id, e.name, e.type, e.descr, e.extra, "
-        "e.context, e.created_at, e.updated_at, e.pinned, e.sort_order, e.archived"
+        "e.context, e.created_at, e.updated_at, e.pinned, e.sort_order, e.archived, e.owner"
     ))
     relations = _rows(db_exec(
         "MATCH (a:Entity)-[r:Rel]->(b:Entity) RETURN a.id, r.name, b.id, r.extra, r.created_at"
     ))
     return {
         # v2: pinned/sort_order/archived im Export — Restore war vorher lossy.
-        "version": 2,
+        # v3: owner (Mehrbenutzer).
+        "version": 3,
         "exported_at": _now(),
         "entities": [
             {"id": r[0], "name": r[1], "type": r[2], "description": r[3],
              "extra": json.loads(r[4] or "{}"), "context": r[5] or "",
              "created_at": r[6], "updated_at": r[7],
              "pinned": r[8] or "", "sort_order": r[9] or "",
-             "archived": r[10] or ""}
+             "archived": r[10] or "", "owner": r[11] or ""}
             for r in entities
         ],
         "relations": [
@@ -1495,7 +1663,7 @@ async def manifest_route(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/preferences", methods=["GET"])
 async def api_preferences(request: Request) -> JSONResponse:
     rows = _rows(await db_exec_async(
-        "MATCH (e:Entity {type: 'Preference'}) "
+        f"MATCH (e:Entity {{type: 'Preference'}}) {_ctx_clause('e', '', where=True)} "
         "RETURN e.id, e.name, e.context, e.pinned, e.sort_order, e.descr, e.updated_at, e.archived"
     ))
     prefs = [
@@ -1763,10 +1931,10 @@ def _request_authed(request: Request) -> bool:
     auth = request.headers.get("authorization", "")
     if auth:
         tok = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
-        return bool(AI_REM_API_TOKEN) and hmac.compare_digest(tok, AI_REM_API_TOKEN)
+        return bool(_user_for_token(tok))
     cookie = request.cookies.get(_UI_COOKIE)
     if cookie is not None:
-        return bool(_UI_SESSION_VALUE) and hmac.compare_digest(cookie, _UI_SESSION_VALUE)
+        return bool(_user_for_cookie(cookie))
     return False
 
 
@@ -1784,10 +1952,10 @@ async def login_post(request: Request) -> Response:
     form = urllib.parse.parse_qs(body)
     token = form.get("token", [""])[0]
     next_url = form.get("next", [""])[0]
-    if AI_REM_API_TOKEN and hmac.compare_digest(token, AI_REM_API_TOKEN):
+    if _user_for_token(token):
         resp = RedirectResponse(_safe_next(next_url), status_code=302)
         resp.set_cookie(
-            _UI_COOKIE, _UI_SESSION_VALUE, max_age=_UI_COOKIE_TTL,
+            _UI_COOKIE, _ui_session_value(token), max_age=_UI_COOKIE_TTL,
             path="/", httponly=True, secure=True, samesite="strict",
         )
         return resp
@@ -1903,11 +2071,12 @@ async def pair_poll(request: Request) -> JSONResponse:
         if e["state"] != "approved":
             return JSONResponse({"state": e["state"]})
         del _pairs[pid]  # Einmal-Abholung
-    out = {"state": "approved", "ai_rem_token": AI_REM_API_TOKEN}
+    # Gerätetoken aus der Freigabe — nie der Admin-Token (AI_REM_API_TOKEN).
+    out = {"state": "approved", "ai_rem_token": e["token"]}
     # vault_token/vault_url: deprecated, nur noch fuer alte Installer. Clients
     # >= 1.7 speichern allein den ai-rem-Token und holen den Rest pro Lauf ueber
     # /api/client-config. Bleibt drin, bis kein Installer < 1.7 mehr koppelt.
-    if AI_REM_PAIR_VAULT_TOKEN:
+    if AI_REM_PAIR_VAULT_TOKEN and _user_for_token(e["token"]) == AI_REM_ADMIN_USER:
         out.update(vault_token=AI_REM_PAIR_VAULT_TOKEN, vault_url=_pair_vault_url())
     return JSONResponse(out)
 
@@ -1932,8 +2101,10 @@ async def client_config_route(request: Request) -> JSONResponse:
         "llm_url": AI_REM_OLLAMA_URL,
         # Env hat Vorrang (wie beim Server selbst), sonst der Key aus der setup-config.
         "llm_api_key": AI_REM_LLM_API_KEY or (_load_setup_cfg().get("llm_api_key") or ""),
-        "vault_url": _pair_vault_url(),
-        "vault_token": AI_REM_PAIR_VAULT_TOKEN,
+        # Der Vault ist der des Admins — andere Nutzer bekommen ihn nicht.
+        "vault_url": _pair_vault_url() if _is_admin() else "",
+        "vault_token": AI_REM_PAIR_VAULT_TOKEN if _is_admin() else "",
+        "user": _current_user(),
         "context_rules": _context_rules(),
     })
 
@@ -1964,7 +2135,8 @@ async def pair_info(request: Request) -> JSONResponse:
             return JSONResponse({"error": "Unbekannter oder abgelaufener Code."}, status_code=404)
         return JSONResponse({"code": e["code"], "state": e["state"], "device": e["device"],
                              "platform": e["platform"], "ip": e["ip"],
-                             "expires_in": int(e["expires"] - time.time())})
+                             "expires_in": int(e["expires"] - time.time()),
+                             "me": _current_user(), "admin": _is_admin()})
 
 
 @mcp.custom_route("/api/pair/approve", methods=["POST"])
@@ -1979,8 +2151,20 @@ async def pair_approve(request: Request) -> JSONResponse:
         if e is None or e["state"] != "pending":
             return JSONResponse({"error": "Unbekannter, abgelaufener oder schon entschiedener Code."},
                                 status_code=404)
+        # Für wen wird gekoppelt? Default der Freigebende; für andere (auch neue)
+        # Nutzer koppeln darf nur der Admin.
+        me = _current_user() or AI_REM_ADMIN_USER
+        user = str(body.get("user") or me).strip().lower()
+        if user != me and not _is_admin():
+            return JSONResponse({"error": "Nur der Admin kann für andere Nutzer koppeln."},
+                                status_code=403)
+        if body.get("approve"):
+            try:
+                e["token"] = _issue_token(user, e["device"])
+            except ValueError as ex:
+                return JSONResponse({"error": str(ex)}, status_code=400)
         e["state"] = "approved" if body.get("approve") else "denied"
-        entry = {"ts": _now(), "device": e["device"], "platform": e["platform"],
+        entry = {"ts": _now(), "user": user, "device": e["device"], "platform": e["platform"],
                  "ip": e["ip"], "state": e["state"]}
     _pair_history_add(entry)
     log.info("Kopplung %s: %s (%s)", entry["state"], entry["device"], entry["ip"])
@@ -1991,7 +2175,10 @@ async def pair_approve(request: Request) -> JSONResponse:
 async def pair_history(request: Request) -> JSONResponse:
     try:
         with open(_PAIR_HISTORY, encoding="utf-8") as f:
-            return JSONResponse(json.load(f)[:10])
+            hist = json.load(f)
+        if not _is_admin():
+            hist = [h for h in hist if h.get("user") == _current_user()]
+        return JSONResponse(hist[:10])
     except (OSError, ValueError):
         return JSONResponse([])
 
@@ -2226,11 +2413,17 @@ def _ctx_clause(alias: str, ctx: str, *, where: bool = False) -> str:
 
     where=False (default) → fragment starts with ' AND' to chain into an existing WHERE.
     where=True            → fragment starts with ' WHERE' to introduce a new clause.
+    Enthält außerdem immer den owner-Filter des aktuellen Nutzers (_owner_pred), damit
+    fremde Tasks/Preferences an jeder Lesestelle herausfallen.
     """
-    if not ctx:
+    parts = [f"({alias}.context = $ctx OR {alias}.context = '')"] if ctx else []
+    owner = _owner_pred(alias)
+    if owner:
+        parts.append(owner)
+    if not parts:
         return ""
     keyword = "WHERE" if where else "AND"
-    return f" {keyword} ({alias}.context = $ctx OR {alias}.context = '')"
+    return f" {keyword} " + " AND ".join(parts)
 
 
 def _archived_clause(alias: str, include_archived: bool, *, where: bool = False) -> str:
@@ -2246,6 +2439,15 @@ def _archived_clause(alias: str, include_archived: bool, *, where: bool = False)
     return f" {keyword} ({alias}.archived IS NULL OR {alias}.archived <> 'true')"
 
 
+def _import_owner(entity: dict) -> str:
+    """owner aus dem Export; Backups vor v3 haben keinen → persönliche Typen an den
+    Admin (wie die Schema-Migration)."""
+    if "owner" in entity:
+        owner = entity.get("owner") or ""
+        return owner if not owner or _USER_RE.match(owner) else AI_REM_ADMIN_USER
+    return AI_REM_ADMIN_USER if entity.get("type") in PERSONAL_TYPES else ""
+
+
 def _upsert_entity(eid: str, entity: dict) -> None:
     """Bestehende Entity mit dem Stand aus einem Export überschreiben (upsert-Import).
 
@@ -2257,14 +2459,16 @@ def _upsert_entity(eid: str, entity: dict) -> None:
         """MATCH (e:Entity {id: $id})
            SET e.name = $name, e.type = $type, e.descr = $descr, e.extra = $extra,
                e.context = $ctx, e.pinned = $pinned, e.sort_order = $so,
-               e.archived = $archived, e.updated_at = $updated, e.embedding = ''""",
+               e.archived = $archived, e.owner = $owner, e.updated_at = $updated,
+               e.embedding = ''""",
         {"id": eid, "name": entity["name"], "type": entity.get("type", "Unknown"),
          "descr": entity.get("description", ""),
          "extra": json.dumps(extra, ensure_ascii=False),
          "ctx": entity.get("context") or extra.get("context", "") or "",
          "pinned": "true" if entity.get("pinned") in (True, "true") else "",
          "so": str(entity.get("sort_order") or ""),
-         "archived": archived, "updated": entity.get("updated_at") or _now()},
+         "archived": archived, "owner": _import_owner(entity),
+         "updated": entity.get("updated_at") or _now()},
     )
     if archived:
         _remove_embed_row(entity["name"])
@@ -2327,6 +2531,7 @@ def _apply_import(body: dict, mode: str) -> dict:
             """CREATE (:Entity {id: $id, name: $name, type: $type,
                                 descr: $descr, extra: $extra, context: $ctx,
                                 pinned: $pinned, sort_order: $so, archived: $archived,
+                                owner: $owner,
                                 created_at: $created, updated_at: $updated})""",
             {
                 "id": eid, "name": entity["name"],
@@ -2336,6 +2541,7 @@ def _apply_import(body: dict, mode: str) -> dict:
                 "pinned": _flag("pinned"),
                 "so": str(entity.get("sort_order") or ""),
                 "archived": _flag("archived"),
+                "owner": _import_owner(entity),
                 # Beide Zeitstempel aus dem Export. Vorher ging updated_at auf
                 # created_at — ein Restore setzte damit die Recency-Info aller
                 # je geänderten Entities zurück (sortiert memory_get_context).
@@ -2421,6 +2627,14 @@ def memory_add(
     """
     eid = _id(name)
     ts = _now()
+
+    # Mehrbenutzer: Namen sind global eindeutig. Gehört der Eintrag einem anderen
+    # Nutzer, nicht überschreiben — der Aufrufer wählt einen anderen Namen.
+    if _foreign_owner(eid):
+        return (f"⚠ '{name}' gehört einem anderen Nutzer. "
+                f"Bitte einen eindeutigeren Namen wählen.")
+    if denied := _owner_guard(supersedes):
+        return denied
 
     prev = _rows(db_exec(
         "MATCH (e:Entity {id: $id}) RETURN e.name, e.descr, e.extra, e.context, e.pinned, e.updated_at, e.type",
@@ -2528,17 +2742,21 @@ def memory_add(
         base_extra.pop("history", None)
     extra_json = json.dumps(base_extra, ensure_ascii=False)
 
+    # owner nur beim Anlegen: persönliche Typen gehören dem Aufrufer, der Rest ist
+    # geteilt. Ohne Request-Nutzer (In-Process/Scheduler) gilt der Admin.
+    owner = (_current_user() or AI_REM_ADMIN_USER) if type in PERSONAL_TYPES else ""
     db_exec(
         """MERGE (e:Entity {id: $id})
            ON CREATE SET e.name = $name, e.type = $type, e.descr = $descr,
                          e.extra = $extra, e.context = $ctx, e.pinned = $pinned,
+                         e.owner = $owner,
                          e.created_at = $ts, e.updated_at = $ts
            ON MATCH  SET e.name = $name, e.type = $type, e.descr = $descr,
                          e.extra = $extra, e.context = $ctx, e.pinned = $pinned,
                          e.updated_at = $ts""",
         {"id": eid, "name": name, "type": type,
          "descr": eff_descr, "extra": extra_json,
-         "ctx": eff_ctx, "pinned": eff_pinned, "ts": ts},
+         "ctx": eff_ctx, "pinned": eff_pinned, "owner": owner, "ts": ts},
     )
     _store_embedding(eid, name, eff_descr)
     verb = "Aktualisiert" if existed else "Angelegt"
@@ -2574,6 +2792,8 @@ def memory_preference_update(
     pinned: True → immer oben in get_context
     sort_order: manuelle Reihenfolge (1 = ganz oben); None/leer = nach updated_at
     """
+    if denied := _owner_guard(name):
+        return denied
     eid = _id(name)
     row = _rows(db_exec(
         "MATCH (e:Entity {id: $id}) RETURN e.context, e.pinned, e.sort_order, e.type",
@@ -2690,6 +2910,8 @@ def memory_relate(
     Beide Entities müssen zuvor via memory_add angelegt sein — sonst Fehler,
     damit Tippfehler den Graphen nicht mit Stub-Einträgen verschmutzen.
     """
+    if denied := _owner_guard(from_name, to_name):
+        return denied
     from_id = _id(from_name)
     to_id = _id(to_name)
     extra_json = json.dumps(extra or {}, ensure_ascii=False)
@@ -3046,15 +3268,16 @@ def _upsert_embed_row(eid: str, name: str, vec) -> None:
             return
     rows = _rows(db_exec(
         "MATCH (e:Entity {id:$id}) "
-        "RETURN e.type, e.descr, e.context, e.updated_at, e.archived", {"id": eid}))
+        "RETURN e.type, e.descr, e.context, e.updated_at, e.archived, e.owner", {"id": eid}))
     if not rows:
         return
-    typ, descr, ctx, upd, archived = rows[0]
+    typ, descr, ctx, upd, archived, owner = rows[0]
     if archived == "true":
         _remove_embed_row(name)
         return
     row = np.asarray(vec, dtype="float32").reshape(-1)
-    meta = {"type": typ, "descr": descr or "", "context": ctx or "", "updated_at": upd or ""}
+    meta = {"type": typ, "descr": descr or "", "context": ctx or "", "updated_at": upd or "",
+            "owner": owner or ""}
     with _embed_cache_lock:
         if _embed_matrix is None or _embed_dirty:
             return
@@ -3097,15 +3320,15 @@ def _refresh_embed_meta(eid: str, name: str) -> None:
         if _embed_matrix is None or _embed_dirty or name not in _embed_index:
             return
     rows = _rows(db_exec(
-        "MATCH (e:Entity {id:$id}) RETURN e.type, e.descr, e.context, e.updated_at",
+        "MATCH (e:Entity {id:$id}) RETURN e.type, e.descr, e.context, e.updated_at, e.owner",
         {"id": eid}))
     if not rows:
         return
-    typ, descr, ctx, upd = rows[0]
+    typ, descr, ctx, upd, owner = rows[0]
     with _embed_cache_lock:
         if name in _embed_index:
-            _embed_meta[name] = {"type": typ, "descr": descr or "",
-                                 "context": ctx or "", "updated_at": upd or ""}
+            _embed_meta[name] = {"type": typ, "descr": descr or "", "context": ctx or "",
+                                 "updated_at": upd or "", "owner": owner or ""}
 
 
 def _ensure_embed_matrix():
@@ -3118,9 +3341,9 @@ def _ensure_embed_matrix():
     rows = _rows(db_exec(
         "MATCH (e:Entity) WHERE e.embedding IS NOT NULL AND e.embedding <> '' "
         "AND (e.archived IS NULL OR e.archived <> 'true') "
-        "RETURN e.name, e.type, e.descr, e.context, e.updated_at, e.embedding"))
+        "RETURN e.name, e.type, e.descr, e.context, e.updated_at, e.embedding, e.owner"))
     names, vecs, meta = [], [], {}
-    for nm, typ, descr, ctx, upd, emb in rows:
+    for nm, typ, descr, ctx, upd, emb, owner in rows:
         try:
             v = json.loads(emb)
         except (json.JSONDecodeError, TypeError):
@@ -3128,7 +3351,7 @@ def _ensure_embed_matrix():
         names.append(nm)
         vecs.append(v)
         meta[nm] = {"type": typ, "descr": descr or "", "context": ctx or "",
-                    "updated_at": upd or ""}
+                    "updated_at": upd or "", "owner": owner or ""}
     matrix = np.asarray(vecs, dtype="float32") if vecs else None
     with _embed_cache_lock:
         _embed_names, _embed_meta, _embed_matrix, _embed_dirty = names, meta, matrix, False
@@ -3146,6 +3369,7 @@ def _semantic_hits(query: str, context: str = "", limit: int = 10) -> list[dict]
         if matrix is None or not names:
             return []
         qv = _embed_texts([query], EMBED_QUERY_PREFIX)[0]
+        user = _current_user()
         sims = matrix @ qv  # beide normalisiert → Cosine
         order = np.argsort(-sims)
         out = []
@@ -3156,6 +3380,8 @@ def _semantic_hits(query: str, context: str = "", limit: int = 10) -> list[dict]
             nm = names[i]
             m = _embed_meta.get(nm, {})
             if context and m.get("context") not in (context, ""):
+                continue
+            if user and m.get("owner", "") not in (user, ""):
                 continue
             out.append({"type": m.get("type", ""), "name": nm, "descr": m.get("descr", ""),
                         "updated_at": m.get("updated_at", ""), "context": m.get("context", ""),
@@ -3675,7 +3901,7 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
         db_exec(
             f"""MATCH (e:Entity {{type: 'Preference'}})
                {_ctx_clause('e', context, where=True)}
-               {_archived_clause('e', include_archived, where=not context)}
+               {_archived_clause('e', include_archived, where=not _ctx_clause('e', context))}
                RETURN e.name, e.descr, e.pinned, e.sort_order, e.updated_at""",
             ctx_param,
         )
@@ -3713,7 +3939,7 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
         db_exec(
             f"""MATCH (e:Entity {{type: 'Project'}})
                {_ctx_clause('e', context, where=True)}
-               {_archived_clause('e', include_archived, where=not context)}
+               {_archived_clause('e', include_archived, where=not _ctx_clause('e', context))}
                RETURN e.name, e.descr, e.extra, e.updated_at
                ORDER BY e.updated_at DESC
                LIMIT 8""",
@@ -3775,7 +4001,7 @@ def memory_list(type: str = "", context: str = "", include_archived: bool = Fals
             db_exec(
                 f"""MATCH (e:Entity {{type: $type}})
                    {_ctx_clause('e', context, where=True)}
-                   {_archived_clause('e', include_archived, where=not context)}
+                   {_archived_clause('e', include_archived, where=not _ctx_clause('e', context))}
                    RETURN e.name, e.descr, e.updated_at, e.context, e.extra
                    ORDER BY e.name""",
                 params,
@@ -3802,7 +4028,7 @@ def memory_list(type: str = "", context: str = "", include_archived: bool = Fals
         db_exec(
             f"""MATCH (e:Entity)
                {_ctx_clause('e', context, where=True)}
-               {_archived_clause('e', include_archived, where=not context)}
+               {_archived_clause('e', include_archived, where=not _ctx_clause('e', context))}
                RETURN e.type, e.name, e.descr, e.updated_at, e.context
                ORDER BY e.type, e.name""",
             params,
@@ -3825,18 +4051,22 @@ def memory_list(type: str = "", context: str = "", include_archived: bool = Fals
 
 def memory_get_relations(name: str) -> str:
     """Alle Beziehungen einer Entity anzeigen (ausgehend und eingehend)."""
+    if denied := _owner_guard(name):
+        return denied
     eid = _id(name)
 
     out_rows = _rows(
         db_exec(
-            """MATCH (a:Entity {id: $id})-[r:Rel]->(b:Entity)
+            f"""MATCH (a:Entity {{id: $id}})-[r:Rel]->(b:Entity)
+               {_ctx_clause('b', '', where=True)}
                RETURN r.name, b.type, b.name""",
             {"id": eid},
         )
     )
     in_rows = _rows(
         db_exec(
-            """MATCH (a:Entity)-[r:Rel]->(b:Entity {id: $id})
+            f"""MATCH (a:Entity)-[r:Rel]->(b:Entity {{id: $id}})
+               {_ctx_clause('a', '', where=True)}
                RETURN r.name, a.type, a.name""",
             {"id": eid},
         )
@@ -3869,6 +4099,8 @@ def memory_project_context(name: str) -> str:
     <dev_dir>/.mcp.json schreiben, falls dort nicht identisch vorhanden — und dann
     den User auf einen Neustart hinweisen, da Claude Code .mcp.json nur beim Start lädt.
     """
+    if denied := _owner_guard(name):
+        return denied
     eid = _id(name)
     row = _rows(db_exec(
         "MATCH (e:Entity {id: $id}) RETURN e.name, e.type, e.descr, e.extra, e.context",
@@ -3929,10 +4161,12 @@ def memory_project_context(name: str) -> str:
             "```json\n" + json.dumps(mcp_cfg, ensure_ascii=False, indent=2) + "\n```")
 
     out_rows = _rows(db_exec(
-        "MATCH (a:Entity {id:$id})-[r:Rel]->(b:Entity) RETURN r.name, b.type, b.name, b.descr",
+        f"MATCH (a:Entity {{id:$id}})-[r:Rel]->(b:Entity) {_ctx_clause('b', '', where=True)} "
+        "RETURN r.name, b.type, b.name, b.descr",
         {"id": eid}))
     in_rows = _rows(db_exec(
-        "MATCH (a:Entity)-[r:Rel]->(b:Entity {id:$id}) RETURN r.name, a.type, a.name, a.descr",
+        f"MATCH (a:Entity)-[r:Rel]->(b:Entity {{id:$id}}) {_ctx_clause('a', '', where=True)} "
+        "RETURN r.name, a.type, a.name, a.descr",
         {"id": eid}))
     rel_lines = []
     for arrow, rows in (("→", out_rows), ("←", in_rows)):
@@ -3996,6 +4230,8 @@ def memory_check_update() -> str:
 
 def memory_delete(name: str) -> str:
     """Entity und alle zugehörigen Relationen löschen."""
+    if denied := _owner_guard(name):
+        return denied
     eid = _id(name)
     if not _rows(db_exec("MATCH (e:Entity {id: $id}) RETURN e.id", {"id": eid})):
         return f"Nicht gefunden: {name}"
@@ -4067,6 +4303,8 @@ def memory_archive(name: str, compressed_description: str = "", superseded_by: s
     compressed_description: optionale Kurzfassung; das Original wird in extra.original_descr gesichert.
     superseded_by: Name des Nachfolge-Eintrags → Relation VERALTET_DURCH.
     """
+    if denied := _owner_guard(name, superseded_by):
+        return denied
     eid = _id(name)
     ts = _now()
     info = _set_archived(eid, ts, compressed_description=compressed_description)
@@ -4092,6 +4330,8 @@ def memory_unrelate(from_name: str, relation: str, to_name: str) -> str:
     Entity — falsche Extractor-Kanten (z.B. ai-rem -[INTEGRIERT_MIT]-> Küchenplanung)
     blieben deshalb einfach stehen.
     """
+    if denied := _owner_guard(from_name, to_name):
+        return denied
     fid, tid = _id(from_name), _id(to_name)
     q = """MATCH (a:Entity {id: $fid})-[r:Rel {name: $rel}]->(b:Entity {id: $tid})"""
     params = {"fid": fid, "rel": relation, "tid": tid}
@@ -4107,6 +4347,8 @@ def memory_merge(canonical_name: str, duplicate_name: str) -> str:
     Relationen der Dublette werden auf canonical umgehängt, Unique-Info in canonical.descr
     ergänzt, die Dublette archiviert und via DUPLIKAT_VON mit canonical verlinkt.
     """
+    if denied := _owner_guard(canonical_name, duplicate_name):
+        return denied
     cid = _id(canonical_name)
     did = _id(duplicate_name)
     if cid == did:
@@ -4201,6 +4443,8 @@ def memory_purge_archived(keep_days: int = 0) -> str:
     keep_days = 0 (default): ALLE archivierten Einträge löschen.
     Aktive (nicht archivierte) Einträge bleiben immer unberührt.
     """
+    if not _is_admin():
+        return "⚠ Nur für den Admin."
     res = _purge_archived(keep_days)
     if not res["deleted"]:
         return f"Nichts zu löschen — {res['kept']} archivierte Einträge bleiben."
@@ -4226,6 +4470,8 @@ def memory_normalize_task_status(dry_run: bool = True) -> str:
     würde — das zerstörte die Recency-Sortierung in get_context und startete die
     Karenzuhr bis zur Auto-Archivierung neu. Idempotent: der zweite Lauf meldet 0.
     """
+    if not _is_admin():
+        return "⚠ Nur für den Admin."
     rows = _rows(db_exec(
         "MATCH (e:Entity {type: 'Task'}) RETURN e.name, e.extra, e.updated_at"))
     geaendert: list = []
@@ -4260,6 +4506,8 @@ def memory_link_projects(dry_run: bool = True) -> str:
     Gleiche Regel wie beim Anlegen: genau ein Projekt-Treffer → Kante, sonst bleibt
     der Task ohne Projekt. extra.keywords am Project steuert die Treffer.
     """
+    if not _is_admin():
+        return "⚠ Nur für den Admin."
     ts = _now()
     linked, offen = [], []
     seen: set = set()
@@ -4306,7 +4554,38 @@ def memory_project_index() -> str:
     return json.dumps(out, ensure_ascii=False)
 
 
+def memory_user_list() -> str:
+    """Nutzer und ihre Gerätetokens (nur Admin). Der Admin-Token aus dem Env steht
+    nicht in users.json und wird separat aufgeführt."""
+    if not _is_admin():
+        return "⚠ Nur für den Admin."
+    lines = [f"- {AI_REM_ADMIN_USER} (Admin, AI_REM_API_TOKEN)"]
+    for h, e in sorted(_load_users().items(), key=lambda kv: (kv[1].get("user", ""), kv[1].get("created", ""))):
+        lines.append(f"- {e.get('user')} · {e.get('device') or '—'} · {e.get('created', '')[:10]} · id {h[:12]}")
+    return "\n".join(lines)
+
+
+def memory_token_revoke(token_id: str = "", user: str = "") -> str:
+    """Gerätetoken widerrufen (nur Admin): token_id = Hash-Präfix aus memory_user_list
+    (mind. 8 Zeichen) oder user = alle Tokens dieses Nutzers. Daten bleiben erhalten."""
+    if not _is_admin():
+        return "⚠ Nur für den Admin."
+    if len(token_id) < 8 and not user:
+        return "⚠ token_id (mind. 8 Zeichen) oder user angeben."
+    with _users_lock:
+        data = dict(_load_users())
+        drop = [h for h, e in data.items()
+                if (len(token_id) >= 8 and h.startswith(token_id)) or (user and e.get("user") == user)]
+        for h in drop:
+            del data[h]
+        if drop:
+            _save_users(data)
+    return f"{len(drop)} Token widerrufen."
+
+
 _ADMIN_TOOL_FUNCS = {
+    "memory_user_list": memory_user_list,
+    "memory_token_revoke": memory_token_revoke,
     "memory_project_index": memory_project_index,
     "memory_preference_update": memory_preference_update,
     "memory_set_project_context": memory_set_project_context,
@@ -4940,14 +5219,14 @@ def _cleanup_candidates() -> dict:
     rows = _rows(db_exec(
         "MATCH (e:Entity) WHERE (e.archived IS NULL OR e.archived <> 'true') "
         "AND (e.pinned IS NULL OR e.pinned <> 'true') AND e.type <> 'Preference' "
-        "RETURN e.name, e.type, e.descr, e.extra, e.updated_at"))
+        "RETURN e.name, e.type, e.descr, e.extra, e.updated_at, e.owner"))
     ents = []
-    for name, typ, descr, extra_raw, upd in rows:
+    for name, typ, descr, extra_raw, upd, owner in rows:
         try:
             extra = json.loads(extra_raw or "{}")
         except json.JSONDecodeError:
             extra = {}
-        ents.append({"name": name, "type": typ, "descr": descr or "",
+        ents.append({"name": name, "type": typ, "descr": descr or "", "owner": owner or "",
                      "extra": extra, "updated_at": upd or "", "tokens": _norm_tokens(name)})
 
     now = datetime.now()
@@ -4986,7 +5265,8 @@ def _cleanup_candidates() -> dict:
     for e in ents:
         if e["name"] in archived_names or not e["tokens"]:
             continue
-        by_type.setdefault(e["type"], []).append(e)
+        # Nach owner getrennt: nie Tasks zweier Nutzer ineinanderfalten.
+        by_type.setdefault((e["type"], e["owner"]), []).append(e)
 
     def _canon_first(x, y):
         return sorted((x, y), key=lambda m: (m["updated_at"], len(m["descr"])), reverse=True)
@@ -5322,7 +5602,8 @@ class AuthMiddleware:
     def __init__(self, app):
         self.app = app
 
-    def _authorized(self, scope) -> bool:
+    def _authorized(self, scope) -> str | bool:
+        """Nutzername bei Token/Cookie/Loopback, True für public Pfade, sonst False."""
         path = scope.get("path", "")
         # Exakter Treffer oder echtes Pfad-Segment darunter — nicht bloßes
         # String-Präfix, damit z. B. /setup nicht /setup-internal mit freigibt.
@@ -5336,13 +5617,13 @@ class AuthMiddleware:
             # Bypass über den Proxy (#9). Direkter SSH-Tunnel zur lokalen Web-UI
             # (kein XFF) bleibt tokenfrei. XFF kann Trust nur entziehen, nie gewähren.
             if not any(name == b"x-forwarded-for" for name, _ in scope.get("headers", [])):
-                return True
+                return AI_REM_ADMIN_USER
         for name, value in scope.get("headers", []):
             if name == b"authorization":
                 token = value.decode("latin-1", "ignore")
                 if token.lower().startswith("bearer "):
                     token = token[7:].strip()
-                return bool(AI_REM_API_TOKEN) and hmac.compare_digest(token, AI_REM_API_TOKEN)
+                return _user_for_token(token) or False
         # Kein Authorization-Header → Browser-Session-Cookie prüfen (Web-UI-Login).
         # Cookie kann Trust nur gewähren, wenn der Wert exakt passt; sonst 401.
         for name, value in scope.get("headers", []):
@@ -5350,11 +5631,23 @@ class AuthMiddleware:
                 for part in value.decode("latin-1", "ignore").split(";"):
                     k, _, v = part.strip().partition("=")
                     if k == _UI_COOKIE:
-                        return bool(_UI_SESSION_VALUE) and hmac.compare_digest(v, _UI_SESSION_VALUE)
+                        return _user_for_cookie(v) or False
         return False
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or self._authorized(scope):
+        who = self._authorized(scope) if scope["type"] == "http" else True
+        if scope["type"] == "http":
+            # Public Pfade laufen als "<anon>" (kein gültiger Name → kein Admin, keine
+            # persönlichen Einträge); leer hieße "In-Process" und damit Admin.
+            _REQUEST_USER.set(who if isinstance(who, str) else "<anon>")
+        if isinstance(who, str):
+            if not _is_admin() and any(scope["path"] == p or scope["path"].startswith(p + "/")
+                                       for p in _ADMIN_ONLY_PATHS):
+                await send({"type": "http.response.start", "status": 403,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body", "body": b'{"error":"admin only"}'})
+                return
+        if who:
             if scope["type"] == "http":
                 for name, value in scope.get("headers", []):
                     if name == b"x-ai-rem-client":

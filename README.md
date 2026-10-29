@@ -39,7 +39,7 @@ At the start of each session, the agent loads the relevant context from the grap
   "deploy_host": "...", "deploy_cmd": "...", "skills": [...], "rules": [...] }
 ```
 
-**Lean tool surface.** Only **4 always-on MCP tools** (`memory_get_context`, `memory_search`, `memory_add`, `memory_relate`) sit in `tools/list` and cost per-session context; the other 16 admin ops (list, merge, archive, project-context, …) are reachable over HTTP via `POST /api/tool` or the [`ai-rem` CLI](bin/ai-rem), keeping the session footprint small. `AI_REM_ADMIN_TOOLS=1` re-exposes all of them as MCP tools.
+**Lean tool surface.** Only **4 always-on MCP tools** (`memory_get_context`, `memory_search`, `memory_add`, `memory_relate`) sit in `tools/list` and cost per-session context; the other 18 admin ops (list, merge, archive, project-context, …) are reachable over HTTP via `POST /api/tool` or the [`ai-rem` CLI](bin/ai-rem), keeping the session footprint small. `AI_REM_ADMIN_TOOLS=1` re-exposes all of them as MCP tools.
 
 → **[MCP tool reference](docs/mcp-tools.md)** — the full `memory_*` set (4 always-on + 15 admin) with signatures, entity types and context separation.
 
@@ -119,6 +119,7 @@ Environment variables are loaded from a `.env` file in the Compose directory:
 
 ```env
 AI_REM_API_TOKEN=...                     # REQUIRED — API token (fail-closed, see Authentication)
+AI_REM_ADMIN_USER=markus                 # User name of the AI_REM_API_TOKEN holder (admin); see Multiple users
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Public URL of the server
 PORT=3456                                # TCP port (default: 3456)
 HOST=::                                  # Bind address (default: ::) — dual-stack socket, so IPv6 and the published IPv4 port both work; 0.0.0.0 for IPv4 only
@@ -136,7 +137,7 @@ EMBED_BACKFILL_PORTION=300                # vectors written per database session
 EMBED_RECONCILE_SEC=3600                  # how often the server backfills missing vectors (0 = startup/nightly only)
 KG_MAX_MB=4096                            # above this the embedding backfill stops writing entirely
 KG_MIN_FREE_MB=1024                       # free disk space the backfill requires before it writes
-AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 16 admin ops as MCP tools
+AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 18 admin ops as MCP tools
 AI_REM_LOG_RING=500                       # Lines of server log kept in memory for /logs
 EMBED_URL=                                # Empty = in-process embeddings; set to an OpenAI-compatible /v1/embeddings URL for an external service
 EMBED_HTTP_MODEL=bge-m3                   # Model name sent to EMBED_URL
@@ -272,6 +273,8 @@ stops with an `ERROR`) is cheap insurance. A later release will simplify this pa
 ## Authentication
 
 All sensitive routes (`/mcp`, `/api/*`, `/export`, `/import`, `/ui`) require a token. The server is **fail-closed** — without `AI_REM_API_TOKEN` it refuses to start. MCP clients authenticate with `Authorization: Bearer <token>`; the browser Web UI uses a derived, HttpOnly cookie set at `/login`. The token is kept once in [mykeyvault](https://github.com/markus7h/mykeyvault) (`ai-rem-api-token`) and pulled in by `deploy.sh` / the client hook.
+
+**Multiple users:** Tasks and Preferences are personal (owner = creator), all other knowledge is shared. Additional users get their own device token via `/pair` → [Multiple users](docs/authentication.md#multiple-users).
 
 → **[Authentication model, Web UI login & token source](docs/authentication.md)**
 

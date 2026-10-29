@@ -15,8 +15,15 @@ German).
 
 ## [Unreleased]
 
+### Added
+- Multiple users on one server: Tasks and Preferences now belong to their creator (`owner` column) and are visible only to that user in context, search, relations, `/tasks` and `/prefs`. All other entity types stay shared. Existing Tasks and Preferences are migrated to the admin (`AI_REM_ADMIN_USER`, default `markus`), so single-user setups see no change. Writes to another user's entity are refused, and the nightly cleanup never merges across users. Backups/restore keep the owner (export version 3).
+- Per-user device tokens: approving a pairing at `/pair` mints a new token for the approving user, or, as admin, for the user named in the dialog. Only the SHA-256 is stored in `backups/users.json`. New admin ops `memory_user_list` and `memory_token_revoke`.
+
 ### Changed
 - `memory_get_context` (session start) shows only the total of open tasks and the most recently changed ones ("Zuletzt"); the per-project count lines are gone. Drill-down via `topic=<Projekt>` is unchanged.
+
+### Security
+- `/api/pair/poll` no longer hands out the admin token `AI_REM_API_TOKEN`; every paired device gets its own token, which can be revoked on its own. Export/import, backups, cleanup, logs and the graph views are admin-only, and `/api/client-config` returns the vault access only to the admin.
 
 ## [1.12.2] – 2026-10-29
 

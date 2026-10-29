@@ -51,7 +51,8 @@ is fetched per run, authenticated with that token:
 
 - `llm_url` — `AI_REM_OLLAMA_URL`/`AI_REM_LLAMA_URL` on the server, else `ollama_url` from the setup-config.
 - `llm_api_key` — server env `AI_REM_LLM_API_KEY` (preferred), else `llm_api_key` from the setup-config.
-- `vault_url`, `vault_token` — `AI_REM_PAIR_VAULT_TOKEN` and the vault URL from `mcp_register.mykeyvault`; empty when the variable is not set, then mykeyvault stays on HTTP without the exec/file tools.
+- `vault_url`, `vault_token` — `AI_REM_PAIR_VAULT_TOKEN` and the vault URL from `mcp_register.mykeyvault`; admin only (empty for other users, see [Multiple users](authentication.md#multiple-users)); empty when the variable is not set, then mykeyvault stays on HTTP without the exec/file tools.
+- `user` — the user the token belongs to.
 - `context_rules` — `git_accounts` from the setup-config (or the defaults), used by `ai-rem origin`.
 
 Consumers: `ai-rem ingest`/`catchup` (extractor), `ai-rem origin`, the `system-check.py` SessionStart hook (router probe) and `ai-rem vault-mcp`. Nothing is persisted, so rotating the LLM key or the vault token is a change in the server's `.env` followed by a restart — no workstation needs touching. `AI_REM_LLAMA_URL`/`AI_REM_LLM_API_KEY` in a client's environment still override the served values; against a server < 1.7 the clients fall back to `settings-template.json` and say so.

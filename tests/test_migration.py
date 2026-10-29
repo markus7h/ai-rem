@@ -18,7 +18,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-_NEW_COLUMNS = ["context", "pinned", "sort_order", "archived", "embedding"]
+_NEW_COLUMNS = ["context", "pinned", "sort_order", "archived", "embedding", "owner"]
 
 
 def _scenario() -> None:
@@ -49,6 +49,11 @@ def _scenario() -> None:
                             extra:'{"context":"work"}',
                             created_at:'2025-01-01T00:00:00', updated_at:'2025-01-01T00:00:00'})"""
     )
+    fconn.execute(
+        """CREATE (:Entity {id:'alt_task', name:'Alt Task', type:'Task', descr:'offen',
+                            extra:'{}', created_at:'2025-01-01T00:00:00',
+                            updated_at:'2025-01-01T00:00:00'})"""
+    )
     fconn.close()
     fdb.close()
 
@@ -61,6 +66,10 @@ def _scenario() -> None:
     # 2) context aus extra backfilled.
     rows = server._rows(server.db_exec("MATCH (e:Entity {id:'legacy'}) RETURN e.context"))
     assert rows and rows[0][0] == "work", f"context nicht backfilled: {rows}"
+
+    # 2b) owner: Bestands-Tasks gehören dem Admin, Wissen bleibt geteilt.
+    owners = dict(server._rows(server.db_exec("MATCH (e:Entity) RETURN e.id, e.owner")))
+    assert owners["alt_task"] == server.AI_REM_ADMIN_USER and not owners["legacy"], owners
 
     # 3) Pre-Migration-Backup geschrieben + gültiges v1-JSON mit der Legacy-Entity.
     files = os.listdir(backup_dir)

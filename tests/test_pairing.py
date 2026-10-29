@@ -45,7 +45,9 @@ def _scenario() -> None:
     assert user.post("/api/pair/approve", json={"code": code, "approve": True}).json() == {"status": "approved"}
 
     got = anon.post("/api/pair/poll", json={"pair_id": pid}).json()
-    assert got["state"] == "approved" and got["ai_rem_token"] == "pair-test-token"
+    # Eigener Gerätetoken, nie der Admin-Token — gehört dem Freigebenden (hier Admin).
+    assert got["state"] == "approved" and got["ai_rem_token"] != "pair-test-token"
+    assert server._user_for_token(got["ai_rem_token"]) == server.AI_REM_ADMIN_USER
     assert got["vault_token"] == "vault-test-token"
     assert anon.post("/api/pair/poll", json={"pair_id": pid}).json() == {"state": "expired"}, \
         "Token zweimal abholbar"
