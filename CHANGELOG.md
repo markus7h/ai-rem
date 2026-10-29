@@ -18,6 +18,9 @@ German).
 ### Fixed
 - kg.db no longer grows silently while WAL checkpoints keep failing. Once the buffer pool was full ("buffer pool is full"), the idle rule retried the checkpoint every minute and each aborted attempt left ~3 MB of new pages in kg.db: 187 MB → 10 GB between 26 and 29 Oct 2026. After `AI_REM_CHECKPOINT_FAIL_EXIT` consecutive failures (default 5, 0 = off), the process now exits. `restart: unless-stopped` starts it again with an empty buffer pool, and the startup rebuild compacts the file once it is above `KG_REBUILD_MB`.
 
+### Security
+- `fastembed` 0.9.0 → 0.9.1 so the default image can get Pillow 13.0.0, which fixes 5 critical and 23 high Pillow CVEs (e.g. CVE-2026-112393). fastembed 0.9.0 capped Pillow below 13.
+
 ## [1.12.1] – 2026-10-20
 
 ### Fixed
