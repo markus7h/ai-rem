@@ -110,6 +110,13 @@ LADYBUG_WAL_CHECKPOINT_MB = float(_env("WAL_CHECKPOINT_MB", "2"))
 # (1,7 MB WAL) mit in die Quarantäne. Darum wird zusätzlich gecheckpointet, sobald
 # die WAL so lange nicht mehr geschrieben wurde — ein Crash kostet dann Minuten.
 LADYBUG_WAL_CHECKPOINT_IDLE_S = int(os.getenv("AI_REM_WAL_CHECKPOINT_IDLE_S", "300"))
+# Ein voller Buffer-Pool erholt sich nicht von selbst: ab dem 26.10.2026 scheiterte
+# jeder Checkpoint mit "buffer pool is full", die Idle-Regel versuchte es jede Minute
+# neu, und jeder abgebrochene Versuch liess ~3 MB neue Seiten in kg.db liegen —
+# 187 MB → 10 GB in drei Tagen. Nach so vielen Fehlschlägen in Folge beendet sich der
+# Prozess; restart: unless-stopped startet frisch, ab KG_REBUILD_MB mit Kompaktierung.
+# 0 = aus.
+LADYBUG_CHECKPOINT_FAIL_EXIT = int(os.getenv("AI_REM_CHECKPOINT_FAIL_EXIT", "5"))
 
 # Kuzu gibt beim Überschreiben von Properties keinen Speicher zurück: ein Checkpoint
 # schreibt die betroffene Column neu und lässt die alte Version in der Datei liegen.
@@ -1161,8 +1168,16 @@ def _checkpoint_wal(force: bool = False) -> bool:
 
 def _scheduler_loop() -> None:
     thresholds = {"hourly": 3600, "daily": 86400, "weekly": 604800}
+    fehlschlaege = 0
     while not _shutdown.wait(60):
-        _checkpoint_wal()
+        fehlschlaege = 0 if _checkpoint_wal() else fehlschlaege + 1
+        if LADYBUG_CHECKPOINT_FAIL_EXIT and fehlschlaege >= LADYBUG_CHECKPOINT_FAIL_EXIT:
+            log.error("WAL-Checkpoint %dx in Folge fehlgeschlagen — Prozess beendet sich, "
+                      "damit kg.db nicht weiter wächst (Neustart leert den Buffer-Pool).",
+                      fehlschlaege)
+            # _exit statt sys.exit: aus dem Thread heraus, und der atexit-Checkpoint
+            # würde am selben vollen Pool nur noch einmal scheitern.
+            os._exit(1)
         cfg = _load_backup_cfg()
         if not cfg.get("enabled"):
             continue
