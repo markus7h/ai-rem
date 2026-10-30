@@ -20,6 +20,8 @@ Memory-Senke bleibt.
 
 **Entity-Typen:** `Person · Project · Task · Tool · Problem · Solution · Decision · Preference · Topic`
 
+**Mehrere Nutzer:** `Task` und `Preference` gehören ihrem Anleger (`owner`) und sind nur für ihn sichtbar; alle anderen Typen sind geteilt. Namen bleiben global eindeutig — Schreibzugriffe auf fremde Einträge werden abgelehnt ([Details](authentication.de.md#mehrere-nutzer)).
+
 ### Funktionen
 
 | Tool | Zweck |
@@ -39,6 +41,8 @@ Memory-Senke bleibt.
 | `memory_delete` | Entity + alle Kanten löschen. |
 | `memory_status` | Kurzstatus: Anzahl Entities und Relationen. |
 | `memory_check_update` | Installierte Version vs. Docker Hub prüfen. |
+| `memory_user_list` | Nutzer und ihre Gerätetokens (nur Admin, via `/api/tool`). |
+| `memory_token_revoke` | Gerätetoken widerrufen: `token_id` (Hash-Präfix) oder `user` (nur Admin, via `/api/tool`). |
 
 ### Workflows
 
