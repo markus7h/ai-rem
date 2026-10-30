@@ -96,7 +96,19 @@ def _scenario() -> None:
     assert owners["Anna Einkauf"] == "anna" and owners["Markus Steuer"] == "markus"
     assert owners["Gemeinsames Projekt"] == ""
 
+    # Neukoppeln desselben Geräts ersetzt den alten Token; last_used ist gesetzt
+    old = server._token_hash(anna_tok)
+    assert server._load_users()[old]["last_used"] == server._now()[:10]
+    s3 = anon.post("/api/pair/start", json={"device": "annas-laptop"}).json()
+    admin.post("/api/pair/approve", json={"code": s3["code"], "approve": True, "user": "anna"})
+    new_tok = anon.post("/api/pair/poll", json={"pair_id": s3["pair_id"]}).json()["ai_rem_token"]
+    assert server._user_for_token(anna_tok) == "" and server._user_for_token(new_tok) == "anna"
+    assert sum(e["user"] == "anna" for e in server._load_users().values()) == 2  # laptop + desktop
+
     # Revoke: Token und UI-Cookie sofort ungültig, Daten bleiben
+    anna = TestClient(app, base_url="https://testserver",
+                      headers={**xff, "Authorization": f"Bearer {new_tok}"})
+    assert "Anna Einkauf" in tool(anna, "memory_search", query="Milch")
     tool(admin, "memory_token_revoke", user="anna")
     assert anna.post("/api/tool", json={"name": "memory_get_context", "arguments": {}}).status_code == 401
     assert "Anna Einkauf" in server.memory_search("Milch")

@@ -236,15 +236,42 @@ def _save_users(data: dict) -> None:
 
 
 def _issue_token(user: str, device: str = "") -> str:
-    """Neuen Gerätetoken für user anlegen; der Klartext verlässt den Server genau einmal."""
+    """Neuen Gerätetoken für user anlegen; der Klartext verlässt den Server genau einmal.
+
+    Neukoppeln ersetzt: ein älterer Token desselben Nutzers mit gleichem Gerätenamen
+    fliegt raus, sonst sammeln sich tote Tokens an. ponytail: Gerätename = Hostname
+    des Installers — zwei Rechner eines Nutzers mit gleichem Hostnamen verdrängen sich."""
     if not _USER_RE.match(user):
         raise ValueError(f"Ungültiger Nutzername: {user!r} (erlaubt: a-z 0-9 _ -, max. 32)")
     token = secrets.token_hex(32)
+    device = device[:80]
     with _users_lock:
-        data = dict(_load_users())
-        data[_token_hash(token)] = {"user": user, "device": device[:80], "created": _now()}
+        data = {h: e for h, e in _load_users().items()
+                if not (device and e.get("user") == user and e.get("device") == device)}
+        data[_token_hash(token)] = {"user": user, "device": device, "created": _now()}
         _save_users(data)
     return token
+
+
+def _touch_token(h: str) -> None:
+    """last_used fortschreiben — höchstens einmal pro Tag, damit nicht jeder Request
+    users.json schreibt."""
+    today = _now()[:10]
+    if (_load_users().get(h) or {}).get("last_used", "")[:10] == today:
+        return
+    with _users_lock:
+        data = dict(_load_users())
+        if h in data:
+            data[h] = {**data[h], "last_used": today}
+            _save_users(data)
+
+
+def _user_for_hash(h: str) -> str:
+    user = (_load_users().get(h) or {}).get("user", "")
+    if not _USER_RE.match(user):
+        return ""
+    _touch_token(h)
+    return user
 
 
 def _user_for_token(token: str) -> str:
@@ -255,8 +282,7 @@ def _user_for_token(token: str) -> str:
         return AI_REM_ADMIN_USER
     # Lookup über den Hash: wer Zeitunterschiede misst, lernt höchstens etwas über
     # den Hash eines 256-Bit-Tokens.
-    user = (_load_users().get(_token_hash(token)) or {}).get("user", "")
-    return user if _USER_RE.match(user) else ""
+    return _user_for_hash(_token_hash(token))
 
 
 def _ui_session_value(token: str) -> str:
@@ -279,8 +305,7 @@ def _user_for_cookie(value: str) -> str:
     want = hmac.new(AI_REM_API_TOKEN.encode(), h.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, want):
         return ""
-    user = (_load_users().get(h) or {}).get("user", "")
-    return user if _USER_RE.match(user) else ""
+    return _user_for_hash(h)
 
 
 def _current_user() -> str:
@@ -4567,7 +4592,8 @@ def memory_user_list() -> str:
         return "⚠ Nur für den Admin."
     lines = [f"- {AI_REM_ADMIN_USER} (Admin, AI_REM_API_TOKEN)"]
     for h, e in sorted(_load_users().items(), key=lambda kv: (kv[1].get("user", ""), kv[1].get("created", ""))):
-        lines.append(f"- {e.get('user')} · {e.get('device') or '—'} · {e.get('created', '')[:10]} · id {h[:12]}")
+        lines.append(f"- {e.get('user')} · {e.get('device') or '—'} · angelegt {e.get('created', '')[:10]}"
+                     f" · zuletzt {e.get('last_used') or '—'} · id {h[:12]}")
     return "\n".join(lines)
 
 

@@ -74,7 +74,10 @@ otherwise the user name.
 - **Managing users:** `ai-rem` CLI or `POST /api/tool` with `memory_user_list` (users and
   devices) and `memory_token_revoke` (`token_id` = hash prefix from the list, or `user` =
   all of that user's tokens). A revoked token and its Web UI cookie stop working at once;
-  the data stays.
+  the data stays. The list shows when each token was last used (updated at most once a day),
+  so a lost device stands out.
+- **Re-pairing replaces:** pairing a device again (same user, same device name = hostname)
+  removes its old token, so no dead tokens pile up. Tokens never expire on their own.
 
 ## One secret per device — the OS keychain
 

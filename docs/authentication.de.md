@@ -78,7 +78,12 @@ Decision, Problem, Topic, Person) bleibt geteilt. Jede Entity hat eine Spalte `o
 - **Verwaltung:** über die `ai-rem`-CLI oder `POST /api/tool` mit `memory_user_list`
   (Nutzer und Geräte) und `memory_token_revoke` (`token_id` = Hash-Präfix aus der Liste,
   oder `user` = alle Tokens des Nutzers). Ein widerrufener Token und sein Web-UI-Cookie
-  sind sofort ungültig; die Daten bleiben erhalten.
+  sind sofort ungültig; die Daten bleiben erhalten. Die Liste zeigt, wann jeder Token
+  zuletzt benutzt wurde (höchstens einmal am Tag aktualisiert), damit ein verlorenes
+  Gerät auffällt.
+- **Neukoppeln ersetzt:** Wird ein Gerät erneut gekoppelt (gleicher Nutzer, gleicher
+  Gerätename = Hostname), entfernt der Server dessen alten Token; tote Tokens sammeln sich
+  so nicht an. Von selbst laufen Tokens nicht ab.
 
 ## Ein Secret pro Gerät — der OS-Keychain
 
