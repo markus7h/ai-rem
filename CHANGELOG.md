@@ -15,13 +15,15 @@ German).
 
 ## [Unreleased]
 
+## [1.12.4] – 2026-10-30
+
 ### Fixed
 
 - **`vault-secret-reminder` now fires on sudo password prompts** (`sudo: a password is
   required`, `a terminal is required`, `N incorrect password attempts`) and names the
   `sudo <host>` vault entries plus the `sudo -S` over ssh pattern. Previously no pattern
   matched sudo, so Claude handed sudo commands back to the user although the passwords
-  were in the vault.
+  were in the vault (#188).
 
 ## [1.12.3] – 2026-10-30
 
@@ -1193,7 +1195,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.12.3...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.12.4...HEAD
+[1.12.4]: https://github.com/markus7h/ai-rem/compare/v1.12.3...v1.12.4
 [1.12.3]: https://github.com/markus7h/ai-rem/compare/v1.12.2...v1.12.3
 [1.12.2]: https://github.com/markus7h/ai-rem/compare/v1.12.1...v1.12.2
 [1.12.1]: https://github.com/markus7h/ai-rem/compare/v1.12.0...v1.12.1
