@@ -15,15 +15,17 @@ German).
 
 ## [Unreleased]
 
+## [1.12.3] – 2026-10-30
+
 ### Added
-- Multiple users on one server: Tasks and Preferences now belong to their creator (`owner` column) and are visible only to that user in context, search, relations, `/tasks` and `/prefs`. All other entity types stay shared. Existing Tasks and Preferences are migrated to the admin (`AI_REM_ADMIN_USER`, default `markus`), so single-user setups see no change. Writes to another user's entity are refused, and the nightly cleanup never merges across users. Backups/restore keep the owner (export version 3).
-- Per-user device tokens: approving a pairing at `/pair` mints a new token for the approving user, or, as admin, for the user named in the dialog. Only the SHA-256 is stored in `backups/users.json`. New admin ops `memory_user_list` and `memory_token_revoke`. `/pair` states whose data the device will get and asks for confirmation before creating a user that does not exist yet. Re-pairing a device (same user and device name) replaces its old token, and `memory_user_list` shows when each token was last used.
+- Multiple users on one server: Tasks and Preferences now belong to their creator (`owner` column) and are visible only to that user in context, search, relations, `/tasks` and `/prefs`. All other entity types stay shared. Existing Tasks and Preferences are migrated to the admin (`AI_REM_ADMIN_USER`, default `markus`), so single-user setups see no change. Writes to another user's entity are refused, and the nightly cleanup never merges across users. Backups/restore keep the owner (export version 3) (#185).
+- Per-user device tokens: approving a pairing at `/pair` mints a new token for the approving user, or, as admin, for the user named in the dialog. Only the SHA-256 is stored in `backups/users.json`. New admin ops `memory_user_list` and `memory_token_revoke`. `/pair` states whose data the device will get and asks for confirmation before creating a user that does not exist yet. Re-pairing a device (same user and device name) replaces its old token, and `memory_user_list` shows when each token was last used (#185).
 
 ### Changed
-- `memory_get_context` (session start) shows only the total of open tasks and the most recently changed ones ("Zuletzt"); the per-project count lines are gone. Drill-down via `topic=<Projekt>` is unchanged.
+- `memory_get_context` (session start) shows only the total of open tasks and the most recently changed ones ("Zuletzt"); the per-project count lines are gone. Drill-down via `topic=<Projekt>` is unchanged (#186).
 
 ### Security
-- `/api/pair/poll` no longer hands out the admin token `AI_REM_API_TOKEN`; every paired device gets its own token, which can be revoked on its own. Export/import, backups, cleanup, logs and the graph views are admin-only, and `/api/client-config` returns the vault access only to the admin.
+- `/api/pair/poll` no longer hands out the admin token `AI_REM_API_TOKEN`; every paired device gets its own token, which can be revoked on its own. Export/import, backups, cleanup, logs and the graph views are admin-only, and `/api/client-config` returns the vault access only to the admin (#185).
 
 ## [1.12.2] – 2026-10-29
 
@@ -1183,7 +1185,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.12.2...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.12.3...HEAD
+[1.12.3]: https://github.com/markus7h/ai-rem/compare/v1.12.2...v1.12.3
 [1.12.2]: https://github.com/markus7h/ai-rem/compare/v1.12.1...v1.12.2
 [1.12.1]: https://github.com/markus7h/ai-rem/compare/v1.12.0...v1.12.1
 [1.12.0]: https://github.com/markus7h/ai-rem/compare/v1.11.0...v1.12.0
