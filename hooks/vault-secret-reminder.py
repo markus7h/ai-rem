@@ -28,6 +28,12 @@ AUTH_PATTERNS = [
     r"Login failed",
     r"\bENOTAUTH\b",
     r"Unauthorized",
+    # sudo ohne TTY/Passwort (z.B. per ssh): die Passwoerter liegen als "sudo <host>"
+    # im Vault. Real verpasst am 30.10.2026 — Claude gab dem User sudo-Befehle zum
+    # Selbst-Ausfuehren, weil keins der Muster oben auf sudo passte.
+    r"sudo: a password is required",
+    r"sudo: a terminal is required",
+    r"sudo: \d+ incorrect password",
 ]
 
 _RX = re.compile("|".join(AUTH_PATTERNS), re.IGNORECASE)
@@ -95,7 +101,9 @@ def main():
         "Bitte den User NICHT um Token, Passwort oder interaktives Login. Prüfe ZUERST "
         "mykeyvault — vault_list_items zeigt die Einträge, vault_run_with_secret "
         "injiziert das Secret wertblind als Env-Var (vault_run_with_secret_file für "
-        "SSH-Keys/PEM). Erst wenn dort nichts Passendes liegt, den User fragen."
+        "SSH-Keys/PEM). sudo remote: Eintrag 'sudo <host>' und "
+        "`printf '%s\\n' \"$PW\" | ssh <host> 'sudo -S -p \"\" <cmd>'`. "
+        "Erst wenn dort nichts Passendes liegt, den User fragen."
     )
     print(json.dumps({
         "hookSpecificOutput": {
@@ -110,6 +118,10 @@ if __name__ == "__main__" and "--selftest" in sys.argv:
     assert detect("Try authenticating with: gh auth login") == "gh auth login"
     assert detect("git@github.com: Permission denied (publickey).")
     assert detect("remote: Bad credentials")
+    assert detect("sudo: a password is required") == "sudo: a password is required"
+    assert detect("sudo: a terminal is required to read the password")
+    assert detect("sudo: 3 incorrect password attempts")
+    assert detect("sudo: a password is required", "ssh myai 'sudo apt-get install x'")
     assert detect("Everything up-to-date") is None
     assert detect("2 files changed") is None
     assert detect("") is None
