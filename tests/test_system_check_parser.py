@@ -30,8 +30,6 @@ CTX = """## Routinen & Anweisungen
 - 📌 **Irgendeine Regel**: bla
 
 ## Offene Tasks (12)
-- **_ohne Projekt_** — 6 offen
-- **ProjektAlpha** — 3 offen
 Zuletzt: TaskEins · TaskZwei
 → Details: `memory_get_context(topic="<Projekt>")`
 
@@ -43,7 +41,6 @@ Zuletzt: TaskEins · TaskZwei
 def test_header_mit_zaehler_wird_erkannt():
     out = sc.offene_tasks_section(CTX)
     assert out.startswith("## Offene Tasks (12)")
-    assert "- **ProjektAlpha** — 3 offen" in out
     assert "Zuletzt: TaskEins · TaskZwei" in out
     # naechste Sektion gehoert nicht mehr dazu
     assert "## Projekte" not in out

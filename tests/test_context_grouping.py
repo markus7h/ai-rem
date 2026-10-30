@@ -1,6 +1,6 @@
 """Tests für die nach Projekt gruppierte Offene-Tasks-Anzeige in memory_get_context (Issue #49).
 
-Default (ohne topic): pro Projekt nur Zähler, keine Task-Bodies. Drill-down via topic=<Projekt>
+Default (ohne topic): nur Summe + zuletzt geänderte Namen, keine Task-Bodies. Drill-down via topic=<Projekt>
 klappt die offenen Tasks der Gruppe mit Body aus. In-process gegen Temp-DB, Embedding aus.
 """
 import os
@@ -34,12 +34,11 @@ def _setup():
     server.memory_relate("FertigTask", "TEIL_VON", "ProjektAlpha")  # zählt nicht (erledigt)
 
 
-def test_default_shows_counts_not_bodies():
+def test_default_shows_total_not_bodies():
     _setup()
     out = server.memory_get_context()
-    assert "ProjektAlpha** — 2 offen" in out
-    assert "ProjektBeta** — 1 offen" in out
-    assert "_ohne Projekt_** — 1 offen" in out
+    # Keine Zählzeile pro Projekt mehr — nur die Summe im Header
+    assert "— 2 offen" not in out and "_ohne Projekt_" not in out
     # Bodies tauchen im Default NICHT auf
     assert "erste Alpha-Aufgabe" not in out
     # erledigter Task wird nicht gezählt — beide Schreibweisen aus _DONE_STATUSES
@@ -66,7 +65,7 @@ def test_drilldown_by_topic_expands_group():
 
 
 if __name__ == "__main__":
-    test_default_shows_counts_not_bodies()
+    test_default_shows_total_not_bodies()
     test_default_lists_recent_task_names()
     test_drilldown_by_topic_expands_group()
     print("OK")
