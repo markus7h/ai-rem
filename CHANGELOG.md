@@ -15,6 +15,14 @@ German).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`vault-secret-reminder` now fires on sudo password prompts** (`sudo: a password is
+  required`, `a terminal is required`, `N incorrect password attempts`) and names the
+  `sudo <host>` vault entries plus the `sudo -S` over ssh pattern. Previously no pattern
+  matched sudo, so Claude handed sudo commands back to the user although the passwords
+  were in the vault.
+
 ## [1.12.3] – 2026-10-30
 
 ### Added
