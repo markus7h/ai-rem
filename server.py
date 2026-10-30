@@ -3696,22 +3696,16 @@ def memory_get_context(topic: str = "", context: str = "", include_archived: boo
         ]
         sections.append(f"## Routinen & Anweisungen{ctx_label}\n" + "\n".join(lines))
 
-    # Offene Tasks — nach Projekt gruppiert, nur Zähler (Details on demand via topic=<Projekt>).
+    # Offene Tasks — nur Summe + die zuletzt geänderten (Details on demand via topic=<Projekt>).
     if open_tasks:
-        groups: dict[str, set] = {}
-        for name, _descr, _status, proj in open_tasks:
-            groups.setdefault(proj or "_ohne Projekt_", set()).add(name)
         total = len({name for name, _d, _s, _p in open_tasks})
-        lines = [
-            f"- **{g}** — {len(names)} offen"
-            for g, names in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
-        ]
+        lines = []
         if not topic:  # beim Drill-down stehen die Namen ohnehin ausgeklappt darueber
             recent = list(dict.fromkeys(name for name, _d, _s, _p in open_tasks))[:5]
             lines.append("Zuletzt: " + " · ".join(recent))
         sections.append(
-            f"## Offene Tasks{ctx_label} ({total})\n" + "\n".join(lines)
-            + "\n→ Details: `memory_get_context(topic=\"<Projekt>\")`"
+            f"## Offene Tasks{ctx_label} ({total})\n" + "".join(l + "\n" for l in lines)
+            + "→ Details: `memory_get_context(topic=\"<Projekt>\")`"
         )
 
     # Aktive Projekte

@@ -15,6 +15,9 @@ German).
 
 ## [Unreleased]
 
+### Changed
+- `memory_get_context` (session start) shows only the total of open tasks and the most recently changed ones ("Zuletzt"); the per-project count lines are gone. Drill-down via `topic=<Projekt>` is unchanged.
+
 ## [1.12.2] – 2026-10-29
 
 ### Fixed
