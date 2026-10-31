@@ -4,7 +4,7 @@
 # ponytail: nur Top-Level gepinnt — Transitive floaten noch; echtes Lockfile
 # (uv/pip-compile) erst nachrüsten, wenn ein Transitiv-Bump real beißt.
 fastmcp==4.1.4
-ladybug==0.21.2
+ladybug==0.22.0
 numpy==2.5.4
 cryptography==50.0.2
 # JWT-Prüfung für den optionalen OAuth-Modus (kam bisher transitiv über mcp).
