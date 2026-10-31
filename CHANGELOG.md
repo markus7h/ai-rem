@@ -34,6 +34,11 @@ German).
 - **`AI_REM_ADMIN_USER` is now passed through `docker-compose.yml`** — set in `.env` it
   previously never reached the container (default `markus` applied) (#192).
 
+### Changed
+
+- **Dependencies:** fastmcp 4.1.0 → 4.1.4 (#181), ladybug 0.21.2 → 0.22.0 (#193),
+  tzdata 2026.5 → 2026.6 (#194).
+
 ### Docs
 
 - **Plan for using ai-rem as a claude.ai connector (mobile app)** in
