@@ -5781,7 +5781,7 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "::")
     port = int(os.getenv("PORT", "3456"))
     log.info("Starting ai-rem MCP server on %s:%d (auth: token+loopback%s)", host, port,
-             f"+oauth {AI_REM_OAUTH_ISSUER}" if AI_REM_OAUTH_ISSUER else "")
+             "+oauth" if AI_REM_OAUTH_ISSUER else "")
 
     app = mcp.http_app()
     app.add_middleware(AuthMiddleware)
