@@ -75,7 +75,7 @@ Decision, Problem, Topic, Person) bleibt geteilt. Jede Entity hat eine Spalte `o
 - **Nur Admin:** `/export`, `/import`, Backups/Restore, `/cleanup`, `/logs`, `/browse`,
   `/graph`, `memory_purge_archived`, `memory_normalize_task_status` und
   `memory_link_projects`. `/api/client-config` liefert den Vault-Zugang nur an den Admin.
-- **Verwaltung:** über die `ai-rem`-CLI oder `POST /api/tool` mit `memory_user_list`
+- **Verwaltung:** mit `ai-rem token list` / `ai-rem token revoke <id>` (oder `--user <name>`) bzw. `POST /api/tool` mit `memory_user_list`
   (Nutzer und Geräte) und `memory_token_revoke` (`token_id` = Hash-Präfix aus der Liste,
   oder `user` = alle Tokens des Nutzers). Ein widerrufener Token und sein Web-UI-Cookie
   sind sofort ungültig; die Daten bleiben erhalten. Die Liste zeigt, wann jeder Token

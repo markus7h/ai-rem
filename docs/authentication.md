@@ -71,7 +71,7 @@ otherwise the user name.
 - **Admin only:** `/export`, `/import`, backups/restore, `/cleanup`, `/logs`, `/browse`,
   `/graph`, `memory_purge_archived`, `memory_normalize_task_status` and
   `memory_link_projects`. `/api/client-config` returns the vault access only to the admin.
-- **Managing users:** `ai-rem` CLI or `POST /api/tool` with `memory_user_list` (users and
+- **Managing users:** `ai-rem token list` / `ai-rem token revoke <id>` (or `--user <name>`), or `POST /api/tool` with `memory_user_list` (users and
   devices) and `memory_token_revoke` (`token_id` = hash prefix from the list, or `user` =
   all of that user's tokens). A revoked token and its Web UI cookie stop working at once;
   the data stays. The list shows when each token was last used (updated at most once a day),

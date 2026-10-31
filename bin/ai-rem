@@ -285,7 +285,17 @@ def cmd_token(c: MCPClient, a):
     """Token ausgeben, oder mit --store/--forget den Keychain-Eintrag pflegen.
 
     --store liest von stdin (nie aus argv — dort stuende der Token in der
-    Prozessliste und Shell-History); setup.py und `ai-rem pair` nutzen denselben Weg."""
+    Prozessliste und Shell-History); setup.py und `ai-rem pair` nutzen denselben Weg.
+    `list`/`revoke` verwalten die Gerätetokens auf dem Server (nur Admin)."""
+    if getattr(a, "action", None) == "list":
+        _print(c.call("memory_user_list"))
+        return
+    if getattr(a, "action", None) == "revoke":
+        if len(a.token_id) < 8 and not a.user:
+            sys.stderr.write("ai-rem: token revoke <id> (mind. 8 Zeichen aus `token list`) oder --user <name>\n")
+            sys.exit(2)
+        _print(c.call("memory_token_revoke", {"token_id": a.token_id, "user": a.user}))
+        return
     if a.store:
         tok = sys.stdin.read().strip()
         if not tok:
@@ -1158,6 +1168,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument("--store", action="store_true", help="Token von stdin lesen und im OS-Keychain ablegen")
     g.add_argument("--forget", action="store_true", help="Token aus dem OS-Keychain entfernen")
+    s.add_argument("action", nargs="?", choices=("list", "revoke"),
+                   help="list: Nutzer + Gerätetokens; revoke <id>: Token widerrufen (nur Admin)")
+    s.add_argument("token_id", nargs="?", default="", help="mit revoke: Hash-Präfix aus `token list`")
+    s.add_argument("--user", default="", help="mit revoke: alle Tokens dieses Nutzers widerrufen")
     s.set_defaults(func=cmd_token)
 
     s = sub.add_parser("mcp-proxy", help="stdio-MCP-Server fuer Claude Code/opencode (Bruecke zum HTTP-Endpoint)")

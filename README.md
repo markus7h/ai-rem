@@ -329,6 +329,8 @@ ai-rem uninstall --client opencode   # remove one frontend again
 ai-rem doctor [--fix]                # server version, installed targets, drift, token source
 ai-rem pair                          # renew just the token (browser approval)
 ai-rem token [--store|--forget]      # print the token / store it from stdin in the keychain / remove it
+ai-rem token list                    # users + device tokens (admin only)
+ai-rem token revoke <id>|--user <n>  # revoke a device token (admin only)
 ai-rem origin [--cwd <dir>]          # project/context a session in <dir> gets (git remote, git email, mapping)
 ai-rem map-dir --dir <d> --project <P> [--context work|private]   # map a non-repo dir to a project
 ai-rem unrelate <from> <REL> <to>                               # delete a single relation
