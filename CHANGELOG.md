@@ -43,7 +43,7 @@ German).
 
 - **Plan for using ai-rem as a claude.ai connector (mobile app)** in
   `docs/superpowers/plans/2026-10-31-claude-ai-connector.md`. Deferred: needs OAuth and
-  public access via port forwarding + DynDNS; no code changes yet.
+  public access via port forwarding + DynDNS; no code changes yet (#190).
 
 ## [1.12.4] – 2026-10-30
 
