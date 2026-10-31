@@ -15,21 +15,24 @@ German).
 
 ## [Unreleased]
 
+## [1.13.0] – 2026-10-31
+
 ### Added
 
 - **Optional OAuth resource server** (`AI_REM_OAUTH_ISSUER`): ai-rem additionally accepts
   JWTs from an external IdP (Authelia, Authentik, Keycloak …) — signature, `iss`, `aud`,
   `exp` checked, user from `preferred_username`, optional allowlist. Serves
   `/.well-known/oauth-protected-resource` (RFC 9728) and sends `WWW-Authenticate` on 401.
-  Static tokens and pairing are unchanged; off by default.
+  Static tokens and pairing are unchanged; off by default — meant for teams running their
+  own ai-rem with an existing IdP (#192).
 - **`ai-rem token list` / `ai-rem token revoke <id>|--user <name>`** — CLI for the existing
   admin tools `memory_user_list` / `memory_token_revoke`: show users and device tokens
-  (incl. last use) and revoke a lost device without crafting `/api/tool` calls.
+  (incl. last use) and revoke a lost device without crafting `/api/tool` calls (#191).
 
 ### Fixed
 
 - **`AI_REM_ADMIN_USER` is now passed through `docker-compose.yml`** — set in `.env` it
-  previously never reached the container (default `markus` applied).
+  previously never reached the container (default `markus` applied) (#192).
 
 ### Docs
 
@@ -1217,7 +1220,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.12.4...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/markus7h/ai-rem/compare/v1.12.4...v1.13.0
 [1.12.4]: https://github.com/markus7h/ai-rem/compare/v1.12.3...v1.12.4
 [1.12.3]: https://github.com/markus7h/ai-rem/compare/v1.12.2...v1.12.3
 [1.12.2]: https://github.com/markus7h/ai-rem/compare/v1.12.1...v1.12.2

@@ -18,8 +18,8 @@ User-Entscheidungen:
    mit obigem Ist-Stand und den Entscheidungen.
 
 ## Später (wenn wieder aufgenommen)
-1. ~~OAuth-Variante entscheiden~~ → entschieden 2026-10-31: externer IdP, ai-rem als Resource-Server.
-2. ~~OAuth in `server.py` neben dem Bearer-Pfad~~ → umgesetzt (`AI_REM_OAUTH_ISSUER`, siehe docs/authentication.de.md#oauth-optional). Offen: IdP-Client anlegen.
+1. OAuth-Variante für die eigene Instanz entscheiden — **ohne eigenen IdP** (eigener Flow über `/pair` oder FastMCP-Provider). Der OAuth-Resource-Server aus v1.13.0 (`AI_REM_OAUTH_ISSUER`) setzt einen externen IdP voraus und ist für Teams gedacht, die selbst einen betreiben.
+2. OAuth in `server.py` neben dem Bearer-Pfad (lokale Clients bleiben unverändert).
 3. Caddy: öffentlicher Site-Block auf DynDNS-Namen, öffentliches Zertifikat (ACME),
    **nur** `/mcp` + OAuth-Pfade (`/.well-known/*`, authorize/token/register/callback) durchlassen —
    `/setup`, `/pair`, `/install`, Web-UI bleiben LAN-only. Caddy setzt X-Forwarded-For,
