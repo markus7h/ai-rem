@@ -274,10 +274,66 @@ def _user_for_hash(h: str) -> str:
     return user
 
 
+# ─── OAuth (optional, Resource-Server) ───────────────────────────────────────
+# Mit AI_REM_OAUTH_ISSUER prüft ai-rem zusätzlich JWTs eines externen IdP (Authelia,
+# Authentik, Keycloak …). ai-rem ist kein Authorization Server: Login, Consent und
+# Client-Registrierung macht der IdP. Static-Tokens bleiben unverändert gültig.
+AI_REM_OAUTH_ISSUER = os.getenv("AI_REM_OAUTH_ISSUER", "").strip().rstrip("/")
+_PUBLIC_BASE = os.getenv("KG_PUBLIC_URL", "http://localhost:3456").rstrip("/")
+AI_REM_OAUTH_AUDIENCE = os.getenv("AI_REM_OAUTH_AUDIENCE", "").strip() or _PUBLIC_BASE + "/mcp"
+AI_REM_OAUTH_USER_CLAIM = os.getenv("AI_REM_OAUTH_USER_CLAIM", "preferred_username").strip()
+AI_REM_OAUTH_USERS = {u.strip().lower() for u in os.getenv("AI_REM_OAUTH_USERS", "").split(",")
+                      if u.strip()}
+_OAUTH_ALGS = ["RS256", "ES256", "EdDSA"]  # kein none, kein HS* (Key-Confusion)
+_jwks_client = None
+_jwt_cache: dict[str, tuple[str, float]] = {}  # token-hash → (user, exp)
+
+
+def _jwks():
+    """PyJWKClient für den Issuer; jwks_uri einmalig aus der OIDC-Discovery. Der Client
+    cacht die Keys und lädt bei unbekanntem kid neu (Key-Rotation)."""
+    global _jwks_client
+    if _jwks_client is None:
+        import jwt
+        import urllib.request
+        url = AI_REM_OAUTH_ISSUER + "/.well-known/openid-configuration"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            meta = json.loads(r.read().decode())
+        _jwks_client = jwt.PyJWKClient(meta["jwks_uri"], cache_keys=True, lifespan=600)
+    return _jwks_client
+
+
+def _user_for_jwt(token: str) -> str:
+    """Nutzer aus einem gültigen JWT (Signatur, alg, iss, aud, exp/nbf), sonst ""."""
+    h = _token_hash(token)
+    hit = _jwt_cache.get(h)
+    if hit and hit[1] > time.time():
+        return hit[0]
+    import jwt
+    try:
+        key = _jwks().get_signing_key_from_jwt(token).key
+        claims = jwt.decode(token, key, algorithms=_OAUTH_ALGS, audience=AI_REM_OAUTH_AUDIENCE,
+                            issuer=AI_REM_OAUTH_ISSUER, leeway=60,
+                            options={"require": ["exp", "iss", "aud"]})
+    except Exception as e:
+        log.info("OAuth: JWT abgelehnt (%s)", type(e).__name__)
+        return ""
+    user = str(claims.get(AI_REM_OAUTH_USER_CLAIM) or "").strip().lower()
+    if not _USER_RE.match(user) or (AI_REM_OAUTH_USERS and user not in AI_REM_OAUTH_USERS):
+        log.info("OAuth: Nutzer %r nicht zugelassen", user[:40])
+        return ""
+    if len(_jwt_cache) > 1000:  # ponytail: grob leeren statt LRU — Handvoll Nutzer
+        _jwt_cache.clear()
+    _jwt_cache[h] = (user, float(claims["exp"]))
+    return user
+
+
 def _user_for_token(token: str) -> str:
     """Nutzer zu einem Bearer-Token, "" wenn unbekannt."""
     if not token:
         return ""
+    if AI_REM_OAUTH_ISSUER and token.count(".") == 2:
+        return _user_for_jwt(token)
     if AI_REM_API_TOKEN and hmac.compare_digest(token, AI_REM_API_TOKEN):
         return AI_REM_ADMIN_USER
     # Lookup über den Hash: wer Zeitunterschiede misst, lernt höchstens etwas über
@@ -361,7 +417,7 @@ _PUBLIC_PATH_PREFIXES = ("/health", "/setup", "/setup.py", "/setup.ps1", "/insta
                          "/setup-config", "/hooks/", "/bin/", "/lib/", "/cmd", "/login",
                          "/clients/", "/pair", "/api/pair/start", "/api/pair/poll",
                          "/manifest",
-                         "/favicon.ico", "/assets/")
+                         "/favicon.ico", "/assets/", "/.well-known/oauth-protected-resource")
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Ganzer Graph bzw. serverweite Wartung — nur der Admin (Prefix-Match je Segment).
 _ADMIN_ONLY_PATHS = ("/export", "/import", "/api/backup", "/api/restore", "/api/import",
@@ -1555,6 +1611,17 @@ async def favicon_dark_route(request: Request) -> Response:
 @mcp.custom_route("/assets/logo.png", methods=["GET"])
 async def logo_route(request: Request) -> Response:
     return Response(content=_LOGO_PNG, media_type="image/png")
+
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+@mcp.custom_route("/.well-known/oauth-protected-resource/mcp", methods=["GET"])
+async def oauth_protected_resource(request: Request) -> JSONResponse:
+    """Protected Resource Metadata (RFC 9728) — nur bei aktivem OAuth."""
+    if not AI_REM_OAUTH_ISSUER:
+        return JSONResponse({"error": "oauth disabled"}, status_code=404)
+    return JSONResponse({"resource": AI_REM_OAUTH_AUDIENCE,
+                         "authorization_servers": [AI_REM_OAUTH_ISSUER],
+                         "bearer_methods_supported": ["header"]})
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -5686,11 +5753,12 @@ class AuthMiddleware:
                         _REQUEST_CLIENT.set(value.decode("latin-1", "ignore"))
                         break
             return await self.app(scope, receive, send)
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [(b"content-type", b"application/json")],
-        })
+        headers = [(b"content-type", b"application/json")]
+        if AI_REM_OAUTH_ISSUER:
+            # MCP-Spec: Clients finden über resource_metadata den Authorization Server.
+            headers.append((b"www-authenticate", f'Bearer resource_metadata="{_PUBLIC_BASE}'
+                            f'/.well-known/oauth-protected-resource"'.encode()))
+        await send({"type": "http.response.start", "status": 401, "headers": headers})
         await send({
             "type": "http.response.body",
             "body": b'{"error":"unauthorized"}',
@@ -5712,7 +5780,8 @@ if __name__ == "__main__":
 
     host = os.getenv("HOST", "::")
     port = int(os.getenv("PORT", "3456"))
-    log.info("Starting ai-rem MCP server on %s:%d (auth: token+loopback)", host, port)
+    log.info("Starting ai-rem MCP server on %s:%d (auth: token+loopback%s)", host, port,
+             f"+oauth {AI_REM_OAUTH_ISSUER}" if AI_REM_OAUTH_ISSUER else "")
 
     app = mcp.http_app()
     app.add_middleware(AuthMiddleware)

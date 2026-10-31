@@ -79,6 +79,33 @@ otherwise the user name.
 - **Re-pairing replaces:** pairing a device again (same user, same device name = hostname)
   removes its old token, so no dead tokens pile up. Tokens never expire on their own.
 
+## OAuth (optional)
+
+For remote MCP clients that only speak OAuth (e.g. a claude.ai connector), ai-rem can act
+as an **OAuth 2.1 resource server**: it validates JWTs from an external identity provider
+(Authelia, Authentik, Keycloak, Pocket ID, Entra ID …). ai-rem is *not* an authorization
+server — login, consent and client registration stay with the IdP. Static tokens, pairing
+and loopback keep working unchanged.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AI_REM_OAUTH_ISSUER` | empty = off | OIDC issuer; keys come from its `/.well-known/openid-configuration` (`jwks_uri`) |
+| `AI_REM_OAUTH_AUDIENCE` | `KG_PUBLIC_URL` + `/mcp` | required `aud` of the token |
+| `AI_REM_OAUTH_USER_CLAIM` | `preferred_username` | claim that names the ai-rem user (a-z 0-9 _ -) |
+| `AI_REM_OAUTH_USERS` | empty = any | comma-separated allowlist |
+
+- Checked: signature (RS256/ES256/EdDSA only — no `none`, no HS*), `iss`, `aud`, `exp`/`nbf`
+  (60 s skew). Unknown `kid` reloads the JWKS (key rotation).
+- The claim value is the ai-rem user: `markus` from the IdP sees the same private
+  tasks/preferences as the paired devices of `markus`; only `AI_REM_ADMIN_USER` is admin.
+- Discovery: `/.well-known/oauth-protected-resource` (RFC 9728); a 401 carries
+  `WWW-Authenticate: Bearer resource_metadata="…"`.
+- IdP requirements: authorization code + PKCE and a configurable audience (resource
+  indicator). Without dynamic client registration (e.g. Authelia) create the client
+  manually and enter client ID/secret in the connector's advanced settings.
+- Publicly reachable? Expose only `/mcp` and `/.well-known/*` through the reverse proxy;
+  keep `/setup`, `/pair`, `/install` and the web UI LAN-only.
+
 ## One secret per device — the OS keychain
 
 Since 1.7 the ai-rem token is the only secret on a workstation, and it lives in the

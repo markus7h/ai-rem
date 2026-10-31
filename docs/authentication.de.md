@@ -85,6 +85,33 @@ Decision, Problem, Topic, Person) bleibt geteilt. Jede Entity hat eine Spalte `o
   Gerätename = Hostname), entfernt der Server dessen alten Token; tote Tokens sammeln sich
   so nicht an. Von selbst laufen Tokens nicht ab.
 
+## OAuth (optional)
+
+Für entfernte MCP-Clients, die nur OAuth können (z. B. ein claude.ai-Connector), arbeitet
+ai-rem als **OAuth-2.1-Resource-Server**: Es prüft JWTs eines externen Identity Providers
+(Authelia, Authentik, Keycloak, Pocket ID, Entra ID …). ai-rem ist *kein* Authorization
+Server — Login, Consent und Client-Registrierung bleiben beim IdP. Static-Tokens, Kopplung
+und Loopback funktionieren unverändert weiter.
+
+| Variable | Default | Bedeutung |
+|---|---|---|
+| `AI_REM_OAUTH_ISSUER` | leer = aus | OIDC-Issuer; Schlüssel aus dessen `/.well-known/openid-configuration` (`jwks_uri`) |
+| `AI_REM_OAUTH_AUDIENCE` | `KG_PUBLIC_URL` + `/mcp` | geforderte `aud` des Tokens |
+| `AI_REM_OAUTH_USER_CLAIM` | `preferred_username` | Claim mit dem ai-rem-Nutzernamen (a-z 0-9 _ -) |
+| `AI_REM_OAUTH_USERS` | leer = alle | kommagetrennte Allowlist |
+
+- Geprüft werden Signatur (nur RS256/ES256/EdDSA — kein `none`, kein HS*), `iss`, `aud`,
+  `exp`/`nbf` (60 s Toleranz). Unbekannte `kid` lädt den JWKS neu (Key-Rotation).
+- Der Claim-Wert ist der ai-rem-Nutzer: `markus` aus dem IdP sieht dieselben privaten
+  Tasks/Preferences wie die gekoppelten Geräte von `markus`; Admin ist nur `AI_REM_ADMIN_USER`.
+- Discovery: `/.well-known/oauth-protected-resource` (RFC 9728); ein 401 trägt
+  `WWW-Authenticate: Bearer resource_metadata="…"`.
+- Anforderungen an den IdP: Authorization Code + PKCE und konfigurierbare Audience
+  (Resource Indicator). Ohne Dynamic Client Registration (z. B. Authelia) den Client von
+  Hand anlegen und Client-ID/Secret in den erweiterten Einstellungen des Connectors eintragen.
+- Öffentlich erreichbar? Über den Reverse-Proxy nur `/mcp` und `/.well-known/*`
+  freigeben; `/setup`, `/pair`, `/install` und die Web-UI bleiben im LAN.
+
 ## Ein Secret pro Gerät — der OS-Keychain
 
 Seit 1.7 ist der ai-rem-Token das einzige Secret auf einer Workstation, und er liegt im
