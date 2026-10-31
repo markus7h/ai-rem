@@ -54,6 +54,13 @@ services:
       - PORT=${PORT:-3456}
       - LADYBUG_DB_PATH=/data/kg.db
       - KG_PUBLIC_URL=${KG_PUBLIC_URL:-http://localhost:${PORT:-3456}}
+      - AI_REM_ADMIN_USER=${AI_REM_ADMIN_USER:-markus}
+      # OAuth (optional): JWTs eines externen IdP zusätzlich zu den Static-Tokens.
+      # Leer = aus. Siehe docs/authentication.md#oauth-optional.
+      - AI_REM_OAUTH_ISSUER=${AI_REM_OAUTH_ISSUER:-}
+      - AI_REM_OAUTH_AUDIENCE=${AI_REM_OAUTH_AUDIENCE:-}
+      - AI_REM_OAUTH_USER_CLAIM=${AI_REM_OAUTH_USER_CLAIM:-preferred_username}
+      - AI_REM_OAUTH_USERS=${AI_REM_OAUTH_USERS:-}
       # LLM für den nicht-destruktiven Nightly-Cleanup (Merge-Urteile + Zusammenfassungen).
       # ".lan" ist Absicht: laeuft dieser Container auf dem ai-rem-Host selbst, loest der
       # blanke Hostname ueber die /etc/hosts des Hosts auf 127.0.1.1 auf —

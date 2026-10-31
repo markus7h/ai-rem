@@ -123,6 +123,7 @@ Umgebungsvariablen werden aus einer `.env`-Datei im Compose-Verzeichnis geladen:
 AI_REM_API_TOKEN=...                     # PFLICHT — API-Token (fail-closed, siehe Authentifizierung)
 AI_REM_ADMIN_USER=markus                 # Nutzername des AI_REM_API_TOKEN-Inhabers (Admin); siehe Mehrere Nutzer
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Öffentliche URL des Servers
+AI_REM_OAUTH_ISSUER=                     # optional: OIDC-Issuer eines externen IdP → OAuth (siehe Authentifizierung)
 PORT=3456                                # TCP-Port (Standard: 3456)
 HOST=::                                  # Bind-Adresse (Standard: ::) — dual-stack Socket, IPv6 und der published IPv4-Port funktionieren beide; 0.0.0.0 für reines IPv4
 LADYBUG_DB_PATH=/data/kg.db                 # Pfad zur Datenbank

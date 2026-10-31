@@ -17,9 +17,19 @@ German).
 
 ### Added
 
+- **Optional OAuth resource server** (`AI_REM_OAUTH_ISSUER`): ai-rem additionally accepts
+  JWTs from an external IdP (Authelia, Authentik, Keycloak …) — signature, `iss`, `aud`,
+  `exp` checked, user from `preferred_username`, optional allowlist. Serves
+  `/.well-known/oauth-protected-resource` (RFC 9728) and sends `WWW-Authenticate` on 401.
+  Static tokens and pairing are unchanged; off by default.
 - **`ai-rem token list` / `ai-rem token revoke <id>|--user <name>`** — CLI for the existing
   admin tools `memory_user_list` / `memory_token_revoke`: show users and device tokens
   (incl. last use) and revoke a lost device without crafting `/api/tool` calls.
+
+### Fixed
+
+- **`AI_REM_ADMIN_USER` is now passed through `docker-compose.yml`** — set in `.env` it
+  previously never reached the container (default `markus` applied).
 
 ### Docs
 

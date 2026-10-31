@@ -18,8 +18,8 @@ User-Entscheidungen:
    mit obigem Ist-Stand und den Entscheidungen.
 
 ## Später (wenn wieder aufgenommen)
-1. OAuth-Variante entscheiden (FastMCP-GitHub-Provider vs. eigener Flow über `/pair`).
-2. OAuth in `server.py` neben dem Bearer-Pfad (lokale Clients bleiben unverändert).
+1. ~~OAuth-Variante entscheiden~~ → entschieden 2026-10-31: externer IdP, ai-rem als Resource-Server.
+2. ~~OAuth in `server.py` neben dem Bearer-Pfad~~ → umgesetzt (`AI_REM_OAUTH_ISSUER`, siehe docs/authentication.de.md#oauth-optional). Offen: IdP-Client anlegen.
 3. Caddy: öffentlicher Site-Block auf DynDNS-Namen, öffentliches Zertifikat (ACME),
    **nur** `/mcp` + OAuth-Pfade (`/.well-known/*`, authorize/token/register/callback) durchlassen —
    `/setup`, `/pair`, `/install`, Web-UI bleiben LAN-only. Caddy setzt X-Forwarded-For,

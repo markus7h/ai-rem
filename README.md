@@ -121,6 +121,7 @@ Environment variables are loaded from a `.env` file in the Compose directory:
 AI_REM_API_TOKEN=...                     # REQUIRED — API token (fail-closed, see Authentication)
 AI_REM_ADMIN_USER=markus                 # User name of the AI_REM_API_TOKEN holder (admin); see Multiple users
 KG_PUBLIC_URL=http://<SERVER_IP>:3456   # Public URL of the server
+AI_REM_OAUTH_ISSUER=                     # optional: OIDC issuer of an external IdP → OAuth (see Authentication)
 PORT=3456                                # TCP port (default: 3456)
 HOST=::                                  # Bind address (default: ::) — dual-stack socket, so IPv6 and the published IPv4 port both work; 0.0.0.0 for IPv4 only
 LADYBUG_DB_PATH=/data/kg.db                 # Path to the database
