@@ -15,6 +15,12 @@ German).
 
 ## [Unreleased]
 
+### Added
+
+- **`ai-rem token list` / `ai-rem token revoke <id>|--user <name>`** — CLI for the existing
+  admin tools `memory_user_list` / `memory_token_revoke`: show users and device tokens
+  (incl. last use) and revoke a lost device without crafting `/api/tool` calls.
+
 ### Docs
 
 - **Plan for using ai-rem as a claude.ai connector (mobile app)** in
