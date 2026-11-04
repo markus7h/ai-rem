@@ -73,6 +73,9 @@ services:
       # llama-server hostet ohnehin genau ein Modell und ignoriert den Namen.
       # Ohne diese Zeile blieb eine CLEANUP_LLM_MODEL-Angabe in der .env wirkungslos.
       - CLEANUP_LLM_MODEL=${CLEANUP_LLM_MODEL:-qwen}
+      # Extraktions-Modell fuer die Transcript-Aufbereitung. Env hat Vorrang vor dem
+      # models-Block in setup-config.json (Web-UI /models); leer = Default qwen.
+      - AI_REM_LLM_MODEL=${AI_REM_LLM_MODEL:-}
       - BACKUP_DIR=/backups
       - MAX_BACKUPS=${MAX_BACKUPS:-10}
       # Anzahl gepinnter Routinen, die /discover je Prompt injiziert (Slots,

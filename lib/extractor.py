@@ -69,7 +69,7 @@ LLAMA_URL = (os.environ.get("AI_REM_LLAMA_URL") or os.environ.get("AI_REM_OLLAMA
 # weiter direkt gegen einen llama-server ohne --api-key.
 LLM_API_KEY = (os.environ.get("AI_REM_LLM_API_KEY") or "").strip()
 # Wirksame Werte; call_llm/_llama_up lesen nur hier. Ohne configure_llm gelten die Defaults.
-_LLM = {"url": LLAMA_URL, "key": LLM_API_KEY}
+_LLM = {"url": LLAMA_URL, "key": LLM_API_KEY, "model": None}
 _old_server_warned = False
 
 
@@ -93,8 +93,13 @@ def configure_llm(client) -> dict:
                 cfg = {}
     url = url or cfg.get("llm_url") or "http://mystorage.lan:11437"
     key = key or (cfg.get("llm_api_key") or "").strip()
+    # Extraktions-Modell: Env hat Vorrang, sonst models.extract aus client-config.
+    model = (os.environ.get("AI_REM_LLM_MODEL") or "").strip()
+    if not model:
+        model = ((cfg.get("models") or {}).get("extract") or "").strip()
     _LLM["url"] = url.rstrip("/")
     _LLM["key"] = key
+    _LLM["model"] = model or None
     if not key and getattr(client, "server_too_old", False) and not _old_server_warned:
         _old_server_warned = True
         print("Server < 1.7: LLM-Key nicht abrufbar — Server aktualisieren oder "
@@ -763,7 +768,8 @@ def ingest_transcript(
         raise FileNotFoundError(transcript_path)
 
     configure_llm(client)
-    model = model or LLM_MODEL
+    # wirksames Extraktions-Modell: explizit > client-config (models.extract) > Default
+    model = model or _LLM["model"] or LLM_MODEL
 
     log_dir = log_dir or LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)

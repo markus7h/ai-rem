@@ -140,6 +140,9 @@ KG_MIN_FREE_MB=1024                      # so viel Plattenplatz muss für einen 
 AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im RAM gehalten werden
 EMBED_URL=                               # Leer = Embeddings im Container; gesetzt = OpenAI-kompatible /v1/embeddings-URL eines externen Dienstes
 EMBED_HTTP_MODEL=bge-m3                  # Modellname, der an EMBED_URL geschickt wird
+# Modellwahl der drei KI-Einsatzpunkte (Extraktion / Nightly-Cleanup / Embeddings):
+# über den "models"-Block in setup-config.json (Web-UI /models) oder die Env-Variablen
+# AI_REM_LLM_MODEL / CLEANUP_LLM_MODEL / EMBED_HTTP_MODEL — Env gewinnt; an Clients via /api/client-config verteilt.
 EMBED_THRESHOLD=                         # Cosine-Schwelle; leer = Default je Backend (0.45 in-process, 0.50 extern)
 EMBED_MAX_CHARS=2000                     # Text vor dem Embedden kappen (llama.cpp lehnt zu lange Eingaben ab, statt zu kürzen)
 AI_REM_TAG=latest                        # latest (Modell im Image) oder latest-slim (~250 MB kleiner, braucht EMBED_URL)

@@ -1287,6 +1287,31 @@ def _load_setup_cfg() -> dict:
     return {}
 
 
+def _save_setup_cfg(models: dict) -> None:
+    """Nur den models-Block der persoenlichen setup-config.json aktualisieren.
+
+    Andere Keys bleiben unveraendert — die Datei haelt Secrets (llm_api_key), die
+    nie ueber die Web-UI gehen. Fehlt eine persoenliche Config, wird nur der
+    models-Block angelegt (keine Beispiel-Kopie mit Platzhaltern). flock + tmp +
+    replace wie _save_cleanup_cfg.
+    """
+    cfg = _load_setup_cfg()
+    if not os.path.isfile(_SETUP_CONFIG_PATH):
+        cfg = {"models": models}
+    else:
+        cfg["models"] = models
+    fd = os.open(_SETUP_CONFIG_PATH, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        tmp = _SETUP_CONFIG_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, _SETUP_CONFIG_PATH)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 # Top-Level-Keys mit diesen Endungen gelten als Secret und gehen nie ueber die
 # oeffentliche /setup-config raus. Suffix-Liste statt Einzelname, damit ein spaeter
 # ergaenzter *_token nicht wieder still im Klartext landet.
@@ -1327,6 +1352,20 @@ AI_REM_OLLAMA_URL = os.environ.get(
 # Leer lassen, wenn direkt gegen einen llama-server ohne --api-key gefahren wird:
 # dann geht gar kein Authorization-Header raus.
 AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
+
+
+# Zentrale Modellwahl fuer die drei KI-Einsatzpunkte: Env > setup-config
+# 'models' > Default. Wird ueber /api/client-config an die Clients verteilt und
+# von der Web-UI (/models) in die setup-config geschrieben. Steht hier vor den
+# Routen, damit CLEANUP_MODEL und /api/client-config eine Quelle teilen.
+def _models_cfg() -> dict:
+    m = _load_setup_cfg().get("models") or {}
+    return {
+        "extract": os.environ.get("AI_REM_LLM_MODEL") or m.get("extract") or "qwen",
+        "cleanup": os.environ.get("CLEANUP_LLM_MODEL")
+                   or os.environ.get("CLEANUP_OLLAMA_MODEL") or m.get("cleanup") or "qwen",
+        "embed": os.environ.get("EMBED_HTTP_MODEL") or m.get("embed") or "bge-m3",
+    }
 
 
 _ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -1568,6 +1607,7 @@ async def tasks_route(request: Request) -> Response:
 
 _CLEANUP_HTML = _pkg_text("templates/cleanup.html")
 _LOGS_HTML = _pkg_text("templates/logs.html")
+_MODELS_HTML = _pkg_text("templates/models.html")
 
 
 @mcp.custom_route("/logs", methods=["GET"])
@@ -1624,6 +1664,33 @@ async def api_cleanup_config_post(request: Request) -> JSONResponse:
         _parse_hhmm(end).strftime("%H:%M")
     _save_cleanup_cfg(cfg)
     return JSONResponse({"status": "ok", **cfg})
+
+
+@mcp.custom_route("/models", methods=["GET"])
+async def models_page(request: Request) -> Response:
+    return Response(content=_MODELS_HTML, media_type="text/html")
+
+
+@mcp.custom_route("/api/models/config", methods=["GET"])
+async def api_models_config_get(request: Request) -> JSONResponse:
+    return JSONResponse(_models_cfg())
+
+
+@mcp.custom_route("/api/models/config", methods=["POST"])
+async def api_models_config_post(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    m = {
+        "extract": (body.get("extract") or "").strip(),
+        "cleanup": (body.get("cleanup") or "").strip(),
+        "embed": (body.get("embed") or "").strip(),
+    }
+    if not all(m.values()):
+        return JSONResponse({"error": "extract/cleanup/embed required"}, status_code=400)
+    await asyncio.to_thread(_save_setup_cfg, m)
+    return JSONResponse({"status": "ok", **m})
 
 
 @mcp.custom_route("/api/cleanup/now", methods=["POST"])
@@ -1932,6 +1999,7 @@ async def client_config_route(request: Request) -> JSONResponse:
         "llm_url": AI_REM_OLLAMA_URL,
         # Env hat Vorrang (wie beim Server selbst), sonst der Key aus der setup-config.
         "llm_api_key": AI_REM_LLM_API_KEY or (_load_setup_cfg().get("llm_api_key") or ""),
+        "models": _models_cfg(),
         "vault_url": _pair_vault_url(),
         "vault_token": AI_REM_PAIR_VAULT_TOKEN,
         "context_rules": _context_rules(),
@@ -4385,9 +4453,9 @@ async def api_tool(request: Request) -> JSONResponse:
 # Modellname, den der Router kennt. "qwen" ist die Modellgruppe (zwei Deployments
 # + Kimi-Fallback), nicht ein einzelner Host. Der alte Default
 # "mistral-small3.2:24b" existiert seit 2026-08 nirgends mehr und quittierte am
-# Router mit HTTP 400 "Invalid model name".
-CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
-                          os.getenv("CLEANUP_OLLAMA_MODEL", "qwen")).strip()
+# Router mit HTTP 400 "Invalid model name". Config-aware via _models_cfg():
+# Env > setup-config 'models.cleanup' > Default.
+CLEANUP_MODEL = _models_cfg()["cleanup"].strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "14"))
 # Offene Tasks, die so lange niemand angefasst hat, gehen als "noch aktuell?" in die Review.

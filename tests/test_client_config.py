@@ -70,6 +70,11 @@ def _scenario() -> None:
     assert body["vault_token"] == "", "Vault-Token ohne AI_REM_PAIR_VAULT_TOKEN nicht leer"
     # Ohne git_accounts in der setup-config: Default-Kontextregeln fuer lib/origin.py.
     assert body["context_rules"] == server._DEFAULT_GIT_ACCOUNTS, body
+    # Ohne models-Block: Defaults, Env hat Vorrang (hier nur AI_REM_LLM_API_KEY gesetzt).
+    assert body["models"] == {"extract": "qwen", "cleanup": "qwen", "embed": "bge-m3"}, body
+    fixture["models"] = {"extract": "ds4", "cleanup": "qwen", "embed": "bge-m3"}
+    assert auth.get("/api/client-config").json()["models"]["extract"] == "ds4"
+    del fixture["models"]
     fixture["git_accounts"] = [{"owner": "acme", "emails": ["a@acme.example"], "context": "work"}]
     assert auth.get("/api/client-config").json()["context_rules"] == fixture["git_accounts"]
     del fixture["git_accounts"]

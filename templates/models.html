@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-rem · Modelle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="/assets/favicon-dark.png">
+<style>
+:root{--bg:#fafafa;--card:#fff;--border:#ececec;--accent:#388e3c;--ah:#2e7d32;--text:#333;--muted:#666;--ok:#2e7d32;--err:#dd3333}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Source Sans 3","Source Sans Pro",Arial,sans-serif;letter-spacing:.15pt;font-size:14px;line-height:1.6;padding:28px;max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}
+h2{font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:26px 0 10px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--ah)}
+.card{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:16px;margin-bottom:14px}
+.row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+label{font-size:13px}
+input[type=text]{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 7px;min-width:220px}
+button{background:var(--accent);border:none;color:#fff;border-radius:6px;padding:7px 14px;font-size:13px;cursor:pointer;transition:background .15s}
+button:hover{background:var(--ah)}button.ghost{background:none;border:1px solid var(--border);color:var(--muted)}button.ghost:hover{border-color:var(--accent);color:var(--text)}
+.muted{color:var(--muted);font-size:12px}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}.toast.ok{border-color:var(--ok);color:var(--ok)}.toast.err{border-color:var(--err);color:var(--err)}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.hd img{display:block}
+.hd nav{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hd nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1;padding-bottom:3px;border-bottom:2px solid transparent}
+.hd nav a:hover{color:var(--text)}
+.hd nav a.on{color:var(--accent);border-bottom-color:var(--accent)}
+</style>
+</head>
+<body>
+<header class="hd">
+<a href="/"><img src="/assets/logo.png" alt="ai-rem" height="30"></a>
+<nav>
+<a href="/browse">Browse</a>
+<a href="/tasks">Tasks</a>
+<a href="/graph">Graph</a>
+<a href="/prefs">Preferences</a>
+<a href="/cleanup">Cleanup</a>
+<a href="/models" class="on">Modelle</a>
+<a href="/logs">Logs</a>
+<a href="/install">Install</a>
+<a href="/logout">Logout</a>
+<span style="color:var(--muted);font-size:12px">v__VERSION__</span>
+</nav>
+</header>
+<h1>Modelle</h1>
+<p class="sub">zentrale Modellwahl für die drei KI-Einsatzpunkte · wird über /api/client-config an die Clients verteilt</p>
+
+<div class="card">
+  <div class="row" style="margin-bottom:10px">
+    <label>Extraktion <input type="text" id="extract" placeholder="qwen"></label>
+    <label>Cleanup <input type="text" id="cleanup" placeholder="qwen"></label>
+    <label>Embeddings <input type="text" id="embed" placeholder="bge-m3"></label>
+    <button onclick="save()">Speichern</button>
+  </div>
+  <span class="muted">Env (AI_REM_LLM_MODEL / CLEANUP_LLM_MODEL / EMBED_HTTP_MODEL) hat Vorrang vor diesem Block.</span>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+function toast(m,ok=true){const t=$('toast');t.textContent=m;t.className='toast show '+(ok?'ok':'err');setTimeout(()=>t.className='toast',2200);}
+async function load(){
+  const m=await (await fetch('/api/models/config')).json();
+  $('extract').value=m.extract||'';$('cleanup').value=m.cleanup||'';$('embed').value=m.embed||'';
+}
+async function save(){
+  const r=await fetch('/api/models/config',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({extract:$('extract').value.trim(),cleanup:$('cleanup').value.trim(),embed:$('embed').value.trim()})});
+  const j=await r.json();toast(r.ok?'Gespeichert':('Fehler: '+(j.error||r.status)),r.ok);load();
+}
+load();
+</script>
+</body>
+</html>

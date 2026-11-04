@@ -140,6 +140,9 @@ AI_REM_ADMIN_TOOLS=0                      # 1 = re-expose the 16 admin ops as MC
 AI_REM_LOG_RING=500                       # Lines of server log kept in memory for /logs
 EMBED_URL=                                # Empty = in-process embeddings; set to an OpenAI-compatible /v1/embeddings URL for an external service
 EMBED_HTTP_MODEL=bge-m3                   # Model name sent to EMBED_URL
+# Model choice for the three AI use points (extraction / nightly cleanup / embeddings):
+# set via setup-config.json "models" block (Web-UI /models) or the Env vars
+# AI_REM_LLM_MODEL / CLEANUP_LLM_MODEL / EMBED_HTTP_MODEL — Env wins; distributed to clients via /api/client-config.
 EMBED_THRESHOLD=                          # Cosine cut-off; empty = per-backend default (0.45 in-process, 0.50 external)
 EMBED_MAX_CHARS=2000                      # Truncate input before embedding (llama.cpp rejects oversized input instead of truncating)
 AI_REM_TAG=latest                         # latest (bundled embedding model) or latest-slim (~250 MB smaller, requires EMBED_URL)

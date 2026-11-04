@@ -8,6 +8,12 @@
   "ai_rem_https_url": "https://your-server",
   "_comment_ollama": "LLM-Basis-URL (OpenAI-kompatibel, /v1 wird intern angehaengt) fuer Transcript-Extraktion + Nightly-Cleanup-Urteile. Zeigt idealerweise auf einen Router (LiteLLM o.ae.), nicht direkt auf einen GPU-Host: der Router faengt schlafende Backends per Fallback ab. Wird ins settings-template.json (ollama_url) geschrieben und vom Server gelesen. Env AI_REM_LLAMA_URL/AI_REM_OLLAMA_URL hat Vorrang. Modell via AI_REM_LLM_MODEL bzw. CLEANUP_LLM_MODEL (Default qwen). Beispiel: http://<ai-rem-host>:11437 (<ai-rem-host> = der Host, auf dem ai-rem laeuft — hier eintragen).",
   "ollama_url": "http://your-server:11434",
+  "_comment_models": "Zentrale Modellwahl fuer die drei KI-Einsatzpunkte in ai-rem. Wird ueber /api/client-config an die Clients verteilt und in der Web-UI (/models) geaendert. extract = Transcript-Extraktion, cleanup = Nightly-Cleanup-Urteile, embed = Embeddings (nur bei externem EMBED_URL). Defaults: qwen/qwen/bge-m3. Env AI_REM_LLM_MODEL/CLEANUP_LLM_MODEL/EMBED_HTTP_MODEL hat Vorrang.",
+  "models": {
+    "extract": "qwen",
+    "cleanup": "qwen",
+    "embed": "bge-m3"
+  },
   "_comment_llm_api_key": "Optional. Nur noetig, wenn ollama_url auf einen Router mit Auth zeigt. Wird NICHT auf Clients geschrieben: Clients holen den Key pro Lauf authentifiziert ueber GET /api/client-config; die oeffentliche /setup-config filtert ihn (wie alle *_key/*_token/*_secret/*_password-Felder) heraus. Bevorzugt stattdessen als Server-Env AI_REM_LLM_API_KEY setzen -- Env hat Vorrang vor diesem Feld. Bitte KEINEN Master-/Admin-Key eintragen, sondern einen Virtual Key mit Budget.",
   "llm_api_key": "",
   "_comment_git_accounts": "Kontext-Regeln fuer die Session-Herkunft (ai-rem origin / Auto-Extraktion): Remote-Owner des Repos (case-insensitiv) -> context, sonst die im Repo wirksame git user.email gegen 'emails' (fuer Org-Repos wie github.com/<org>/<repo>). Passt keine Regel, gilt eine per 'ai-rem map-dir' gespeicherte Verzeichnis-Zuordnung, sonst fragt der SessionStart-Hook einmal nach. Ausgeliefert ueber /api/client-config als context_rules. Fehlt der Key, gelten markusth-bi -> work, markus7h und kaiguard -> private.",
