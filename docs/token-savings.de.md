@@ -48,7 +48,7 @@ Einen offiziellen Per-Tool-Schalter gibt es noch nicht ([anthropics/claude-code#
 Das ai-rem-Setup trägt deshalb einen Default-`permissions.deny`-Satz für selten genutzte, schema-schwere Built-ins ein:
 
 ```
-DesignSync, Workflow, NotebookEdit, RemoteTrigger, ScheduleWakeup,
+DesignSync, Workflow, NotebookEdit, ScheduleWakeup,
 CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree,
 Monitor, PushNotification, ListMcpResourcesTool, ReadMcpResourceTool
 ```
