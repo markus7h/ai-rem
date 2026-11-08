@@ -32,6 +32,14 @@ INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
 INITIALIZED = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 CALL = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": {"name": "memory_status", "arguments": {}}}
+# Spec 2026-07-28: kein initialize, jeder Request traegt sein Envelope in _meta.
+META = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "claude-code", "version": "3.0"},
+        "io.modelcontextprotocol/clientCapabilities": {}}
+
+
+def _modern(rid, method, **params):
+    return {"jsonrpc": "2.0", "id": rid, "method": method, "params": {**params, "_meta": META}}
 
 
 def _load(name, path):
@@ -86,6 +94,7 @@ class FakeServer:
         self.restart_on_call = False
         self.restart_barrier = None
         self.dead = set()
+        self.not_found = set()  # Methoden, die (wie fastmcp im 2026-07-28-Pfad) 404 + JSON-RPC-Error liefern
         self._lock = threading.Lock()
 
     def __call__(self, req, timeout=None):
@@ -100,6 +109,9 @@ class FakeServer:
         if self.lose_session and sid:
             raise _http_error(404, b"Session not found")
         method = body.get("method") if isinstance(body, dict) else None
+        if method in self.not_found:
+            raise _http_error(404, json.dumps({"jsonrpc": "2.0", "id": body["id"], "error": {
+                "code": -32601, "message": "Method not found"}}).encode())
         if method == "tools/call" and sid == self.sid and self.restart_barrier:
             self.restart_barrier.wait(timeout=5)
         with self._lock:
@@ -159,6 +171,9 @@ def test_session_header_ab_zweitem_request_und_delete_bei_eof(monkeypatch):
     assert all(r[1]["accept"] == "application/json, text/event-stream" for r in posts)
     # Protokollversion aus der initialize-Antwort wandert in die Folge-Requests.
     assert all(r[1]["mcp-protocol-version"] == "2025-03-26" for r in posts[1:])
+    # Mcp-Method/Mcp-Name gehen auch an Legacy-Server mit (harmlos, Spec 2026-07-28).
+    assert [r[1]["mcp-method"] for r in posts] == ["initialize", "notifications/initialized", "tools/call"]
+    assert posts[2][1]["mcp-name"] == "memory_status" and "mcp-name" not in posts[0][1]
     # EOF → DELETE mit Session-ID, als letzter Request.
     assert server.requests[-1][0] == "DELETE"
     assert server.requests[-1][1]["mcp-session-id"] == "sess-1"
@@ -228,6 +243,45 @@ def test_paralleler_404_initialisiert_nur_einmal_und_ohne_doppelten_fehler(monke
     assert sorted(line["id"] for line in lines if line.get("id") in (2, 3)) == [2, 3]
     inits = [r for r in server.requests if r[0] == "POST" and r[2].get("method") == "initialize"]
     assert len(inits) == 2, "parallele 404 duerfen nur einmal neu initialisieren"
+
+
+def test_2026_07_28_client_laeuft_zustandslos_mit_routing_headern(monkeypatch):
+    """Neuer Client: kein initialize, keine Session; discover und subscriptions/listen
+    gehen als normale Requests durch, gestreamte Antworten werden zu Zeilen."""
+    server = FakeServer()
+    msgs = [_modern(1, "server/discover"), _modern(2, "tools/list"),
+            _modern(3, "tools/call", name="memory_status", arguments={}),
+            _modern(4, "resources/read", uri="kg://notiz/Übersicht"),
+            _modern(5, "subscriptions/listen", notifications={"toolsListChanged": True}),
+            {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 5}}]
+    rc, lines = _run(monkeypatch, server, msgs)
+    assert rc == 0
+    assert sorted(line["id"] for line in lines if "id" in line) == [1, 2, 3, 4, 5]
+    posts = [r for r in server.requests if r[0] == "POST"]
+    assert [r[2]["method"] for r in posts] == [m["method"] for m in msgs], "kein initialize einschieben"
+    assert all(r[2] == m for r, m in zip(posts, msgs)), "Body muss unveraendert durchgehen"
+    assert not any("mcp-session-id" in r[1] for r in server.requests)
+    # Version aus dem Envelope — auch fuer die Envelope-lose Notification.
+    assert all(r[1]["mcp-protocol-version"] == "2026-07-28" for r in posts)
+    assert all(r[1]["mcp-method"] == r[2]["method"] for r in posts)
+    names = {r[2]["method"]: r[1].get("mcp-name") for r in posts}
+    assert names["tools/call"] == "memory_status"
+    assert names["resources/read"] == "=?base64?a2c6Ly9ub3Rpei/DnGJlcnNpY2h0?=", "Nicht-ASCII → base64"
+    assert names["server/discover"] is None and names["subscriptions/listen"] is None
+    assert not [r for r in server.requests if r[0] == "DELETE"], "ohne Session kein DELETE"
+
+
+def test_2026_07_28_404_mit_jsonrpc_error_geht_durch_ohne_reinit(monkeypatch):
+    """fastmcp beantwortet unbekannte Methoden im neuen Pfad mit 404 + Error-Body. Ohne
+    Session ist das kein Session-Verlust: durchreichen, nicht neu initialisieren, weiterlaufen."""
+    server = FakeServer()
+    server.not_found = {"subscriptions/listen"}
+    rc, lines = _run(monkeypatch, server, [_modern(1, "subscriptions/listen", notifications={}),
+                                           _modern(2, "tools/list")])
+    assert rc == 0
+    by_id = {line["id"]: line for line in lines if "id" in line}
+    assert by_id[1]["error"]["code"] == -32601 and "result" in by_id[2]
+    assert not [r for r in server.requests if r[2] and r[2].get("method") == "initialize"]
 
 
 def test_cmd_mcp_proxy_nutzt_keychain_token_und_stdio(monkeypatch):

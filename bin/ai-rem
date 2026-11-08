@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parent.parent
 # nicht mehr kapern. Server-Deps (fastmcp/kuzu) gehoeren in den Docker-Container.
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -333,6 +334,19 @@ def cmd_token(c: MCPClient, a):
 # stdio-Server. Die holt den ai-rem-Token aus dem Keychain und alles Weitere
 # ueber /api/client-config — auf der Platte bleibt nur der Keychain-Eintrag.
 
+# Methoden, deren Ziel (Tool/Prompt/Resource) 2026-07-28 als Mcp-Name-Header spiegelt.
+_MCP_NAME_PARAM = {"tools/call": "name", "prompts/get": "name", "resources/read": "uri"}
+
+
+def _mcp_header_value(value: str) -> str:
+    """Header-Wert nach Spec: druckbares ASCII ohne Rand-Leerzeichen verbatim, sonst
+    (Umlaute, Steuerzeichen) als =?base64?…?= — der Server dekodiert und vergleicht."""
+    if all(" " <= ch <= "~" for ch in value) and value == value.strip() \
+            and not (value.startswith("=?base64?") and value.endswith("?=")):
+        return value
+    return "=?base64?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+
+
 class _McpProxy:
     """stdio ↔ Streamable-HTTP-Bruecke: NDJSON auf stdin → POST <endpoint>,
     Antworten (JSON oder SSE-Events) als je eine Zeile auf stdout.
@@ -343,7 +357,8 @@ class _McpProxy:
     nach Schlaf/Netzwechsel), initialisiert der Proxy selbst neu und wiederholt den
     Request einmal — parallele Requests teilen sich dabei eine Neu-Initialisierung.
     Erst wenn die scheitert: Fehler an den Client und Exit 1, Claude Code startet den
-    Server neu. stdin liest ein eigener Thread in eine Queue, damit die Hauptschleife
+    Server neu. Clients nach Spec 2026-07-28 (kein initialize, Envelope in _meta)
+    laufen ohne Session und ohne Neu-Initialisierung durch. stdin liest ein eigener Thread in eine Queue, damit die Hauptschleife
     auch dann aussteigen kann, wenn gerade keine Zeile ankommt. Alle Diagnosen gehen nach stderr; stdout ist
     ausschliesslich Protokoll."""
 
@@ -400,7 +415,7 @@ class _McpProxy:
         self._emit_json(obj)
 
     # -- HTTP ---------------------------------------------------------------
-    def _headers(self) -> dict:
+    def _headers(self, msg=None) -> dict:
         h = {"Content-Type": "application/json",
              "Accept": "application/json, text/event-stream"}
         if self.token:
@@ -409,8 +424,24 @@ class _McpProxy:
             h["X-AI-REM-Client"] = self.client_name
         if self._sid:
             h["mcp-session-id"] = self._sid
+        # Spec 2026-07-28: kein initialize, die Version steht pro Request im _meta-
+        # Envelope. Der Server routet am MCP-Protocol-Version-Header (ohne ihn landet
+        # der Request im Legacy-Pfad: "Missing session ID") — also spiegeln und fuer
+        # Envelope-lose Notifications merken. Legacy-Clients haben kein Envelope.
+        params = msg.get("params") if isinstance(msg, dict) else None
+        meta = params.get("_meta") if isinstance(params, dict) else None
+        pv = meta.get("io.modelcontextprotocol/protocolVersion") if isinstance(meta, dict) else None
+        if isinstance(pv, str):
+            self._proto = pv
         if self._proto:
             h["MCP-Protocol-Version"] = self._proto
+        # Mcp-Method/Mcp-Name verlangt 2026-07-28 auf jedem POST; aeltere Server ignorieren sie.
+        method = msg.get("method") if isinstance(msg, dict) else None
+        if isinstance(method, str):
+            h["Mcp-Method"] = method
+            name = params.get(_MCP_NAME_PARAM.get(method, "")) if isinstance(params, dict) else None
+            if isinstance(name, str):
+                h["Mcp-Name"] = _mcp_header_value(name)
         return h
 
     def _handle(self, line: bytes, msg) -> None:
@@ -419,7 +450,7 @@ class _McpProxy:
         if is_init:
             self._init_line = line
         for attempt in (0, 1):
-            headers = self._headers()
+            headers = self._headers(msg)
             req = urllib.request.Request(self.endpoint, data=line, headers=headers, method="POST")
             try:
                 resp = urllib.request.urlopen(req, timeout=self.timeout)
@@ -462,7 +493,7 @@ class _McpProxy:
             if not self._init_line:
                 return False
             try:
-                h = self._headers()
+                h = self._headers({"method": "initialize"})
                 h.pop("mcp-session-id", None)
                 req = urllib.request.Request(self.endpoint, data=self._init_line, headers=h, method="POST")
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -471,7 +502,8 @@ class _McpProxy:
                 if not sid:
                     return False
                 h["mcp-session-id"] = sid
-                note = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
+                h["Mcp-Method"] = "notifications/initialized"
+                note =json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
                 req = urllib.request.Request(self.endpoint, data=note, headers=h, method="POST")
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     resp.read()
