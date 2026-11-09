@@ -348,20 +348,12 @@ Since 1.9.0 Claude Code gets its MCP servers from the plugins **`ai-rem`** and
 **`mykeyvault` (2.x)** of the [tools-registry](https://github.com/markus7h/tools-registry)
 marketplace instead of `mcpServers` entries in `~/.claude.json`. The plugins carry no
 secrets in their config: they start the servers via stdio through `ai-rem mcp-proxy` and
-`ai-rem vault-mcp`, which take the token from the OS keychain. Migrating an existing machine:
-
-```bash
-ai-rem update                                       # moves a leftover token into the OS keychain
-claude plugin marketplace update tools-registry
-claude plugin install ai-rem@tools-registry         # and enable it
-claude plugin install mykeyvault@tools-registry     # and enable it
-# restart Claude Code
-```
-
-The setup (`ai-rem update` as well) then removes the now duplicate `ai-rem` / `mykeyvault`
-entries from `mcpServers` in `~/.claude.json` (`drop_plugin_duplicates`), so there are never
-two servers of the same name. Without the plugins the stdio registration in `~/.claude.json`
-remains as a fallback.
+`ai-rem vault-mcp`, which take the token from the OS keychain. The setup (and `ai-rem update`)
+installs both plugins itself (`claude plugin install …@tools-registry`), then removes the
+now duplicate `ai-rem` / `mykeyvault` entries from `mcpServers` in `~/.claude.json`
+(`drop_plugin_duplicates`), so there are never two servers of the same name. Restart Claude
+Code afterwards. Only if the plugin install fails (old CLI, no network) does the stdio
+registration in `~/.claude.json` remain as a fallback.
 
 ### New authentication: one secret per device in the OS keychain
 

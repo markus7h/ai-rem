@@ -303,6 +303,41 @@ def plugin_enabled(name):
         return False
 
 
+PLUGIN_MARKETPLACE = 'tools-registry'
+PLUGIN_MARKETPLACE_REPO = 'markus7h/tools-registry'
+
+
+def ensure_plugins(claude):
+    """ai-rem/mykeyvault als Claude-Code-Plugin installieren statt sie als
+    mcpServers-Eintrag anzulegen. Schlaegt ein Schritt fehl (alte CLI, kein Netz),
+    bleibt der mcpServers-Weg als Fallback — plugin_enabled() bleibt dann False."""
+    missing = [n for n in PLUGIN_SERVERS if not plugin_enabled(n)]
+    if not missing or not claude:
+        return
+    try:
+        listed = run([claude, 'plugin', 'marketplace', 'list'], timeout=60)
+        if listed.returncode != 0:
+            raise RuntimeError((listed.stderr or '').strip() or 'plugin marketplace list fehlgeschlagen')
+        if PLUGIN_MARKETPLACE not in (listed.stdout or ''):
+            run([claude, 'plugin', 'marketplace', 'add', PLUGIN_MARKETPLACE_REPO], timeout=180)
+        else:
+            run([claude, 'plugin', 'marketplace', 'update', PLUGIN_MARKETPLACE], timeout=180)
+    except Exception as ex:
+        print('⚠ Plugin-Marketplace nicht verfuegbar (%s) - ai-rem/mykeyvault bleiben in ~/.claude.json' % ex)
+        return
+    for name in missing:
+        ref = '%s@%s' % (name, PLUGIN_MARKETPLACE)
+        try:
+            p = run([claude, 'plugin', 'install', ref], timeout=180)
+            ok = p.returncode == 0
+        except Exception:
+            ok = False
+        if ok and plugin_enabled(name):
+            print('✓ Plugin %s installiert' % ref)
+        else:
+            print('⚠ Plugin %s nicht installiert - Fallback: Eintrag in ~/.claude.json' % ref)
+
+
 def drop_plugin_duplicates(servers):
     """Eintraege entfernen, die ein aktives Plugin selbst liefert. Gibt die
     Namen der Server zurueck, die vom Plugin kommen."""
@@ -1874,6 +1909,7 @@ def update_claude(setup_cfg, mcp_endpoint):
     print('--- Claude Code ---')
     os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
     os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
+    ensure_plugins(shutil.which('claude'))
     dedupe_claude_json()
     write_settings_template(setup_cfg, mcp_endpoint)
     vault = mykeyvault_registered()
@@ -1941,6 +1977,7 @@ def pair_only():
 def install_claude(setup_cfg, mcp_endpoint, tools_entry, tools_reg_url, vault_entry):
     print('--- Claude Code ---')
     claude = find_claude()
+    ensure_plugins(claude)
     register_mcp(claude)
     os.makedirs(os.path.join(CLAUDE_HOME, 'hooks'), exist_ok=True)
     os.makedirs(os.path.join(CLAUDE_HOME, 'commands'), exist_ok=True)
