@@ -23,6 +23,8 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "keychain_set", lambda tok: store.__setitem__("t", tok))
     monkeypatch.setattr(mod, "keychain_delete", lambda: store.pop("t", None))
     monkeypatch.setattr(mod, "keychain_backend", lambda: "Fake-Keychain")
+    # Nicht die echte ~/.claude/settings.json lesen (dort ist das ai-rem-Plugin evtl. aktiv).
+    monkeypatch.setattr(mod, "CLAUDE_HOME", str(tmp_path / ".claude"))
     monkeypatch.setattr(mod, "LEGACY_TOKEN_FILE", str(tmp_path / "token"))
     monkeypatch.setattr(mod, "LEGACY_VAULT_TOKEN_FILE", str(tmp_path / "vault.token"))
     monkeypatch.setattr(mod, "LEGACY_VAULT_ENV", str(tmp_path / "ai-rem-vault.env"))
