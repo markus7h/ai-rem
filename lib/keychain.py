@@ -329,6 +329,12 @@ def _select_backend(platform: Optional[str] = None, which: Optional[Callable] = 
     platform = platform or sys.platform
     which = which or shutil.which
     account = account or ACCOUNT
+    # Opt-in für Rechner, die nur per SSH genutzt werden: dort ist der Login-Keychain
+    # ohne GUI-Login gesperrt. Token dann als 0600-Datei, gelesen nur von ai-rem selbst.
+    if os.environ.get("AI_REM_KEYCHAIN_BACKEND") == "file":
+        b = _FileBackend(account)
+        b.name = "Datei (0600)"
+        return b
     if platform == "darwin":
         return _MacBackend(account)
     if platform == "win32":

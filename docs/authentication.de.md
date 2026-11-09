@@ -124,6 +124,7 @@ z. B. für Tests).
 | macOS | Keychain (`security`) | Das Kommando geht per stdin an `security -i`, der Token taucht nie in `ps` auf. So angelegte Items liest `security` später ohne GUI-Prompt; in einer SSH-Session ohne GUI-Login vorher `security unlock-keychain` |
 | Linux | libsecret (`secret-tool`) | GNOME Keyring, KWallet via Portal. Ohne D-Bus-Session oder entsperrten Keyring fällt das Speichern auf das Datei-Backend zurück und sagt das auch |
 | Linux-Fallback | Datei `$XDG_CONFIG_HOME/ai-rem/keyring/<account>` (0600 in einem 0700-Verzeichnis) | Greift, wenn `secret-tool` fehlt oder keine Session hat. `ai-rem doctor` und `client.json` → `keychain` zeigen `Datei (0600) …`, damit die Degradierung sichtbar bleibt |
+| Opt-in-Datei (alle OS) | Dieselbe Datei wie beim Linux-Fallback | `AI_REM_KEYCHAIN_BACKEND=file` — für Rechner, die nur per SSH genutzt werden; dort bleibt der macOS-Login-Keychain ohne GUI-Login gesperrt. Der Token steht nie in der Shell-Umgebung, nur ai-rem liest die Datei. `ai-rem pair` / `svc pair` schreiben dorthin, solange die Variable gesetzt ist |
 | Windows | Credential Manager (`advapi32`) | Target `ai-rem/<account>`, UTF-16LE-Blob — wie `cmdkey`/PowerShell es erwarten |
 
 Jeder Verbraucher löst den Token in derselben Reihenfolge auf:
