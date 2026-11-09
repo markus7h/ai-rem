@@ -15,6 +15,8 @@ German).
 
 ## [Unreleased]
 
+## [1.14.0] – 2026-11-09
+
 ### Added
 
 - **`ai-rem mcp-proxy` / `ai-rem svc proxy` speak MCP 2026-07-28:** clients without
@@ -22,7 +24,20 @@ German).
   no re-init; `server/discover` and `subscriptions/listen` pass through like any request,
   streamed responses are relayed line by line. Every POST now carries `Mcp-Method`, plus
   `Mcp-Name` for `tools/call`/`prompts/get`/`resources/read`, and `MCP-Protocol-Version`
-  from the envelope (the server routes on it). Legacy clients (2025-11-25) are unchanged.
+  from the envelope (the server routes on it). Legacy clients (2025-11-25) are unchanged (#200).
+
+### Fixed
+
+- **Setup installs ai-rem / mykeyvault as Claude Code plugins:** the setup only detected
+  active plugins but never installed them, so without the manual `claude plugin install`
+  step every setup re-created `mcpServers` entries in `~/.claude.json`. `ensure_plugins()`
+  now installs `ai-rem@tools-registry` and `mykeyvault@tools-registry` (on install and
+  `ai-rem update`); the `mcpServers` entry only remains as fallback when the plugin
+  install fails (#201).
+
+### Changed
+
+- **Dependencies:** fastmcp 4.1.4 → 4.1.6 (#199).
 
 ## [1.13.0] – 2026-10-31
 
