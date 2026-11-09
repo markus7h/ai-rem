@@ -15,6 +15,15 @@ German).
 
 ## [Unreleased]
 
+### Added
+
+- **`ai-rem mcp-proxy` / `ai-rem svc proxy` speak MCP 2026-07-28:** clients without
+  `initialize` (per-request `_meta` envelope) are forwarded statelessly — no session,
+  no re-init; `server/discover` and `subscriptions/listen` pass through like any request,
+  streamed responses are relayed line by line. Every POST now carries `Mcp-Method`, plus
+  `Mcp-Name` for `tools/call`/`prompts/get`/`resources/read`, and `MCP-Protocol-Version`
+  from the envelope (the server routes on it). Legacy clients (2025-11-25) are unchanged.
+
 ## [1.13.0] – 2026-10-31
 
 ### Added
