@@ -239,6 +239,20 @@ def test_backend_selection_by_platform(monkeypatch):
     kc._reset_backend()
 
 
+def test_file_backend_opt_in_overrides_platform(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("AI_REM_KEYCHAIN_BACKEND", "file")
+    for platform in ("darwin", "win32", "linux"):
+        b = kc._select_backend(platform=platform, which=lambda name: "/usr/bin/secret-tool")
+        assert isinstance(b, kc._FileBackend), platform
+        assert b.name == "Datei (0600)"
+    svc = kc._select_backend(platform="darwin", account="svc-doc-graph")
+    svc.set(SECRET)
+    path = os.path.join(str(tmp_path), "ai-rem", "keyring", "svc-doc-graph")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert svc.get() == SECRET
+
+
 def test_module_api_delegates_to_backend(monkeypatch):
     calls = []
     fake = SimpleNamespace(

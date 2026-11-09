@@ -117,6 +117,7 @@ platform keychain (`lib/keychain.py`, shipped with the CLI): service `ai-rem`, a
 | macOS | Keychain (`security`) | The command goes to `security -i` over stdin, so the token never appears in `ps`. Items created this way are readable later without a GUI prompt; in an SSH session without GUI login run `security unlock-keychain` first |
 | Linux | libsecret (`secret-tool`) | GNOME Keyring, KWallet via portal. Without a D-Bus session or an unlocked keyring the store falls back to the file backend and says so |
 | Linux fallback | File `$XDG_CONFIG_HOME/ai-rem/keyring/<account>` (0600 in a 0700 dir) | Used when `secret-tool` is missing or has no session. `ai-rem doctor` and `client.json` → `keychain` show `Datei (0600) …` so the degradation stays visible |
+| Opt-in file (any OS) | Same file as the Linux fallback | `AI_REM_KEYCHAIN_BACKEND=file` — for machines used only over SSH, where the macOS login keychain stays locked without a GUI login. The token never sits in the shell environment; only ai-rem reads the file. `ai-rem pair` / `svc pair` write there while the variable is set |
 | Windows | Credential Manager (`advapi32`) | Target `ai-rem/<account>`, UTF-16LE blob — what `cmdkey`/PowerShell expect |
 
 Every consumer resolves the token in the same order:
