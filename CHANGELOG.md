@@ -15,6 +15,14 @@ German).
 
 ## [Unreleased]
 
+### Added
+
+- **`AI_REM_KEYCHAIN_BACKEND=file`** selects the 0600 file backend
+  (`~/.config/ai-rem/keyring/<account>`) on every OS. For Macs used only over SSH,
+  where the login keychain stays locked without a GUI login, and for setups whose
+  keychain holds a stale token: without it, `ai-rem update` reverted such clients to the
+  macOS keychain and `mcp-proxy`/`svc proxy`/`vault-mcp` failed with 401 (#203).
+
 ## [1.14.0] – 2026-11-09
 
 ### Added
