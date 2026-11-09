@@ -15,6 +15,8 @@ German).
 
 ## [Unreleased]
 
+## [1.14.0] – 2026-11-09
+
 ### Added
 
 - **`ai-rem mcp-proxy` / `ai-rem svc proxy` speak MCP 2026-07-28:** clients without
@@ -22,7 +24,20 @@ German).
   no re-init; `server/discover` and `subscriptions/listen` pass through like any request,
   streamed responses are relayed line by line. Every POST now carries `Mcp-Method`, plus
   `Mcp-Name` for `tools/call`/`prompts/get`/`resources/read`, and `MCP-Protocol-Version`
-  from the envelope (the server routes on it). Legacy clients (2025-11-25) are unchanged.
+  from the envelope (the server routes on it). Legacy clients (2025-11-25) are unchanged (#200).
+
+### Fixed
+
+- **Setup installs ai-rem / mykeyvault as Claude Code plugins:** the setup only detected
+  active plugins but never installed them, so without the manual `claude plugin install`
+  step every setup re-created `mcpServers` entries in `~/.claude.json`. `ensure_plugins()`
+  now installs `ai-rem@tools-registry` and `mykeyvault@tools-registry` (on install and
+  `ai-rem update`); the `mcpServers` entry only remains as fallback when the plugin
+  install fails (#201).
+
+### Changed
+
+- **Dependencies:** fastmcp 4.1.4 → 4.1.6 (#199).
 
 ## [1.13.0] – 2026-10-31
 
@@ -1234,7 +1249,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.13.0...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/markus7h/ai-rem/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/markus7h/ai-rem/compare/v1.12.4...v1.13.0
 [1.12.4]: https://github.com/markus7h/ai-rem/compare/v1.12.3...v1.12.4
 [1.12.3]: https://github.com/markus7h/ai-rem/compare/v1.12.2...v1.12.3
