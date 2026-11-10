@@ -102,6 +102,10 @@ lokalen Gegenstücke und zieht nur nach, was abweicht. Darunter läuft dasselbe
 `setup.py --update`, das die Schritte 2–9 macht und alles überspringt, was SSH, git oder
 npm braucht. Der `system-check`-SessionStart-Hook vergleicht genauso und meldet den
 Rückstand von selbst — man erfährt es also in der Regel, bevor man fragen muss.
+Am Ende prüft `ai-rem update`, ob der Server den gespeicherten Token noch annimmt
+(`✓ Selbsttest: Token (<Backend>) vom Server akzeptiert`); ein `✗` nennt die Token-Quelle
+und `ai-rem pair`, die Dateien sind trotzdem aktuell. Rechner ohne GUI: siehe
+[Authentifizierung → Betrieb ohne GUI](authentication.de.md#betrieb-ohne-gui-nur-ssh).
 
 Die `settings.json` wird dabei nur ergänzt: neue Permissions und Hook-Gruppen kommen
 hinzu, entfernt wird nichts. Die `settings-template.json`, aus der sie mergt, gehört dem

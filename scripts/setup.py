@@ -105,11 +105,13 @@ def hint_install(apt_pkgs, brew_pkgs=None, winget_pkgs=None):
         print('    Installieren: %s' % apt_pkgs)
 
 
-def http_get(url, timeout=10, insecure=False):
+def http_get(url, timeout=10, insecure=False, headers=None):
     # insecure=True ist NUR die Erreichbarkeits-Probe (Ersatz fuer curl -k) —
     # nie fuer Inhalte, die danach verwendet werden.
     ctx = ssl._create_unverified_context() if insecure else None
-    req = urllib.request.Request(url, headers={'User-Agent': 'ai-rem-setup'})
+    hdrs = {'User-Agent': 'ai-rem-setup'}
+    hdrs.update(headers or {})
+    req = urllib.request.Request(url, headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return resp.read()
 
@@ -234,6 +236,32 @@ def store_token(tok):
         return False
     print('✓ Token im %s gespeichert' % keychain_backend())
     return True
+
+
+def selftest_token():
+    """Nach `ai-rem update`: nimmt der Server den Token aus dem (frisch
+    installierten) Keychain-Backend an? Sonst faellt ein Bruch erst beim naechsten
+    Proxy-Start auf. Nur Meldung, Exit bleibt 0 — die Dateien sind korrekt."""
+    try:
+        tok, backend = keychain_get(), keychain_backend()
+    except Exception as ex:
+        print('⚠ Selbsttest nicht moeglich (%s)' % ex)
+        return
+    if not tok:
+        print('✗ Selbsttest: kein Token im %s — ai-rem pair '
+              '(ohne Browser: AI_REM_TOKEN=<token> ai-rem pair)' % backend)
+        return
+    try:
+        http_get(KG_URL + '/api/client-config', headers={'Authorization': 'Bearer ' + tok})
+        print('✓ Selbsttest: Token (%s) vom Server akzeptiert' % backend)
+    except urllib.error.HTTPError as ex:
+        if ex.code == 401:
+            print('✗ Selbsttest: Server lehnt den Token ab (401) — Quelle: %s. '
+                  'Dateien sind aktualisiert; Token erneuern: ai-rem pair' % backend)
+        elif ex.code != 404:  # 404: Server < 1.7 ohne /api/client-config
+            print('⚠ Selbsttest nicht moeglich (%s)' % ex)
+    except Exception as ex:
+        print('⚠ Selbsttest nicht moeglich (%s)' % ex)
 
 
 def report_keychain():
@@ -621,6 +649,14 @@ def _post_json(url, body, timeout=10):
         return json.loads(resp.read().decode('utf-8'))
 
 
+def _headless():
+    """SSH-Sitzung oder Linux ohne Display: webbrowser.open() wuerde auf dem Mac
+    unsichtbar den Browser der GUI-Session oeffnen, auf Linux scheitern."""
+    e = os.environ
+    return bool(e.get('SSH_CONNECTION') or e.get('SSH_TTY')) or (
+        PLATFORM == 'linux' and not (e.get('DISPLAY') or e.get('WAYLAND_DISPLAY')))
+
+
 def pair_device():
     """Token per Freigabe in der Web-UI holen (wie `gh auth login`). Gibt
     {'ai_rem_token', 'vault_token', 'vault_url'} zurueck oder {} bei Abbruch."""
@@ -640,11 +676,14 @@ def pair_device():
     print('│  Code:  %s' % start['code'])
     print('│  Im Browser freigeben (eingeloggt in der ai-rem-Web-UI, geht auch am Handy):')
     print('│  %s' % start['verify_url'])
+    if _headless():
+        print('│  (SSH-Sitzung: Browser wird nicht geoeffnet — URL an einem anderen Geraet aufrufen)')
     print('└──────────────────────────────────────────────────────────')
-    try:
-        webbrowser.open(start['verify_url'])
-    except Exception:
-        pass
+    if not _headless():
+        try:
+            webbrowser.open(start['verify_url'])
+        except Exception:
+            pass
     deadline = time.time() + int(start.get('expires_in', 600))
     try:
         while time.time() < deadline:
@@ -1447,6 +1486,10 @@ def record_client(mcp_endpoint, targets, setup_cfg, vault_url='', vault_entry=No
     if vault_entry is not None:
         cfg['vault_entry'] = vault_entry
     cfg['keychain'] = keychain_backend()
+    # Backend-Wahl persistieren: Proxys aus /bin/sh oder aelteren Shells sehen die
+    # Env nicht. Eine gesetzte Env wird einmal uebernommen, ohne Env bleibt der Wert.
+    env = os.environ.get('AI_REM_KEYCHAIN_BACKEND')
+    cfg['keychain_backend'] = env if env in ('file', 'auto') else cfg.get('keychain_backend', 'auto')
     for k in LEGACY_CLIENT_FIELDS:
         cfg.pop(k, None)
     save_client_cfg(cfg)
@@ -1955,6 +1998,7 @@ def update_only(targets):
     if 'generic' in targets:
         install_generic(mcp_endpoint)
     record_client(mcp_endpoint, targets, setup_cfg, vault_entry=new_vault_entry)
+    selftest_token()
     print('')
     print('Fertig. Clients neu starten - Hooks und Plugins werden nur beim Start geladen.')
 
@@ -1965,8 +2009,9 @@ def pair_only():
     also gibt es nichts mitzuziehen — nur Altlasten einzusammeln."""
     # CLI zuerst: der Keychain-Code (lib/keychain.py) kommt mit ihr.
     link_cli(install_cli())
-    paired = pair_device() or {}
-    tok = paired.get('ai_rem_token') or ask_token()
+    # Ohne Browser (SSH): AI_REM_TOKEN=<token> ai-rem pair — wie pull_secrets in main().
+    paired = {} if os.environ.get('AI_REM_TOKEN') else (pair_device() or {})
+    tok = os.environ.get('AI_REM_TOKEN') or paired.get('ai_rem_token') or ask_token()
     if not tok or not store_token(tok):
         sys.exit(1)
     migrate_secrets()

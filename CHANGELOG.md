@@ -17,11 +17,28 @@ German).
 
 ### Added
 
+- **Keychain choice without an env variable, macOS fallback, headless pairing:**
+  `keychain_backend` in `client.json` selects the file backend persistently —
+  `install`/`update`/`pair` record a set `AI_REM_KEYCHAIN_BACKEND`, so `mcp-proxy`,
+  `svc proxy` and `vault-mcp` started from `/bin/sh` or older shells make the same choice
+  (env still wins). The macOS backend falls back to the 0600 file when the login keychain
+  is locked (rc 36) or `security` times out, like libsecret does; `token --forget` stays
+  strict. `ai-rem pair` / `svc pair` open no browser over SSH (or on Linux without a
+  display); `AI_REM_TOKEN=<token> ai-rem pair` stores a token without pairing. `ai-rem
+  update` ends with a token self-test against `/api/client-config`. `ai-rem doctor` prints
+  the active backend plus the `client.json` value and warns when macOS keychain and file
+  hold different tokens (#204).
 - **`AI_REM_KEYCHAIN_BACKEND=file`** selects the 0600 file backend
   (`~/.config/ai-rem/keyring/<account>`) on every OS. For Macs used only over SSH,
   where the login keychain stays locked without a GUI login, and for setups whose
   keychain holds a stale token: without it, `ai-rem update` reverted such clients to the
   macOS keychain and `mcp-proxy`/`svc proxy`/`vault-mcp` failed with 401 (#203).
+
+### Fixed
+
+- **Misleading "kein Token (Keychain leer)":** `mcp-proxy` and `doctor` now name the
+  backend and, on a keychain error, the error itself with the file backend as the way out,
+  instead of claiming the keychain is empty (#204).
 
 ## [1.14.0] – 2026-11-09
 

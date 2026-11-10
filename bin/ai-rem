@@ -606,8 +606,11 @@ def cmd_mcp_proxy(c: MCPClient, a):
     """`ai-rem mcp-proxy`: als stdio-MCP-Server von Claude Code/opencode gestartet."""
     endpoint = a.proxy_endpoint or c.endpoint
     if not c.token:
-        print("ai-rem mcp-proxy: kein Token (Keychain leer) — `ai-rem pair` ausfuehren; "
-              "Requests werden mit 401 scheitern", file=sys.stderr)
+        print("ai-rem mcp-proxy: kein Token im %s — `ai-rem pair` (ohne Browser: "
+              "AI_REM_TOKEN=<token> ai-rem pair) ausfuehren; Requests werden mit 401 scheitern"
+              % keychain.backend_name(), file=sys.stderr)
+        if c.token_source.startswith("✗"):
+            print("ai-rem mcp-proxy: " + c.token_source, file=sys.stderr)
     # X-AI-REM-Client nur, wenn explizit gesetzt (opencode-Plugin: AI_REM_CLIENT=opencode).
     # Ohne Header nimmt der Server clientInfo.name aus dem initialize — der Default
     # "ai-rem-cli" wuerde sonst alle von Claude angelegten Entities falsch attribuieren.
@@ -680,6 +683,14 @@ def _svc_token_source(name: str) -> str:
     return f"Keychain ({keychain.backend_name()})" if _svc_token(name) else ""
 
 
+def _headless() -> bool:
+    # Wie in scripts/setup.py (das bin nicht importieren kann): ueber SSH oeffnet
+    # webbrowser.open auf dem Mac unsichtbar den Browser der GUI-Session.
+    e = os.environ
+    return bool(e.get("SSH_CONNECTION") or e.get("SSH_TTY")) or (
+        sys.platform.startswith("linux") and not (e.get("DISPLAY") or e.get("WAYLAND_DISPLAY")))
+
+
 def _svc_need_url(name: str, url: str) -> str:
     base = _svc_url(name, url)
     if not base:
@@ -713,11 +724,14 @@ def cmd_svc_pair(c: MCPClient, a):
     print(f"│  Code:  {start['code']}")
     print("│  Im Browser freigeben (eingeloggt in der Web-UI des Dienstes):")
     print(f"│  {start['verify_url']}")
+    if _headless():
+        print("│  (SSH-Sitzung: Browser wird nicht geoeffnet — URL an einem anderen Geraet aufrufen)")
     print("└──────────────────────────────────────────────────────")
-    try:
-        webbrowser.open(start["verify_url"])
-    except Exception:
-        pass
+    if not _headless():
+        try:
+            webbrowser.open(start["verify_url"])
+        except Exception:
+            pass
     deadline = time.time() + int(start.get("expires_in", 600))
     tok = ""
     try:
@@ -969,12 +983,28 @@ def cmd_doctor(c: MCPClient, a):
     # Quelle kommt aus _resolve_token_with_source: Env | Keychain (<backend>) |
     # Klartext-Legacy (<quelle>). Legacy ist kein Fehler, aber ein Migrationshinweis.
     if not c.token:
-        src = "— keiner gefunden → ai-rem pair"
+        src = c.token_source or "— keiner gefunden → ai-rem pair"
     elif c.token_source.startswith("Klartext-Legacy"):
         src = c.token_source + " → ai-rem update"
     else:
         src = c.token_source
     print(f"Token:     {src}")
+    kb = cfg.get("keychain_backend", "")
+    print("Keychain:  " + keychain.backend_name()
+          + (f" (client.json: keychain_backend={kb})" if kb else ""))
+    if sys.platform == "darwin":
+        # Drift: Mac-Keychain und Datei halten verschiedene Tokens (z.B. alter Token im
+        # Keychain, neuer in der Datei). Nur Hash-Praefixe, nie Token-Werte.
+        try:
+            toks = [b.get() for b in (keychain._MacBackend(keychain.ACCOUNT),
+                                      keychain._FileBackend(keychain.ACCOUNT))]
+            if all(toks) and toks[0] != toks[1]:
+                h1, h2 = (hashlib.sha256(t.encode()).hexdigest()[:8] for t in toks)
+                print(f"           ⚠ macOS-Keychain und Datei halten verschiedene Tokens ({h1}, {h2}) "
+                      f"— aktiv: {keychain.backend_name()}; Altbestand loeschen: "
+                      "AI_REM_KEYCHAIN_BACKEND=auto ai-rem token --forget (GUI-Session)")
+        except Exception:
+            pass
     for line in _svc_status_lines():
         print(f"Dienst:    {line}")
     try:
@@ -1242,7 +1272,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--pair", action="store_true", help="Token per Geraete-Kopplung neu holen")
     s.set_defaults(func=cmd_install)
 
-    s = sub.add_parser("pair", help="Token per Freigabe im Browser holen (ohne SSH)")
+    s = sub.add_parser("pair", help="Token per Freigabe im Browser holen "
+                                    "(ohne Browser: AI_REM_TOKEN=<token> ai-rem pair)")
     s.set_defaults(func=cmd_pair)
 
     s = sub.add_parser("uninstall", help="ai-rem aus einem Frontend entfernen")
