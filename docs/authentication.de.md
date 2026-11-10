@@ -146,6 +146,21 @@ und `ai-rem vault-mcp`, das den Vault-Zugang von `/api/client-config` holt und d
 mykeyvault-MCP damit im Env per `exec` startet. Ein `401` vom Server kommt als
 JSON-RPC-Fehler mit dem Hinweis `ai-rem pair` an.
 
+Nach demselben Muster versorgt `ai-rem run` beliebige lokale stdio-MCP-Server mit Secrets
+aus mykeyvault, ohne dass diese je auf der Workstation liegen:
+
+```bash
+ai-rem run --secret "tools-registry api token=TOOLS_REGISTRY_TOKEN" -- node server/index.mjs
+```
+
+Pro `--secret ITEM=ENV` (mehrfach erlaubt, Trennung am letzten `=`) holt die CLI das
+Passwort-Feld des Vault-Items per `GET <vault_url>/secret/<item>` und startet das Kommando
+per `exec` mit der Variable im Env. Fehlt ein Item oder ist der Vault nicht erreichbar,
+bricht der Start mit Exit 1 ab (Meldung nennt das Item, nie das Secret) — Claude Code zeigt
+dann `CONNECTION_CLOSED` statt eines Servers, der still ohne Token läuft. Einschränkung:
+`/api/client-config` liefert die Vault-Daten nur für Admin-Tokens, `run` ist also nur für
+den Vault-Besitzer nutzbar.
+
 ## Betrieb ohne GUI (nur SSH)
 
 Ein Mac, der nur per SSH genutzt wird, hat keinen entsperrten Login-Keychain — und die

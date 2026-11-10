@@ -139,6 +139,21 @@ and `ai-rem vault-mcp`, which fetches the vault access from `/api/client-config`
 `exec`s the mykeyvault MCP with it in its environment. A `401` from the server surfaces as
 a JSON-RPC error with the hint `ai-rem pair`.
 
+Following the same pattern, `ai-rem run` supplies any local stdio MCP server with secrets
+from mykeyvault without them ever sitting on the workstation:
+
+```bash
+ai-rem run --secret "tools-registry api token=TOOLS_REGISTRY_TOKEN" -- node server/index.mjs
+```
+
+For each `--secret ITEM=ENV` (repeatable, split at the last `=`) the CLI fetches the
+item's password field via `GET <vault_url>/secret/<item>` and `exec`s the command with the
+variable in its environment. A missing item or an unreachable vault aborts with exit 1
+(the message names the item, never the secret) — Claude Code then shows
+`CONNECTION_CLOSED` instead of a server silently running without a token. Limitation:
+`/api/client-config` returns vault data only for admin tokens, so `run` works for the
+vault owner only.
+
 ## Headless operation (SSH only)
 
 A Mac used only over SSH has no unlocked login keychain — and the proxies Claude Code or

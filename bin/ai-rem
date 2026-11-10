@@ -824,15 +824,41 @@ def cmd_vault_mcp(c: MCPClient, a):
         sys.stderr.write("ai-rem: mykeyvault-MCP nicht gebaut (vault_entry fehlt in "
                          f"{CLIENT_JSON}) — `ai-rem update` holt ihn nach\n")
         sys.exit(1)
-    node = shutil.which("node")
-    if not node:
+    if not shutil.which("node"):
         sys.stderr.write("ai-rem: node nicht im PATH — mykeyvault-MCP braucht node >= 18\n")
         sys.exit(1)
-    # NODE_EXTRA_CA_CERTS u.a. bleiben aus os.environ erhalten.
-    env = dict(os.environ, VAULT_API_URL=url, VAULT_API_TOKEN=tok, MCP_TRANSPORT="stdio")
+    _exec_with_env(["node", entry], dict(VAULT_API_URL=url, VAULT_API_TOKEN=tok, MCP_TRANSPORT="stdio"))
+
+
+def _exec_with_env(argv: list, extra_env: dict):
+    """argv[0] im PATH aufloesen und mit os.environ + extra_env per exec starten
+    (Windows: Subprozess, Exit-Code durchreichen). NODE_EXTRA_CA_CERTS u.a. bleiben erhalten."""
+    exe = shutil.which(argv[0])
+    if not exe:
+        sys.stderr.write(f"ai-rem: {argv[0]} nicht im PATH\n")
+        sys.exit(1)
+    env = dict(os.environ, **extra_env)
     if os.name == "nt":
-        sys.exit(subprocess.call([node, entry], env=env))
-    os.execve(node, [node, entry], env)
+        sys.exit(subprocess.call([exe, *argv[1:]], env=env))
+    os.execve(exe, [exe, *argv[1:]], env)
+
+
+def cmd_run(c: MCPClient, a):
+    """`ai-rem run --secret ITEM=ENV … -- cmd …`: Secrets aus mykeyvault nur ins Env des
+    Kommandos, nie auf stdout/stderr oder Platte. Fehlt eines, bricht der Start hart ab —
+    ein stdio-MCP-Server soll nicht still ohne Token laufen."""
+    cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
+    if not cmd:
+        sys.stderr.write("ai-rem run: Kommando fehlt — `ai-rem run --secret ITEM=ENV -- <cmd> …`\n")
+        sys.exit(2)
+    extra_env = {}
+    for spec in a.secret:
+        item, sep, var = spec.rpartition("=")  # letztes '=': Item-Namen duerfen Leerzeichen/Bindestriche haben
+        if not sep or not item or not var:
+            sys.stderr.write(f"ai-rem run: --secret erwartet ITEM=ENV, nicht '{spec}'\n")
+            sys.exit(2)
+        extra_env[var] = c.vault_secret(item)
+    _exec_with_env(cmd, extra_env)
 
 
 CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
@@ -1264,6 +1290,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("vault-mcp", help="mykeyvault-MCP (stdio) mit Vault-Zugang vom Server starten")
     s.set_defaults(func=cmd_vault_mcp)
+
+    s = sub.add_parser("run", help="startet ein Kommando mit Secrets aus mykeyvault als Env "
+                                   "(z. B. lokale stdio-MCP-Server)")
+    s.add_argument("--secret", action="append", required=True, metavar="ITEM=ENV",
+                   help="Vault-Item ITEM als Variable ENV setzen, mehrfach angebbar")
+    s.add_argument("command", nargs=argparse.REMAINDER, help="Kommando nach `--`")
+    s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("install", help="Frontend(s) einrichten/nachruesten (claude, opencode, generic)")
     s.add_argument("--client", action="append", choices=(*TARGETS, "auto"),
