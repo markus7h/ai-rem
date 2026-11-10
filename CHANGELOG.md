@@ -39,6 +39,11 @@ German).
 - **Misleading "kein Token (Keychain leer)":** `mcp-proxy` and `doctor` now name the
   backend and, on a keychain error, the error itself with the file backend as the way out,
   instead of claiming the keychain is empty (#204).
+- **Preference-Klassifikation verschärft:** `Preference` ist nur noch für forcierte
+  Verhaltensregeln (Imperativ, Format `Regel: … Why: … How to apply: …`) vorgesehen —
+  in `lib/extractor.py` (Session-Extractor) und in den MCP-`instructions`. Fakten, Konfig,
+  Env-Vars, DNS, Entscheidungen, Lösungen und PR-/Issue-Referenzen landen als
+  Topic/Decision/Solution statt als Preference.
 
 ## [1.14.0] – 2026-11-09
 

@@ -114,6 +114,8 @@ Leer: {"entities":[],"relations":[]}
 
 SPEICHERN NUR wenn wörtlich im Transcript + (neuer Insight oder Muster). Types: Decision (mit Why+How), Problem→Solution, neue Tools/Infra, Feedback (Präfix "Feedback: "), Projekte, externe Topic-Pointer.
 
+Preference NUR fuer FORCIERTE Verhaltensregeln (Imperativ: "immer X", "nie Y", "erst Z dann W"), Format "Regel: … Why: … How to apply: …". Fakten, Konfig, Env-Vars, DNS, Entscheidungen, Lösungen, PR-/Issue-Referenzen sind NIE Preference — Decision/Solution/Topic.
+
 context="private" für: persönliche/Heim-Infrastruktur — eigene Hosts, selbst-gehostete Dienste/Container, Home-Lab, Heimautomation, private Tools/Repos, ~/.claude
 context="work" nur: berufliche Beratung/Kunden
 
