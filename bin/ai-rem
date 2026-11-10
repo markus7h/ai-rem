@@ -855,7 +855,7 @@ def cmd_run(c: MCPClient, a):
     for spec in a.secret:
         item, sep, var = spec.rpartition("=")  # letztes '=': Item-Namen duerfen Leerzeichen/Bindestriche haben
         if not sep or not item or not var:
-            sys.stderr.write(f"ai-rem run: --secret erwartet ITEM=ENV, nicht '{spec}'\n")
+            sys.stderr.write("ai-rem run: --secret erwartet ITEM=ENV\n")
             sys.exit(2)
         extra_env[var] = c.vault_secret(item)
     _exec_with_env(cmd, extra_env)
