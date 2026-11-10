@@ -55,7 +55,7 @@ German).
   Preferences vollständig im Prompt (statt sie unter das 50-Namen-Limit fallen zu
   lassen) und wird angewiesen, existierende Regeln gleichen Themas zu aktualisieren statt
   neue Namen zu erfinden. `memory_add` verweigert bei Neuanlage einer Preference, die
-  per Embedding-Similarity (≥ 0.85) einem bestehenden Eintrag nahesteht.
+  per Embedding-Similarity (≥ 0.65, aus Live-Messung kalibriert) einem bestehenden Eintrag nahesteht.
 
 ## [1.14.0] – 2026-11-09
 

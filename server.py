@@ -2775,14 +2775,15 @@ def memory_add(
                     f"zur selben ID normalisieren, kollidieren.")
 
     # Duplikat-Guard: Neuanlage einer Preference gegen aktive Preferences per Embedding
-    # prüfen. Hoher Schwellwert (0.85) → nur echte Duplikate stoppen, keine thematisch
-    # verwandten, legitimen Regeln. Sanft: Hinweis statt still anlegen — der Aufrufer
-    # kann memory_merge nutzen oder eindeutiger benennen. shortcut: nur semantisch,
+    # prüfen. Schwellwert 0.65 aus Live-Messung kalibriert: echtes Duplikat (Git-Account-
+    # Auswahl vs. GitHub-Account) lag bei 0.747, verwandte legitime Regel (Work-GitHub)
+    # bei 0.521 — 0.65 trennt beide mit Marge. Sanft: Hinweis statt still anlegen — der
+    # Aufrufer kann memory_merge nutzen oder eindeutiger benennen. shortcut: nur semantisch,
     # keine Fuzzy-Namens-Algorithmen; bei vielen Fehlalarmen Schwellwert erhöhen.
     if not existed and type == "Preference" and EMBED_ENABLED:
         try:
             hits = _semantic_hits(name, context=context or "", limit=1)
-            if hits and hits[0]["type"] == "Preference" and hits[0]["score"] >= 0.85:
+            if hits and hits[0]["type"] == "Preference" and hits[0]["score"] >= 0.65:
                 return (f"⚠ Duplikat-Guard: '{name}' ist semantisch nahe an bestehender "
                         f"Preference '{hits[0]['name']}' (Score {hits[0]['score']:.2f}). "
                         f"Per memory_merge falten oder einen eindeutigeren Namen wählen.")
