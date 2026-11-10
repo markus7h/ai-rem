@@ -308,11 +308,13 @@ def test_prompt_zeigt_status_und_session():
 
     tasks = _fetch_recent_tasks(_Client())
     assert tasks == ["Mail an Bob [erledigt]", "Offen [offen]"]
-    prompt = _build_system_prompt(["Mail an Bob", "Zebra"], [], tasks,
+    prompt = _build_system_prompt(["Mail an Bob", "Zebra"], [], tasks, ["Regel A"],
                                   {"project": "ai-rem", "context": "private"})
     assert "Session: Projekt ai-rem, Kontext private" in prompt
     assert "- Mail an Bob [erledigt]" in prompt
     assert prompt.count("Mail an Bob") == 1
+    # Preferences werden vollständig gelistet statt unter das 50er-Limit zu fallen.
+    assert "- Regel A" in prompt
 
 
 def test_ingest_nutzt_herkunft(tmp_path, monkeypatch):
