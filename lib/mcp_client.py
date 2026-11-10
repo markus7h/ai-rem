@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Iterable, Iterator, Optional, Tuple
 
@@ -281,6 +282,23 @@ class MCPClient:
             pass
         self._client_cfg = cfg
         return cfg
+
+    def vault_secret(self, item: str) -> str:
+        """Passwort-Feld eines mykeyvault-Items (GET <vault_url>/secret/<item>) mit den
+        Vault-Daten aus client_config(). Nur fuer Admin-Tokens verfuegbar, nie cachen,
+        nie auf Platte schreiben."""
+        cfg = self.client_config()
+        base, tok = cfg.get("vault_url") or "", cfg.get("vault_token") or ""
+        if not base or not tok:
+            raise MCPError("Vault-Daten nicht verfügbar (Server < 1.7, Vault nicht konfiguriert "
+                           "oder kein Admin-Token)")
+        url = base.rstrip("/") + "/secret/" + urllib.parse.quote(item, safe="")
+        try:
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read().decode())["password"]
+        except Exception as e:
+            raise MCPError(f"Secret '{item}' nicht aus mykeyvault: {e}") from e
 
     def call(self, tool: str, args: Optional[dict] = None) -> str:
         """memory_*-Op über die REST-Route POST /api/tool aufrufen.

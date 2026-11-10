@@ -17,6 +17,13 @@ German).
 
 ### Added
 
+- **`ai-rem run --secret ITEM=ENV … -- <cmd>`:** starts a command with mykeyvault secrets
+  in its environment, fetched per run via the vault access from `/api/client-config` —
+  for local stdio MCP servers (tools, paperless) that previously kept their token in the
+  Claude Code keychain (locked on SSH-only Macs → server silently ran without a token).
+  A missing item or unreachable vault aborts with exit 1 and a message naming the item,
+  never the secret. Admin device token required (only then does `/api/client-config`
+  carry vault data) (#205).
 - **Keychain choice without an env variable, macOS fallback, headless pairing:**
   `keychain_backend` in `client.json` selects the file backend persistently —
   `install`/`update`/`pair` record a set `AI_REM_KEYCHAIN_BACKEND`, so `mcp-proxy`,
