@@ -46,6 +46,16 @@ German).
 - **Misleading "kein Token (Keychain leer)":** `mcp-proxy` and `doctor` now name the
   backend and, on a keychain error, the error itself with the file backend as the way out,
   instead of claiming the keychain is empty (#204).
+- **Preference-Klassifikation verschärft:** `Preference` ist nur noch für forcierte
+  Verhaltensregeln (Imperativ, Format `Regel: … Why: … How to apply: …`) vorgesehen —
+  in `lib/extractor.py` (Session-Extractor) und in den MCP-`instructions`. Fakten, Konfig,
+  Env-Vars, DNS, Entscheidungen, Lösungen und PR-/Issue-Referenzen landen als
+  Topic/Decision/Solution statt als Preference.
+- **Duplikat-Prävention für Preferences:** der Session-Extractor listet alle aktiven
+  Preferences vollständig im Prompt (statt sie unter das 50-Namen-Limit fallen zu
+  lassen) und wird angewiesen, existierende Regeln gleichen Themas zu aktualisieren statt
+  neue Namen zu erfinden. `memory_add` verweigert bei Neuanlage einer Preference, die
+  per Embedding-Similarity (≥ 0.85) einem bestehenden Eintrag nahesteht.
 
 ## [1.14.0] – 2026-11-09
 

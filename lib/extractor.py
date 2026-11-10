@@ -114,6 +114,10 @@ Leer: {"entities":[],"relations":[]}
 
 SPEICHERN NUR wenn wörtlich im Transcript + (neuer Insight oder Muster). Types: Decision (mit Why+How), Problem→Solution, neue Tools/Infra, Feedback (Präfix "Feedback: "), Projekte, externe Topic-Pointer.
 
+Preference NUR fuer FORCIERTE Verhaltensregeln (Imperativ: "immer X", "nie Y", "erst Z dann W"), Format "Regel: … Why: … How to apply: …". Fakten, Konfig, Env-Vars, DNS, Entscheidungen, Lösungen, PR-/Issue-Referenzen sind NIE Preference — Decision/Solution/Topic.
+
+Vor NEUANLAGE einer Preference pruefen, ob eine thematisch gleiche unter den bekannten Preferences (Block oben) steht — wenn ja, denselben Namen verwenden (Update), nie einen neuen Namen erfinden.
+
 context="private" für: persönliche/Heim-Infrastruktur — eigene Hosts, selbst-gehostete Dienste/Container, Home-Lab, Heimautomation, private Tools/Repos, ~/.claude
 context="work" nur: berufliche Beratung/Kunden
 
@@ -312,6 +316,17 @@ def _fetch_project_names(client: MCPClient) -> List[str]:
     return [m.group(1).strip() for m in _NAME_LINE.finditer(listing)]
 
 
+def _fetch_preference_names(client: MCPClient) -> List[str]:
+    """Aktive Preferences vollstaendig — Duplikat-Pravention: fallen sie unter das
+    50er-Limit der bekannten Namen, legt das Modell thematisch gleiche Regeln unter
+    neuem Namen an (Git-Account-Auswahl vs. GitHub-Account auf Arbeitsmaschine)."""
+    try:
+        listing = client.call("memory_list", {"type": "Preference"})
+    except Exception:
+        return []
+    return [m.group(1).strip() for m in _NAME_LINE.finditer(listing)]
+
+
 _TASK_LINE = re.compile(r"^-\s+\*\*(.+?)\*\*(?:\s+\[(\w+)\])?.*_\((\d{4}-\d{2}-\d{2})\)_\s*$",
                         re.MULTILINE)
 _STATUS_SUFFIX = re.compile(r"\s+\[\w+\]$")
@@ -345,23 +360,32 @@ def _session_line(origin: Optional[dict]) -> str:
 
 
 def _build_system_prompt(known_names: List[str], projects: Optional[List[str]] = None,
-                         tasks: Optional[List[str]] = None, origin: Optional[dict] = None) -> str:
+                         tasks: Optional[List[str]] = None, preferences: Optional[List[str]] = None,
+                         origin: Optional[dict] = None) -> str:
     proj_block = _session_line(origin)
     if projects:
         proj_block += "\n\nAktive Projekte (fuer TEIL_VON):\n" + "\n".join(f"- {p}" for p in projects)
     task_block = ""
     if tasks:
         task_block = "\n\nBekannte Tasks (neueste zuerst):\n" + "\n".join(f"- {t}" for t in tasks)
+    pref_block = ""
+    if preferences:
+        pref_block = ("\n\nBekannte Preferences (ALLE — Duplikate vermeiden: existierende "
+                      "Regel gleichen Themas aktualisieren, nie neuen Namen erfinden):\n"
+                      + "\n".join(f"- {p}" for p in preferences))
     if not known_names:
-        return SYSTEM_PROMPT_BASE + proj_block + task_block + "\n\nBekannte Entities: (keine)"
+        return SYSTEM_PROMPT_BASE + proj_block + task_block + pref_block + "\n\nBekannte Entities: (keine)"
     seen = {_STATUS_SUFFIX.sub("", t) for t in tasks or []}
-    limited = sorted(n for n in known_names if n not in seen)[-50:]
+    # Preferences sind vollständig oben gelistet → aus dem 50er-Limit herausfiltern.
+    others = [n for n in known_names if n not in (preferences or [])]
+    limited = sorted(n for n in others if n not in seen)[-50:]
     block = "\n".join(f"- {n}" for n in limited)
     return (
         SYSTEM_PROMPT_BASE
         + proj_block
         + task_block
-        + f"\n\n({len(limited)}/{len(known_names)} bekannte — bevorzuge diese Namen):\n"
+        + pref_block
+        + f"\n\n({len(limited)}/{len(others)} weitere bekannte — bevorzuge diese Namen):\n"
         + block
     )
 
@@ -795,7 +819,8 @@ def ingest_transcript(
                   file=sys.stderr)
         known = _fetch_known_entity_names(client)
         prompt = _build_system_prompt(known, _fetch_project_names(client),
-                                      _fetch_recent_tasks(client), origin)
+                                      _fetch_recent_tasks(client),
+                                      _fetch_preference_names(client), origin)
         print(
             f"transcript: {transcript_path} ({len(flat):,} Zeichen, "
             f"Modell={model}, bekannte Entities: {len(known)})",

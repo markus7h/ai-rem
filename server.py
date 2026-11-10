@@ -1486,10 +1486,11 @@ mcp = FastMCP(
         "## Speichern — proaktiv, ohne Nachfrage\n"
         "memory_add + memory_relate. Vor neuem Eintrag prüfen ob Entity schon existiert — updaten statt duplizieren.\n\n"
         "Entity-Typen: Person | Project | Task | Tool | Problem | Solution | Decision | Preference | Topic\n"
-        "- Preference: User-Präferenzen, Arbeitsweisen, Feedback. Feedback-Einträge mit Präfix 'Feedback: …'. "
-        "Body bei Regeln: Regel + Why: + How to apply: — die Kern-Regel MUSS in die "
-        "ERSTEN ~120 Zeichen (vor 'Why:'), da get_context auf descr[:120] kürzt und alles "
-        "dahinter passiv unsichtbar bleibt.\n"
+        "- Preference: NUR forcierte Verhaltensregeln ('immer X', 'nie Y', 'erst Z dann W'), "
+        "Format 'Regel: … Why: … How to apply: …'. Feedback-Einträge mit Präfix 'Feedback: …'. "
+        "Die Kern-Regel MUSS in die ERSTEN ~120 Zeichen (vor 'Why:'), da get_context auf "
+        "descr[:120] kürzt und alles dahinter passiv unsichtbar bleibt. Fakten, Konfig, Env-Vars, "
+        "DNS, Entscheidungen, Lösungen, PR-/Issue-Referenzen → Topic/Decision/Solution, NIE Preference.\n"
         "  VOR dem Anlegen einer neuen Verhaltensregel prüfen, ob ein Client-Hook "
         "(Claude Code: settings.json; opencode: Plugin — deterministisch, kostet keinen "
         "Routine-Slot) die bessere "
@@ -2772,6 +2773,21 @@ def memory_add(
             return (f"⚠ ID-Kollision: '{eid}' ist bereits von '{prev[0][0]}' belegt. "
                     f"Bitte einen eindeutigeren Namen wählen — verschiedene Namen, die "
                     f"zur selben ID normalisieren, kollidieren.")
+
+    # Duplikat-Guard: Neuanlage einer Preference gegen aktive Preferences per Embedding
+    # prüfen. Hoher Schwellwert (0.85) → nur echte Duplikate stoppen, keine thematisch
+    # verwandten, legitimen Regeln. Sanft: Hinweis statt still anlegen — der Aufrufer
+    # kann memory_merge nutzen oder eindeutiger benennen. shortcut: nur semantisch,
+    # keine Fuzzy-Namens-Algorithmen; bei vielen Fehlalarmen Schwellwert erhöhen.
+    if not existed and type == "Preference" and EMBED_ENABLED:
+        try:
+            hits = _semantic_hits(name, context=context or "", limit=1)
+            if hits and hits[0]["type"] == "Preference" and hits[0]["score"] >= 0.85:
+                return (f"⚠ Duplikat-Guard: '{name}' ist semantisch nahe an bestehender "
+                        f"Preference '{hits[0]['name']}' (Score {hits[0]['score']:.2f}). "
+                        f"Per memory_merge falten oder einen eindeutigeren Namen wählen.")
+        except Exception:
+            pass  # Embeddings nicht verfügbar → Guard überspringen
 
     cur_descr, cur_extra_raw, cur_ctx, cur_pinned, cur_updated = (
         prev[0][1:6] if existed else ("", "{}", "", "", ""))
