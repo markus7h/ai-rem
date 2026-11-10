@@ -2,6 +2,7 @@
 subprocess.run / shutil.which / advapi32). Läuft auch ohne pytest über den
 __main__-Block (pytest ist auf der Workstation nicht installiert)."""
 import ctypes
+import json
 import os
 import stat
 import sys
@@ -40,19 +41,74 @@ def test_mac_get_reads_stdout_and_keeps_secret_off_argv():
     assert "find-generic-password -a \"%s\" -s ai-rem -w" % ACCT in call.input
 
 
-def test_mac_get_not_found_rc44_is_empty():
+def test_mac_get_not_found_rc44_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     run = FakeRun({"find-generic-password": (44, "", "could not be found")})
     assert kc._MacBackend(ACCT, run=run).get() == ""
 
 
-def test_mac_get_other_rc_raises_with_stderr():
-    run = FakeRun({"find-generic-password": (36, "", "User interaction is not allowed.")})
+def test_mac_other_rc_still_raises():
+    # rc 1 ist weder „nicht gefunden“ (44) noch „gesperrt“ (36): kein Fallback.
+    run = FakeRun({"find-generic-password": (1, "", "SecKeychainSearchCopyNext failed")})
     try:
         kc._MacBackend(ACCT, run=run).get()
     except kc.KeychainError as e:
-        assert "User interaction" in str(e)
+        assert "SecKeychainSearchCopyNext" in str(e)
     else:
         raise AssertionError("KeychainError erwartet")
+
+
+LOCKED = (36, "", "User interaction is not allowed.")
+
+
+def test_mac_locked_rc36_falls_back_to_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    b = kc._MacBackend(ACCT, run=FakeRun({"add-generic-password": LOCKED,
+                                          "find-generic-password": LOCKED}))
+    b.set(SECRET)
+    path = os.path.join(str(tmp_path), "ai-rem", "keyring", ACCT)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert b.get() == SECRET
+    assert "gesperrt" in b.backend_name
+    # Neuer Prozess (degraded unbekannt): get() laeuft gegen den gesperrten Keychain
+    # und findet trotzdem die Datei.
+    fresh = kc._MacBackend(ACCT, run=FakeRun({"find-generic-password": LOCKED}))
+    assert fresh.get() == SECRET
+    assert "gesperrt" in fresh.backend_name
+
+
+def test_mac_timeout_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    def hang(argv, **kw):
+        raise kc.subprocess.TimeoutExpired(argv, kc.TIMEOUT_S)
+    b = kc._MacBackend(ACCT, run=hang)
+    b.set(SECRET)
+    assert b.get() == SECRET
+    assert "Timeout" in b.backend_name
+
+
+def test_mac_rc44_finds_earlier_file_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    kc._FileBackend(ACCT).set(SECRET)
+    b = kc._MacBackend(ACCT, run=FakeRun({"find-generic-password": (44, "", "not found")}))
+    assert b.get() == SECRET
+    assert b.from_fallback and b.backend_name.startswith("Datei (0600)")
+
+
+def test_mac_delete_locked_raises(tmp_path, monkeypatch):
+    # delete() ohne Fallback: sonst loescht `token --forget` bei gesperrtem Keychain
+    # still die Datei mit dem guten Token.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    kc._FileBackend(ACCT).set(SECRET)
+    b = kc._MacBackend(ACCT, run=FakeRun({"delete-generic-password": LOCKED}))
+    try:
+        b.delete()
+    except kc.KeychainError as e:
+        assert "rc=36" in str(e)
+    else:
+        raise AssertionError("KeychainError erwartet")
+    assert kc._FileBackend(ACCT).get() == SECRET
 
 
 def test_mac_set_uses_update_flag_and_stdin_only():
@@ -94,7 +150,8 @@ def test_linux_without_secret_tool_writes_0600_file(tmp_path, monkeypatch):
     assert b.get() == ""
 
 
-def test_linux_with_secret_tool_selects_libsecret():
+def test_linux_with_secret_tool_selects_libsecret(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))  # keine echte client.json lesen
     b = kc._select_backend(platform="linux", which=lambda name: "/usr/bin/secret-tool")
     assert isinstance(b, kc._LibsecretBackend)
     assert b.name == "libsecret"
@@ -225,7 +282,8 @@ def test_win_backend_roundtrip_with_fake_dll():
 
 # --------------------------------------------------------------------------- Auswahl
 
-def test_backend_selection_by_platform(monkeypatch):
+def test_backend_selection_by_platform(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))  # keine echte client.json lesen
     for platform, which_result, cls in [
         ("darwin", None, kc._MacBackend),
         ("win32", None, kc._WindowsBackend),
@@ -251,6 +309,20 @@ def test_file_backend_opt_in_overrides_platform(tmp_path, monkeypatch):
     path = os.path.join(str(tmp_path), "ai-rem", "keyring", "svc-doc-graph")
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert svc.get() == SECRET
+
+
+def test_client_json_backend_pref(tmp_path, monkeypatch):
+    # record_client (setup.py) persistiert die Wahl; Env hat Vorrang (auto schlaegt file).
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("AI_REM_KEYCHAIN_BACKEND", raising=False)
+    cfg_dir = os.path.join(str(tmp_path), "ai-rem")
+    os.makedirs(cfg_dir)
+    with open(os.path.join(cfg_dir, "client.json"), "w", encoding="utf-8") as f:
+        json.dump({"keychain_backend": "file"}, f)
+    b = kc._select_backend(platform="darwin")
+    assert isinstance(b, kc._FileBackend) and b.name == "Datei (0600)"
+    monkeypatch.setenv("AI_REM_KEYCHAIN_BACKEND", "auto")
+    assert isinstance(kc._select_backend(platform="darwin"), kc._MacBackend)
 
 
 def test_module_api_delegates_to_backend(monkeypatch):
@@ -287,6 +359,10 @@ if __name__ == "__main__":
         def setenv(self, name, value):
             self._undo.append((os.environ, name, os.environ.get(name)))
             os.environ[name] = value
+
+        def delenv(self, name, raising=True):
+            self._undo.append((os.environ, name, os.environ.get(name)))
+            os.environ.pop(name, None)
 
         def undo(self):
             for obj, name, old in reversed(self._undo):

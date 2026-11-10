@@ -27,7 +27,8 @@ token rotates. Because the cookie is `Secure`, the UI must be reached over HTTPS
 
 The installer gets its token the way `gh auth login` does: it starts a pairing
 (`POST /api/pair/start`), shows a code like `K7QF-2M9X` and opens
-`https://<server>/pair?code=…`. You approve it in the web UI — logged in, from any
+`https://<server>/pair?code=…` (over SSH no browser is opened — open the URL on another
+device instead). You approve it in the web UI — logged in, from any
 device including your phone — and the installer collects the token exactly once
 (`POST /api/pair/poll`). A pairing expires after 10 minutes, starts are rate-limited per
 IP, approval needs the UI login, and every decision is logged in `/pair` ("recently
@@ -114,10 +115,10 @@ platform keychain (`lib/keychain.py`, shipped with the CLI): service `ai-rem`, a
 
 | Platform | Backend | Notes |
 |---|---|---|
-| macOS | Keychain (`security`) | The command goes to `security -i` over stdin, so the token never appears in `ps`. Items created this way are readable later without a GUI prompt; in an SSH session without GUI login run `security unlock-keychain` first |
+| macOS | Keychain (`security`) | The command goes to `security -i` over stdin, so the token never appears in `ps`. Items created this way are readable later without a GUI prompt. If the login keychain is locked (SSH session without GUI login, rc 36) or `security` times out, the backend falls back to the file — visible in `ai-rem doctor`; `token --forget` stays strict |
 | Linux | libsecret (`secret-tool`) | GNOME Keyring, KWallet via portal. Without a D-Bus session or an unlocked keyring the store falls back to the file backend and says so |
 | Linux fallback | File `$XDG_CONFIG_HOME/ai-rem/keyring/<account>` (0600 in a 0700 dir) | Used when `secret-tool` is missing or has no session. `ai-rem doctor` and `client.json` → `keychain` show `Datei (0600) …` so the degradation stays visible |
-| Opt-in file (any OS) | Same file as the Linux fallback | `AI_REM_KEYCHAIN_BACKEND=file` — for machines used only over SSH, where the macOS login keychain stays locked without a GUI login. The token never sits in the shell environment; only ai-rem reads the file. `ai-rem pair` / `svc pair` write there while the variable is set |
+| Opt-in file (any OS) | Same file as the Linux fallback | `AI_REM_KEYCHAIN_BACKEND=file` or `"keychain_backend": "file"` in `client.json` — for machines used only over SSH, where the macOS login keychain stays locked without a GUI login. Precedence: env > `client.json` > OS default; `install`/`update`/`pair` persist a set env into `client.json`, after which the choice also applies to proxies started without that env. The token never sits in the shell environment; only ai-rem reads the file |
 | Windows | Credential Manager (`advapi32`) | Target `ai-rem/<account>`, UTF-16LE blob — what `cmdkey`/PowerShell expect |
 
 Every consumer resolves the token in the same order:
@@ -137,6 +138,24 @@ mcp-proxy`, a stdio MCP server that reads the keychain and bridges to the HTTP e
 and `ai-rem vault-mcp`, which fetches the vault access from `/api/client-config` and
 `exec`s the mykeyvault MCP with it in its environment. A `401` from the server surfaces as
 a JSON-RPC error with the hint `ai-rem pair`.
+
+## Headless operation (SSH only)
+
+A Mac used only over SSH has no unlocked login keychain — and the proxies Claude Code or
+opencode start via `/bin/sh` never see variables from `~/.zshenv`. So, once, in a shell
+with the variable set:
+
+```bash
+AI_REM_KEYCHAIN_BACKEND=file ai-rem update   # persists keychain_backend=file in client.json
+```
+
+Pairing without a browser: `ai-rem pair` prints code and URL but does not open a browser
+over SSH — open the URL on another device. Or hand over the token directly:
+`AI_REM_TOKEN=<token> ai-rem pair` or `echo <token> | ai-rem token --store`, for further
+services `echo <token> | ai-rem svc token <name> --store`. Then restart Claude Code/opencode:
+running proxies keep the old lib and the old backend choice. `ai-rem doctor` shows the
+active backend (`Keychain: …`) with the `client.json` value and warns when the macOS
+keychain and the file hold different tokens.
 
 ## Token source on the server — [mykeyvault](https://github.com/markus7h/mykeyvault)
 

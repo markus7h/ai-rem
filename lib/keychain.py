@@ -14,6 +14,7 @@ damit Aufrufer sie trivial monkeypatchen können.
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import shutil
 import subprocess
@@ -25,6 +26,25 @@ SERVICE = "ai-rem"
 ACCOUNT = os.environ.get("AI_REM_KEYCHAIN_ACCOUNT", "device-token")
 # Reißleine für security/secret-tool: normal antworten beide in Millisekunden.
 TIMEOUT_S = 15
+
+
+def _cfg_dir() -> str:
+    # Dieselbe Ablage wie CLIENT_JSON in lib/mcp_client.py — hier ohne Import
+    # (mcp_client importiert keychain, nicht umgekehrt). Zur Laufzeit aufgelöst,
+    # damit Tests XDG_CONFIG_HOME setzen können.
+    return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                        "ai-rem")
+
+
+def _client_backend_pref() -> str:
+    """`keychain_backend` aus client.json ("" wenn fehlt/unlesbar). Schreibt
+    scripts/setup.py (record_client), damit die Wahl nicht an einer Env-Variable
+    hängt, die /bin/sh-gestartete Proxys oder ältere Shells nie sehen."""
+    try:
+        with open(os.path.join(_cfg_dir(), "client.json"), encoding="utf-8") as f:
+            return str(json.load(f).get("keychain_backend") or "")
+    except Exception:
+        return ""
 
 
 class KeychainError(RuntimeError):
@@ -39,15 +59,23 @@ class _MacBackend:
 
     Items, die via `security` angelegt wurden, liest `security` später ohne
     GUI-Prompt (das CLI steht in der ACL des Items). Bei gesperrtem
-    Login-Keychain (z. B. SSH-Session ohne GUI-Login) ist vorher
-    `security unlock-keychain` nötig — sonst hängt/fehlt der Zugriff."""
+    Login-Keychain (z. B. SSH-Session ohne GUI-Login: rc 36 oder Timeout) fällt
+    das Backend wie _LibsecretBackend auf _FileBackend zurück und meldet das
+    über backend_name(). delete() bleibt strikt: sonst würde `token --forget`
+    bei gesperrtem Keychain still die Datei mit dem guten Token löschen."""
 
     name = "macOS Keychain"
     _NOT_FOUND_RC = 44  # errSecItemNotFound (-25300)
+    _LOCKED_RC = 36  # errSecInteractionNotAllowed (-25308)
 
-    def __init__(self, account: str, run: Callable = subprocess.run):
+    def __init__(self, account: str, run: Callable = subprocess.run,
+                 fallback: Optional[_FileBackend] = None):
         self.account = account
         self.run = run
+        self.fallback = fallback or _FileBackend(account)
+        self.degraded = False  # True, sobald der Keychain gesperrt war oder hing
+        self.from_fallback = False  # True, wenn get() den Token aus der Datei las
+        self.reason = "Keychain nicht nutzbar"
 
     @staticmethod
     def _quote(value: str) -> str:
@@ -57,27 +85,56 @@ class _MacBackend:
     def _security(self, cmd: str):
         # ponytail: ohne Timeout bliebe der synchrone SessionStart-Hook bei
         # gesperrtem Keychain (SSH ohne GUI) am Unlock-Prompt hängen.
-        return self.run(["security", "-i"], input=cmd + "\n",
-                        capture_output=True, text=True, timeout=TIMEOUT_S)
+        try:
+            return self.run(["security", "-i"], input=cmd + "\n",
+                            capture_output=True, text=True, timeout=TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(["security", "-i"], -1, "",
+                                               "Timeout nach %ds" % TIMEOUT_S)
+
+    def _fallback_get(self) -> str:
+        tok = self.fallback.get()
+        self.from_fallback = bool(tok)
+        return tok
+
+    def _degrade(self, rc: int) -> None:
+        self.degraded = True
+        self.reason = ("Keychain antwortet nicht (Timeout %ds)" % TIMEOUT_S if rc == -1
+                       else "Keychain gesperrt (SSH ohne GUI-Login)")
 
     def get(self) -> str:
+        if self.degraded:
+            return self._fallback_get()
         p = self._security("find-generic-password -a %s -s %s -w"
                            % (self._quote(self.account), SERVICE))
         if p.returncode == self._NOT_FOUND_RC:
-            return ""
+            # Ein früherer Datei-Fallback (neuer Prozess kennt degraded nicht)
+            # muss trotzdem gefunden werden.
+            return self._fallback_get()
+        if p.returncode in (self._LOCKED_RC, -1):
+            self._degrade(p.returncode)
+            return self._fallback_get()
         if p.returncode != 0:
             raise KeychainError("security find-generic-password rc=%d: %s"
                                 % (p.returncode, (p.stderr or "").strip()))
+        self.from_fallback = False
         # -w gibt nur das Passwort plus Newline aus.
         return (p.stdout or "").rstrip("\r\n")
 
     def set(self, value: str) -> None:
-        # -U überschreibt ein bestehendes Item statt mit „already exists“ zu scheitern.
-        p = self._security("add-generic-password -a %s -s %s -U -w %s"
-                           % (self._quote(self.account), SERVICE, self._quote(value)))
-        if p.returncode != 0:
-            raise KeychainError("security add-generic-password rc=%d: %s"
-                                % (p.returncode, (p.stderr or "").strip()))
+        if not self.degraded:
+            # -U überschreibt ein bestehendes Item statt mit „already exists“ zu scheitern.
+            p = self._security("add-generic-password -a %s -s %s -U -w %s"
+                               % (self._quote(self.account), SERVICE, self._quote(value)))
+            if p.returncode == 0:
+                self.fallback.delete()  # veralteten Datei-Fallback nicht liegen lassen
+                self.from_fallback = False
+                return
+            if p.returncode not in (self._LOCKED_RC, -1):
+                raise KeychainError("security add-generic-password rc=%d: %s"
+                                    % (p.returncode, (p.stderr or "").strip()))
+            self._degrade(p.returncode)
+        self.fallback.set(value)
 
     def delete(self) -> None:
         p = self._security("delete-generic-password -a %s -s %s"
@@ -85,6 +142,13 @@ class _MacBackend:
         if p.returncode not in (0, self._NOT_FOUND_RC):
             raise KeychainError("security delete-generic-password rc=%d: %s"
                                 % (p.returncode, (p.stderr or "").strip()))
+
+    @property
+    def backend_name(self) -> str:
+        # Auch ein neuer Prozess, der den Token nur aus der Datei las, zeigt die
+        # Datei an — nicht „macOS Keychain“, wo gar nichts liegt.
+        return ("Datei (0600) — %s, Fallback" % self.reason
+                if self.degraded or self.from_fallback else self.name)
 
 
 # --------------------------------------------------------------------------- Linux: Datei
@@ -97,9 +161,7 @@ class _FileBackend:
 
     def __init__(self, account: str, base_dir: Optional[str] = None):
         self.account = account
-        self.base_dir = base_dir or os.path.join(
-            os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
-            "ai-rem", "keyring")
+        self.base_dir = base_dir or os.path.join(_cfg_dir(), "keyring")
 
     @property
     def path(self) -> str:
@@ -331,7 +393,10 @@ def _select_backend(platform: Optional[str] = None, which: Optional[Callable] = 
     account = account or ACCOUNT
     # Opt-in für Rechner, die nur per SSH genutzt werden: dort ist der Login-Keychain
     # ohne GUI-Login gesperrt. Token dann als 0600-Datei, gelesen nur von ai-rem selbst.
-    if os.environ.get("AI_REM_KEYCHAIN_BACKEND") == "file":
+    # Env vor client.json (`auto` übersteuert ein persistiertes `file`); unbekannte
+    # Werte = OS-Default.
+    pref = os.environ.get("AI_REM_KEYCHAIN_BACKEND") or _client_backend_pref()
+    if pref == "file":
         b = _FileBackend(account)
         b.name = "Datei (0600)"
         return b

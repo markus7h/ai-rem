@@ -74,15 +74,20 @@ def _resolve_token_with_source() -> Tuple[str, str]:
     Der fruehere Vault-Fallback ist weg: seit 1.7 kommt der Vault-Token selbst nur
     noch per ai-rem-Token ueber /api/client-config — ihn fuer den ai-rem-Token zu
     befragen waere zirkulaer. Keychain-Backend-Fehler (gesperrter Keychain o.ae.)
-    zaehlen wie „kein Token“, damit die Legacy-Stufen noch greifen."""
+    zaehlen wie „kein Token“, damit die Legacy-Stufen noch greifen; findet auch
+    die nichts, nennt token_source den Fehler (✗ …) statt still "" — `doctor` und
+    `mcp-proxy` zeigen ihn."""
     tok = os.environ.get("AI_REM_TOKEN", "")
     if tok:
         return tok, "Env AI_REM_TOKEN"
+    src = ""
     if keychain is not None:
         try:
             tok = keychain.get()
-        except Exception:
+        except Exception as e:
             tok = ""
+            src = ("✗ Keychain-Fehler: %s → AI_REM_KEYCHAIN_BACKEND=file "
+                   "(oder keychain_backend in client.json)" % e)
         if tok:
             return tok, "Keychain (%s)" % keychain.backend_name()
     tf = load_client_cfg().get("token_file", "")
@@ -99,7 +104,7 @@ def _resolve_token_with_source() -> Tuple[str, str]:
     if hdr.lower().startswith("bearer ") and hdr[7:].strip():
         _warn_legacy()
         return hdr[7:].strip(), "Klartext-Legacy (~/.claude.json)"
-    return "", ""
+    return "", src
 
 
 def _resolve_token(timeout: float = 15.0) -> str:

@@ -101,6 +101,10 @@ counterparts and pulls only if they differ. Under the hood it runs the very same
 `setup.py --update`, which does steps 2–9 and skips everything that needs SSH, git or npm.
 The `system-check` SessionStart hook runs the same comparison and reports a lag on its own,
 so in practice you are told before you have to ask.
+At the end `ai-rem update` checks that the server still accepts the stored token
+(`✓ Selbsttest: Token (<backend>) vom Server akzeptiert`); a `✗` names the token source and
+`ai-rem pair` — the files are up to date regardless. Machines without a GUI: see
+[Authentication → Headless operation](authentication.md#headless-operation-ssh-only).
 
 `settings.json` is only ever added to — new permissions and hook groups are merged in,
 nothing is removed. The `settings-template.json` it merges from belongs to the server and

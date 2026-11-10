@@ -28,7 +28,8 @@ Sekunden).
 
 Der Installer holt seinen Token wie `gh auth login`: Er startet eine Kopplung
 (`POST /api/pair/start`), zeigt einen Code wie `K7QF-2M9X` und öffnet
-`https://<server>/pair?code=…`. Du gibst sie in der Web-UI frei — eingeloggt, von jedem
+`https://<server>/pair?code=…` (über SSH wird kein Browser geöffnet — die URL dann an einem
+anderen Gerät aufrufen). Du gibst sie in der Web-UI frei — eingeloggt, von jedem
 Gerät, auch vom Handy — und der Installer holt den Token genau einmal ab
 (`POST /api/pair/poll`). Eine Kopplung läuft nach 10 Minuten ab, Starts sind je IP
 begrenzt, die Freigabe verlangt den UI-Login, und jede Entscheidung wird protokolliert
@@ -121,10 +122,10 @@ z. B. für Tests).
 
 | Plattform | Backend | Hinweise |
 |---|---|---|
-| macOS | Keychain (`security`) | Das Kommando geht per stdin an `security -i`, der Token taucht nie in `ps` auf. So angelegte Items liest `security` später ohne GUI-Prompt; in einer SSH-Session ohne GUI-Login vorher `security unlock-keychain` |
+| macOS | Keychain (`security`) | Das Kommando geht per stdin an `security -i`, der Token taucht nie in `ps` auf. So angelegte Items liest `security` später ohne GUI-Prompt. Ist der Login-Keychain gesperrt (SSH-Session ohne GUI-Login, rc 36) oder antwortet `security` nicht (Timeout), fällt das Backend auf die Datei zurück — sichtbar in `ai-rem doctor`; `token --forget` bleibt strikt |
 | Linux | libsecret (`secret-tool`) | GNOME Keyring, KWallet via Portal. Ohne D-Bus-Session oder entsperrten Keyring fällt das Speichern auf das Datei-Backend zurück und sagt das auch |
 | Linux-Fallback | Datei `$XDG_CONFIG_HOME/ai-rem/keyring/<account>` (0600 in einem 0700-Verzeichnis) | Greift, wenn `secret-tool` fehlt oder keine Session hat. `ai-rem doctor` und `client.json` → `keychain` zeigen `Datei (0600) …`, damit die Degradierung sichtbar bleibt |
-| Opt-in-Datei (alle OS) | Dieselbe Datei wie beim Linux-Fallback | `AI_REM_KEYCHAIN_BACKEND=file` — für Rechner, die nur per SSH genutzt werden; dort bleibt der macOS-Login-Keychain ohne GUI-Login gesperrt. Der Token steht nie in der Shell-Umgebung, nur ai-rem liest die Datei. `ai-rem pair` / `svc pair` schreiben dorthin, solange die Variable gesetzt ist |
+| Opt-in-Datei (alle OS) | Dieselbe Datei wie beim Linux-Fallback | `AI_REM_KEYCHAIN_BACKEND=file` oder `"keychain_backend": "file"` in `client.json` — für Rechner, die nur per SSH genutzt werden; dort bleibt der macOS-Login-Keychain ohne GUI-Login gesperrt. Vorrang: Env > `client.json` > OS-Default; `install`/`update`/`pair` persistieren eine gesetzte Env in `client.json`, danach gilt die Wahl auch für Proxys, die ohne diese Env starten. Der Token steht nie in der Shell-Umgebung, nur ai-rem liest die Datei |
 | Windows | Credential Manager (`advapi32`) | Target `ai-rem/<account>`, UTF-16LE-Blob — wie `cmdkey`/PowerShell es erwarten |
 
 Jeder Verbraucher löst den Token in derselben Reihenfolge auf:
@@ -144,6 +145,24 @@ mcp-proxy`, einen stdio-MCP-Server, der den Keychain liest und zum HTTP-Endpoint
 und `ai-rem vault-mcp`, das den Vault-Zugang von `/api/client-config` holt und den
 mykeyvault-MCP damit im Env per `exec` startet. Ein `401` vom Server kommt als
 JSON-RPC-Fehler mit dem Hinweis `ai-rem pair` an.
+
+## Betrieb ohne GUI (nur SSH)
+
+Ein Mac, der nur per SSH genutzt wird, hat keinen entsperrten Login-Keychain — und die
+Proxys, die Claude Code oder opencode über `/bin/sh` starten, sehen keine Variablen aus
+`~/.zshenv`. Deshalb einmalig in einer Shell mit gesetzter Variable:
+
+```bash
+AI_REM_KEYCHAIN_BACKEND=file ai-rem update   # persistiert keychain_backend=file in client.json
+```
+
+Kopplung ohne Browser: `ai-rem pair` zeigt Code und URL, öffnet über SSH aber keinen
+Browser — die URL an einem anderen Gerät aufrufen. Oder den Token direkt übergeben:
+`AI_REM_TOKEN=<token> ai-rem pair` bzw. `echo <token> | ai-rem token --store`, für weitere
+Dienste `echo <token> | ai-rem svc token <name> --store`. Danach Claude Code/opencode neu
+starten: laufende Proxys behalten die alte lib und die alte Backend-Wahl. `ai-rem doctor`
+zeigt das aktive Backend (`Keychain: …`) samt Wert aus `client.json` und warnt, wenn
+macOS-Keychain und Datei verschiedene Tokens halten.
 
 ## Token-Quelle am Server — [mykeyvault](https://github.com/markus7h/mykeyvault)
 
