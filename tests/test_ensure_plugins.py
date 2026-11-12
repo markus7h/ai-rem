@@ -60,9 +60,36 @@ def test_install_failure_keeps_fallback(tmp_path, monkeypatch):
     assert not mod.plugin_enabled("ai-rem")
 
 
-def test_noop_when_already_enabled(tmp_path, monkeypatch):
+def _installed(tmp_path, plugins):
+    d = tmp_path / ".claude" / "plugins"
+    d.mkdir()
+    (d / "installed_plugins.json").write_text(json.dumps({"plugins": {
+        ref: [{"scope": scope, "projectPath": "/p"}] for ref, scope in plugins.items()}}))
+
+
+def test_updates_installed_user_plugins(tmp_path, monkeypatch):
     mod, calls = _setup(tmp_path, monkeypatch, install_ok=True)
     (tmp_path / ".claude" / "settings.json").write_text(json.dumps(
         {"enabledPlugins": {"ai-rem@x": True, "mykeyvault@x": True}}))
+    _installed(tmp_path, {"tools@tools-registry": "user", "paperless-ai@tools-registry": "local",
+                          "foo@other": "user"})
     mod.ensure_plugins("claude")
+    assert ["plugin", "marketplace", "update", "tools-registry"] in calls
+    assert [c for c in calls if c[1] in ("install", "update")] == [
+        ["plugin", "update", "tools@tools-registry"]]
+
+
+def test_fresh_install_not_updated_again(tmp_path, monkeypatch):
+    mod, calls = _setup(tmp_path, monkeypatch, install_ok=True)
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps(
+        {"enabledPlugins": {"mykeyvault@x": True}}))
+    _installed(tmp_path, {"ai-rem@tools-registry": "user", "mykeyvault@tools-registry": "user"})
+    mod.ensure_plugins("claude")
+    assert [c for c in calls if c[1] in ("install", "update")] == [
+        ["plugin", "install", "ai-rem@tools-registry"], ["plugin", "update", "mykeyvault@tools-registry"]]
+
+
+def test_noop_without_claude(tmp_path, monkeypatch):
+    mod, calls = _setup(tmp_path, monkeypatch, install_ok=True)
+    mod.ensure_plugins(None)
     assert calls == []

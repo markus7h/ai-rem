@@ -360,7 +360,9 @@ Plugins selbst (`claude plugin install …@tools-registry`) und entfernt danach 
 `ai-rem`-/`mykeyvault`-Einträge aus `mcpServers` in `~/.claude.json` (`drop_plugin_duplicates`)
 — es gibt nie zwei Server gleichen Namens. Danach Claude Code neu starten. Nur wenn die
 Plugin-Installation scheitert (alte CLI, kein Netz), bleibt die stdio-Registrierung in
-`~/.claude.json` als Fallback.
+`~/.claude.json` als Fallback. Jedes install/update zieht außerdem den tools-registry-Marketplace
+nach und aktualisiert alle installierten `…@tools-registry`-Plugins (user-Scope,
+`claude plugin update`) — Plugins und CLI kommen so gemeinsam an.
 
 ### Neue Authentifizierung: ein Secret pro Gerät im OS-Keychain
 
