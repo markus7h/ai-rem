@@ -15,6 +15,8 @@ German).
 
 ## [Unreleased]
 
+## [1.14.2] – 2026-11-12
+
 ### Changed
 
 - **Setup updates installed tools-registry plugins:** `ensure_plugins()` returned early once
@@ -1302,7 +1304,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.14.1...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.14.2...HEAD
+[1.14.2]: https://github.com/markus7h/ai-rem/compare/v1.14.1...v1.14.2
 [1.14.1]: https://github.com/markus7h/ai-rem/compare/v1.14.0...v1.14.1
 [1.14.0]: https://github.com/markus7h/ai-rem/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/markus7h/ai-rem/compare/v1.12.4...v1.13.0
