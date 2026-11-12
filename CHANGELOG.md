@@ -15,6 +15,15 @@ German).
 
 ## [Unreleased]
 
+### Changed
+
+- **Setup updates installed tools-registry plugins:** `ensure_plugins()` returned early once
+  `ai-rem` and `mykeyvault` were enabled, so neither the marketplace nor the installed plugins
+  were ever refreshed — a plugin needing a new CLI command never arrived together with the CLI.
+  Every `ai-rem install`/`ai-rem update` now runs `claude plugin marketplace update tools-registry`
+  and `claude plugin update` for every installed `…@tools-registry` plugin in user scope
+  (from `~/.claude/plugins/installed_plugins.json`); failures only warn (#209).
+
 ## [1.14.1] – 2026-11-11
 
 ### Added

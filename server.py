@@ -668,6 +668,8 @@ veralten mit jedem Release, in dem sich eine davon geändert hat.
    werden nur beim Start geladen.
 
 `ai-rem update` aktualisiert alle installierten Ziele (`ai-rem doctor` zeigt sie);
+bei Claude Code zieht es auch den tools-registry-Marketplace nach und aktualisiert die
+installierten Plugins (user-Scope).
 ein weiteres Frontend kommt mit `ai-rem install --client <claude|opencode|generic>` dazu.
 
 Claude Code: Die `settings.json` wird dabei nur ergänzt (neue Permissions und

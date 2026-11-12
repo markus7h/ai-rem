@@ -337,11 +337,12 @@ PLUGIN_MARKETPLACE_REPO = 'markus7h/tools-registry'
 
 def ensure_plugins(claude):
     """ai-rem/mykeyvault als Claude-Code-Plugin installieren statt sie als
-    mcpServers-Eintrag anzulegen. Schlaegt ein Schritt fehl (alte CLI, kein Netz),
-    bleibt der mcpServers-Weg als Fallback — plugin_enabled() bleibt dann False."""
-    missing = [n for n in PLUGIN_SERVERS if not plugin_enabled(n)]
-    if not missing or not claude:
+    mcpServers-Eintrag anzulegen und die installierten tools-registry-Plugins
+    aktualisieren. Schlaegt ein Schritt fehl (alte CLI, kein Netz), bleibt der
+    mcpServers-Weg als Fallback — plugin_enabled() bleibt dann False."""
+    if not claude:
         return
+    missing = [n for n in PLUGIN_SERVERS if not plugin_enabled(n)]
     try:
         listed = run([claude, 'plugin', 'marketplace', 'list'], timeout=60)
         if listed.returncode != 0:
@@ -364,6 +365,24 @@ def ensure_plugins(claude):
             print('✓ Plugin %s installiert' % ref)
         else:
             print('⚠ Plugin %s nicht installiert - Fallback: Eintrag in ~/.claude.json' % ref)
+    try:
+        with open(os.path.join(CLAUDE_HOME, 'plugins', 'installed_plugins.json'), encoding='utf-8') as f:
+            installed = json.load(f).get('plugins') or {}
+    except (OSError, ValueError, AttributeError):
+        installed = {}
+    for ref, entries in installed.items():
+        name, _, market = ref.partition('@')
+        # shortcut: nur user-Scope (Default von `claude plugin update`), local/project bleiben
+        # stehen; upgraden, wenn Projekt-Installationen von tools-registry-Plugins ueblich werden
+        if market != PLUGIN_MARKETPLACE or name in missing or not any(
+                isinstance(e, dict) and e.get('scope') == 'user' for e in entries or []):
+            continue
+        try:
+            p = run([claude, 'plugin', 'update', ref], timeout=180)
+            err = '' if p.returncode == 0 else ((p.stderr or '').strip().splitlines() or ['rc=%d' % p.returncode])[0]
+        except Exception as ex:
+            err = str(ex)
+        print('⚠ Plugin %s nicht aktualisiert (%s)' % (ref, err) if err else '✓ Plugin %s aktualisiert' % ref)
 
 
 def drop_plugin_duplicates(servers):
