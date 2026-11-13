@@ -124,11 +124,11 @@ Set in the Compose `.env`:
 | `AI_REM_OLLAMA_URL` | `http://mystorage.lan:11437` | LLM endpoint (OpenAI-compatible) for nightly cleanup / extraction. Defaults to the LiteLLM router rather than a GPU host directly, so a sleeping backend falls back instead of failing |
 | `AI_REM_LLM_API_KEY` | — | Bearer token for that endpoint. Empty = no `Authorization` header. Also served to paired clients via `GET /api/client-config` (preferred over `llm_api_key` in the setup-config), so workstations store no LLM key |
 | `AI_REM_PAIR_VAULT_TOKEN` | — | mykeyvault API token handed to paired clients via `/api/client-config` (with the vault URL from the setup-config). Empty = clients run mykeyvault over HTTP without the exec/file tools |
-| `CLEANUP_LLM_MODEL` | `qwen` | Model name sent to `AI_REM_OLLAMA_URL` |
+| `CLEANUP_LLM_MODEL` | `private-general` | Model name sent to `AI_REM_OLLAMA_URL` |
 | `CLEANUP_TASK_RETENTION_DAYS` | `14` | Grace period before a task on `status=erledigt` is archived, counted from `extra.done_at` |
 | `EMBED_API_KEY` | — | Bearer token for `EMBED_URL`. Empty = no `Authorization` header |
 | `EMBED_URL` | — | Embedding backend. Empty = in-process (fastembed/MiniLM, bundled in `latest`). Set to an OpenAI-compatible `/v1/embeddings` URL to use an external service — required for `-slim` images. Switching backends re-computes all vectors on the next start; if the endpoint is down, entries are stored without a vector and the backfill catches up later |
-| `EMBED_HTTP_MODEL` | `bge-m3` | Model name sent to `EMBED_URL` |
+| `EMBED_HTTP_MODEL` | `embed` | Model name sent to `EMBED_URL` |
 | `EMBED_THRESHOLD` | `0.45` / `0.50` | Cosine cut-off for semantic hits. Default depends on the backend (in-process / `EMBED_URL`) |
 | `EMBED_MAX_CHARS` | `2000` | Input is truncated to this length before embedding. fastembed truncates silently at the model limit; llama.cpp rejects oversized input with HTTP 500 instead |
 | `LADYBUG_BUFFER_POOL_SIZE_MB` | `256` | Buffer pool in MiB. `0` sizes it to ~80 % of **host** RAM, ignoring the container `mem_limit`. 256 MiB is plenty for this database, including 1024-dim vectors from an external backend |

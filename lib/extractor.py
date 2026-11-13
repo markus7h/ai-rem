@@ -100,8 +100,9 @@ def configure_llm(client) -> dict:
         print("Server < 1.7: LLM-Key nicht abrufbar — Server aktualisieren oder "
               "AI_REM_LLM_API_KEY setzen", file=sys.stderr)
     return dict(_LLM)
-# Modellgruppe am Router (zwei GPU-Deployments + Kimi-Fallback), nicht ein Host.
-LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "qwen").strip()
+# Modellgruppe am Router (local-ai auf mystudio, qwen3-14b als Ersatz,
+# Cloud-Fallback), nicht ein Host.
+LLM_MODEL = os.environ.get("AI_REM_LLM_MODEL", "private-general").strip()
 # Ein 45k-Transcript braucht auf dem 24b-Q4 real ~5 min. Der Hook laeuft detached,
 # die Wartezeit stoert also niemanden — lieber grosszuegig als abgeschnitten.
 LLM_TIMEOUT_S = 900
