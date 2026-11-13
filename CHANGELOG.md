@@ -15,6 +15,14 @@ German).
 
 ## [Unreleased]
 
+### Changed
+
+- **New default model names for the LiteLLM router:** the router groups `qwen` and `bge-m3` are
+  being retired. `CLEANUP_LLM_MODEL` (server) and `AI_REM_LLM_MODEL` (client) now default to
+  `private-general` (local-ai on mystudio, qwen3-14b as fallback), `EMBED_HTTP_MODEL` defaults to
+  `embed` (the same bge-m3, 1024 dimensions — no re-embedding needed). An explicit value in the
+  deployment `.env` still wins; the router key must allow the new names before deploying (#211).
+
 ## [1.14.2] – 2026-11-12
 
 ### Changed
