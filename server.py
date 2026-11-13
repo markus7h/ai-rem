@@ -3232,7 +3232,7 @@ EMBED_URL = os.getenv("EMBED_URL", "")
 # Router, ist der Key Pflicht; zeigt sie direkt auf einen llama-server, bleibt sie
 # leer und es geht kein Authorization-Header raus.
 EMBED_API_KEY = os.getenv("EMBED_API_KEY", "").strip()
-EMBED_HTTP_MODEL = os.getenv("EMBED_HTTP_MODEL", "bge-m3")
+EMBED_HTTP_MODEL = os.getenv("EMBED_HTTP_MODEL", "embed")
 EMBED_HTTP_TIMEOUT = float(os.getenv("EMBED_HTTP_TIMEOUT", "30"))
 # Laengenbremse vor dem Embedden. fastembed kappt zu lange Texte still bei der
 # Modellgrenze (MiniLM: 512 Token); llama.cpp antwortet stattdessen mit HTTP 500
@@ -4773,12 +4773,13 @@ async def api_tool(request: Request) -> JSONResponse:
 
 # AI_REM_OLLAMA_URL / AI_REM_LLM_API_KEY stehen bei _load_setup_cfg() (werden auch
 # von /api/client-config gebraucht).
-# Modellname, den der Router kennt. "qwen" ist die Modellgruppe (zwei Deployments
-# + Kimi-Fallback), nicht ein einzelner Host. Der alte Default
+# Modellname, den der Router kennt. "private-general" ist die Modellgruppe
+# (local-ai auf mystudio, qwen3-14b auf myai als Ersatz, Cloud-Fallback), nicht
+# ein einzelner Host. Der alte Default
 # "mistral-small3.2:24b" existiert seit 2026-08 nirgends mehr und quittierte am
 # Router mit HTTP 400 "Invalid model name".
 CLEANUP_MODEL = os.getenv("CLEANUP_LLM_MODEL",
-                          os.getenv("CLEANUP_OLLAMA_MODEL", "qwen")).strip()
+                          os.getenv("CLEANUP_OLLAMA_MODEL", "private-general")).strip()
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "14"))
 # Offene Tasks, die so lange niemand angefasst hat, gehen als "noch aktuell?" in die Review.

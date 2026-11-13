@@ -141,7 +141,7 @@ KG_MAX_MB=4096                           # darüber schreibt der Embedding-Backf
 KG_MIN_FREE_MB=1024                      # so viel Plattenplatz muss für einen Backfill frei sein
 AI_REM_LOG_RING=500                      # Zeilen Server-Log, die für /logs im RAM gehalten werden
 EMBED_URL=                               # Leer = Embeddings im Container; gesetzt = OpenAI-kompatible /v1/embeddings-URL eines externen Dienstes
-EMBED_HTTP_MODEL=bge-m3                  # Modellname, der an EMBED_URL geschickt wird
+EMBED_HTTP_MODEL=embed                   # Modellname, der an EMBED_URL geschickt wird
 EMBED_THRESHOLD=                         # Cosine-Schwelle; leer = Default je Backend (0.45 in-process, 0.50 extern)
 EMBED_MAX_CHARS=2000                     # Text vor dem Embedden kappen (llama.cpp lehnt zu lange Eingaben ab, statt zu kürzen)
 AI_REM_TAG=latest                        # latest (Modell im Image) oder latest-slim (~250 MB kleiner, braucht EMBED_URL)
