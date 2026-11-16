@@ -15,6 +15,14 @@ German).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`RemoteTrigger` is no longer blocked by the setup default:** the default
+  `permissions.deny` list dropped it, because without that tool `/schedule` cannot create or
+  change cloud routines — and the entry came back on every setup run, even after removing it
+  locally. Already installed setups keep their entry; delete it once in
+  `~/.claude/settings.json` (#197).
+
 ## [1.14.3] – 2026-11-13
 
 ### Changed
