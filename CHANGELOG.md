@@ -15,6 +15,15 @@ German).
 
 ## [Unreleased]
 
+### Added
+
+- **One place for the model choice:** extraction, nightly cleanup and embeddings now take
+  their model names from the `models` block in `setup-config.json` — priority is Env
+  (`AI_REM_LLM_MODEL` / `CLEANUP_LLM_MODEL` / `EMBED_HTTP_MODEL`) > config > default
+  (`private-general` / `private-general` / `embed`). The block goes to clients through
+  `/api/client-config` and is edited on the new Web-UI page `/models`, which writes only
+  that block back to the setup-config (#196).
+
 ### Fixed
 
 - **`RemoteTrigger` is no longer blocked by the setup default:** the default
