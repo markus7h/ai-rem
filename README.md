@@ -420,6 +420,8 @@ The same run creates the GitHub release from the matching `CHANGELOG.md` section
 refreshes the "What's new" block in the Docker Hub description — so add the entry
 before tagging.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
+
 ---
 
 ## Related Projects
