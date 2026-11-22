@@ -127,7 +127,7 @@ def _load_embed_funcs(**konstanten):
     ohne ladybug/fastmcp zu importieren, damit diese Tests ohne DB und ohne Netz laufen."""
     src = open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
     ns = {"json": json, "EMBED_URL": "http://embed.test/v1/embeddings",
-          "EMBED_HTTP_MODEL": "bge-m3", "EMBED_HTTP_TIMEOUT": 5,
+          "_models_cfg": lambda: {"embed": "bge-m3"}, "EMBED_HTTP_TIMEOUT": 5,
           "EMBED_MAX_CHARS": 2000, "EMBED_API_KEY": "", **konstanten}
     for name in ("_embed_http", "_embed_texts"):
         start = src.index(f"def {name}(")
