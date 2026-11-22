@@ -76,6 +76,17 @@ def _scenario() -> None:
     fixture["models"] = {"extract": "ds4", "cleanup": "private-general", "embed": "embed"}
     assert auth.get("/api/client-config").json()["models"]["extract"] == "ds4"
     del fixture["models"]
+    # Web-UI speichert ins Datenverzeichnis (setup-config ist im Container read-only)
+    # und schlaegt den setup-config-Block; Cleanup/Embeddings lesen es ohne Neustart.
+    want = {"extract": "a", "cleanup": "b", "embed": "c"}
+    assert auth.post("/api/models/config", json={**want, "embed": " "}).status_code == 400
+    r = auth.post("/api/models/config", json=want)
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert os.path.isfile(os.path.join(os.environ["BACKUP_DIR"], "models.config.json"))
+    fixture["models"] = {"extract": "ds4", "cleanup": "ds4", "embed": "ds4"}
+    assert auth.get("/api/models/config").json() == want
+    assert auth.get("/api/client-config").json()["models"] == want
+    del fixture["models"]
     fixture["git_accounts"] = [{"owner": "acme", "emails": ["a@acme.example"], "context": "work"}]
     assert auth.get("/api/client-config").json()["context_rules"] == fixture["git_accounts"]
     del fixture["git_accounts"]

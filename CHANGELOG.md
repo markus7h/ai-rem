@@ -21,8 +21,16 @@ German).
   their model names from the `models` block in `setup-config.json` — priority is Env
   (`AI_REM_LLM_MODEL` / `CLEANUP_LLM_MODEL` / `EMBED_HTTP_MODEL`) > config > default
   (`private-general` / `private-general` / `embed`). The block goes to clients through
-  `/api/client-config` and is edited on the new Web-UI page `/models`, which writes only
-  that block back to the setup-config (#196).
+  `/api/client-config` and is edited on the new Web-UI page `/models` (#196).
+
+### Fixed
+
+- **`/models` Web-UI actually takes effect:** saving no longer fails on the read-only
+  `setup-config.json` mount — the choice lives in `$BACKUP_DIR/models.config.json` and
+  wins over the setup-config block. Cleanup and embeddings read the model per call (no
+  restart needed), and `docker-compose.yml` no longer forces `CLEANUP_LLM_MODEL` /
+  `EMBED_HTTP_MODEL`, which silently overrode the UI. `/models` and `/api/models` are
+  admin-only.
 
 ### Fixed
 

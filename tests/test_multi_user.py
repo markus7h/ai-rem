@@ -80,6 +80,7 @@ def _scenario() -> None:
     # Admin-Bereiche
     assert anna.get("/export").status_code == 403
     assert anna.post("/api/backup/now").status_code == 403
+    assert anna.post("/api/models/config", json={"extract": "x", "cleanup": "x", "embed": "x"}).status_code == 403
     assert "Nur für den Admin" in tool(anna, "memory_user_list")
     assert anna.get("/api/client-config").json()["vault_token"] == ""
     assert admin.get("/export").status_code == 200

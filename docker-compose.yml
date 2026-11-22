@@ -79,7 +79,8 @@ services:
       # Modellname, den der Endpoint kennt. Am Router eine Modellgruppe; ein
       # llama-server hostet ohnehin genau ein Modell und ignoriert den Namen.
       # Ohne diese Zeile blieb eine CLEANUP_LLM_MODEL-Angabe in der .env wirkungslos.
-      - CLEANUP_LLM_MODEL=${CLEANUP_LLM_MODEL:-private-general}
+      # Leer = Wahl aus der Web-UI /models, sonst Default private-general.
+      - CLEANUP_LLM_MODEL=${CLEANUP_LLM_MODEL:-}
       # Extraktions-Modell fuer die Transcript-Aufbereitung. Env hat Vorrang vor dem
       # models-Block in setup-config.json (Web-UI /models); leer = Default aus _models_cfg().
       - AI_REM_LLM_MODEL=${AI_REM_LLM_MODEL:-}
@@ -121,7 +122,8 @@ services:
       # Bearer-Token fuer EMBED_URL — noetig, wenn dort ein Router mit Auth steht.
       # Leer = kein Authorization-Header (direkter llama-server ohne --api-key).
       - EMBED_API_KEY=${EMBED_API_KEY:-}
-      - EMBED_HTTP_MODEL=${EMBED_HTTP_MODEL:-embed}
+      # Leer = Wahl aus der Web-UI /models, sonst Default embed.
+      - EMBED_HTTP_MODEL=${EMBED_HTTP_MODEL:-}
       # Laengenbremse: llama.cpp lehnt zu lange Eingaben mit HTTP 500 ab, statt sie
       # wie fastembed still zu kappen — das riss sonst ganze Backfill-Chunks mit.
       - EMBED_MAX_CHARS=${EMBED_MAX_CHARS:-2000}

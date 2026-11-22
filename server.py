@@ -422,7 +422,7 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Ganzer Graph bzw. serverweite Wartung — nur der Admin (Prefix-Match je Segment).
 _ADMIN_ONLY_PATHS = ("/export", "/import", "/api/backup", "/api/restore", "/api/import",
                      "/api/cleanup", "/cleanup", "/logs", "/api/logs", "/browse", "/graph",
-                     "/api/users")
+                     "/api/users", "/models", "/api/models")
 
 # ─── Setup-Endpunkt Inhalte ──────────────────────────────────────────────────
 
@@ -1539,29 +1539,25 @@ def _load_setup_cfg() -> dict:
     return {}
 
 
-def _save_setup_cfg(models: dict) -> None:
-    """Nur den models-Block der persoenlichen setup-config.json aktualisieren.
+# Web-UI-Modellwahl liegt im beschreibbaren Datenverzeichnis: setup-config.json ist im
+# Container read-only gemountet (und haelt Secrets, die die UI nie anfassen soll).
+_MODELS_CONFIG = os.path.join(BACKUP_DIR, "models.config.json")
 
-    Andere Keys bleiben unveraendert — die Datei haelt Secrets (llm_api_key), die
-    nie ueber die Web-UI gehen. Fehlt eine persoenliche Config, wird nur der
-    models-Block angelegt (keine Beispiel-Kopie mit Platzhaltern). flock + tmp +
-    replace wie _save_cleanup_cfg.
-    """
-    cfg = _load_setup_cfg()
-    if not os.path.isfile(_SETUP_CONFIG_PATH):
-        cfg = {"models": models}
-    else:
-        cfg["models"] = models
-    fd = os.open(_SETUP_CONFIG_PATH, os.O_RDWR | os.O_CREAT, 0o644)
+
+def _load_models_file() -> dict:
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        tmp = _SETUP_CONFIG_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, _SETUP_CONFIG_PATH)
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        with open(_MODELS_CONFIG, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_models_cfg(models: dict) -> None:
+    _ensure_backup_dir()
+    tmp = _MODELS_CONFIG + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(models, f, indent=2)
+    os.replace(tmp, _MODELS_CONFIG)  # atomar: Leser sehen alt oder neu, nie halb
 
 
 # Top-Level-Keys mit diesen Endungen gelten als Secret und gehen nie ueber die
@@ -1606,12 +1602,12 @@ AI_REM_OLLAMA_URL = os.environ.get(
 AI_REM_LLM_API_KEY = os.environ.get("AI_REM_LLM_API_KEY", "").strip()
 
 
-# Zentrale Modellwahl fuer die drei KI-Einsatzpunkte: Env > setup-config
-# 'models' > Default. Wird ueber /api/client-config an die Clients verteilt und
-# von der Web-UI (/models) in die setup-config geschrieben. Steht hier vor den
-# Routen, damit CLEANUP_MODEL und /api/client-config eine Quelle teilen.
+# Zentrale Modellwahl fuer die drei KI-Einsatzpunkte. Wird ueber /api/client-config
+# an die Clients verteilt und von der Web-UI (/models) gesetzt. Steht hier vor den
+# Routen, damit Cleanup, Embeddings und /api/client-config eine Quelle teilen.
 def _models_cfg() -> dict:
-    m = _load_setup_cfg().get("models") or {}
+    # Env > Web-UI (models.config.json) > setup-config 'models' > Default
+    m = {**(_load_setup_cfg().get("models") or {}), **_load_models_file()}
     return {
         "extract": os.environ.get("AI_REM_LLM_MODEL") or m.get("extract") or "private-general",
         "cleanup": os.environ.get("CLEANUP_LLM_MODEL")
@@ -1952,7 +1948,7 @@ async def api_models_config_post(request: Request) -> JSONResponse:
     }
     if not all(m.values()):
         return JSONResponse({"error": "extract/cleanup/embed required"}, status_code=400)
-    await asyncio.to_thread(_save_setup_cfg, m)
+    await asyncio.to_thread(_save_models_cfg, m)
     return JSONResponse({"status": "ok", **m})
 
 
@@ -3300,7 +3296,6 @@ EMBED_URL = os.getenv("EMBED_URL", "")
 # Router, ist der Key Pflicht; zeigt sie direkt auf einen llama-server, bleibt sie
 # leer und es geht kein Authorization-Header raus.
 EMBED_API_KEY = os.getenv("EMBED_API_KEY", "").strip()
-EMBED_HTTP_MODEL = os.getenv("EMBED_HTTP_MODEL", "embed")
 EMBED_HTTP_TIMEOUT = float(os.getenv("EMBED_HTTP_TIMEOUT", "30"))
 # Laengenbremse vor dem Embedden. fastembed kappt zu lange Texte still bei der
 # Modellgrenze (MiniLM: 512 Token); llama.cpp antwortet stattdessen mit HTTP 500
@@ -3391,7 +3386,7 @@ def _embed_http(texts: list[str]) -> list:
         headers["Authorization"] = f"Bearer {EMBED_API_KEY}"
     req = urllib.request.Request(
         EMBED_URL,
-        data=json.dumps({"input": texts, "model": EMBED_HTTP_MODEL}).encode(),
+        data=json.dumps({"input": texts, "model": _models_cfg()["embed"]}).encode(),
         headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=EMBED_HTTP_TIMEOUT) as r:
@@ -4845,9 +4840,8 @@ async def api_tool(request: Request) -> JSONResponse:
 # (local-ai auf mystudio, qwen3-14b auf myai als Ersatz, Cloud-Fallback), nicht
 # ein einzelner Host. Der alte Default
 # "mistral-small3.2:24b" existiert seit 2026-08 nirgends mehr und quittierte am
-# Router mit HTTP 400 "Invalid model name". Config-aware via _models_cfg():
-# Env > setup-config 'models.cleanup' > Default.
-CLEANUP_MODEL = _models_cfg()["cleanup"].strip()
+# Router mit HTTP 400 "Invalid model name". Modell kommt pro Aufruf aus _models_cfg(),
+# damit eine Aenderung in der Web-UI ohne Neustart greift.
 CLEANUP_MAX_PER_RUN = int(os.getenv("CLEANUP_MAX_PER_RUN", "20"))
 CLEANUP_TASK_RETENTION_DAYS = int(os.getenv("CLEANUP_TASK_RETENTION_DAYS", "14"))
 # Offene Tasks, die so lange niemand angefasst hat, gehen als "noch aktuell?" in die Review.
@@ -5282,7 +5276,7 @@ def _ollama_up() -> bool:
 def _ollama_chat(system: str, user: str, *, as_json: bool, timeout: int = 60) -> Optional[str]:
     import urllib.request
     body = json.dumps({
-        "model": CLEANUP_MODEL,
+        "model": _models_cfg()["cleanup"].strip(),
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
         "stream": False,
