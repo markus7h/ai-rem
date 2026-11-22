@@ -15,6 +15,8 @@ German).
 
 ## [Unreleased]
 
+## [1.15.0] – 2026-11-22
+
 ### Added
 
 - **One place for the model choice:** extraction, nightly cleanup and embeddings now take
@@ -1339,7 +1341,8 @@ the new instance recomputes them.
 - Compose network moved to IPv6 (`fd00:24:9:68::/64`, routed) (#76) and dual-stack
   bind instead of `uvicorn(host=…)`, with `HOST` now defaulting to `::` (#75).
 
-[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.14.3...HEAD
+[Unreleased]: https://github.com/markus7h/ai-rem/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/markus7h/ai-rem/compare/v1.14.3...v1.15.0
 [1.14.3]: https://github.com/markus7h/ai-rem/compare/v1.14.2...v1.14.3
 [1.14.2]: https://github.com/markus7h/ai-rem/compare/v1.14.1...v1.14.2
 [1.14.1]: https://github.com/markus7h/ai-rem/compare/v1.14.0...v1.14.1
