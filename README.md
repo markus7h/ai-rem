@@ -130,6 +130,7 @@ MAX_BACKUPS=10                           # Maximum number of backups to keep
 AI_REM_BACKUP_KEY=...                     # Optional — encrypt backups (AES-256-GCM); empty = plaintext
 LADYBUG_POOL_SIZE=4                         # Connection pool size
 DISCOVER_ROUTINES_LIMIT=10               # Pinned routines injected per prompt via /discover (curated by sort_order)
+CONTEXT_PREF_LIMIT=15                    # Preferences loaded into memory_get_context; also the cut-off line drawn in the /prefs web UI
 LADYBUG_BUFFER_POOL_SIZE_MB=256           # buffer pool in MiB (0 = default: 80% of host RAM)
 LADYBUG_WAL_CHECKPOINT_MB=2               # self-checkpoint the WAL above this size (0/empty = off)
 AI_REM_WAL_CHECKPOINT_IDLE_S=300          # ...and once it has been idle this long (0 = off)

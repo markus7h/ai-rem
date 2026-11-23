@@ -89,6 +89,10 @@ services:
       # Anzahl gepinnter Routinen, die /discover je Prompt injiziert (Slots,
       # kuratiert über pinned + sort_order in den Preferences)
       - DISCOVER_ROUTINES_LIMIT=${DISCOVER_ROUTINES_LIMIT:-10}
+      # Obergrenze der Preferences in memory_get_context — dieselbe Schnittlinie, die die
+      # Web-UI /prefs malt. Ohne diese Zeile blieb ein CONTEXT_PREF_LIMIT-Wert in der .env
+      # wirkungslos: der Container lief auf dem Code-Default 15, obwohl 26 gesetzt waren.
+      - CONTEXT_PREF_LIMIT=${CONTEXT_PREF_LIMIT:-15}
       - LADYBUG_POOL_SIZE=${LADYBUG_POOL_SIZE:-4}
       # Buffer-Pool in MiB. Ohne dieses Limit zielt LadybugDB auf 80% des HOST-RAMs
       # (ignoriert mem_limit). Normalbetrieb braucht bei dieser DB nur ~32 MB → 256 üppig.
