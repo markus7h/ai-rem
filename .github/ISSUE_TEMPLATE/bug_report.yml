@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in ai-rem does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security problems? Please report them privately, see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Server version
+      placeholder: e.g. 1.15.0 (shown by `ai-rem status`)
+    validations:
+      required: true
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Frontend
+      options: [Claude Code, opencode, Web UI, CLI only, other]
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `ai-rem status` and relevant server logs
+      description: Remove tokens before pasting.
+      render: shell
