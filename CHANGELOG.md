@@ -15,6 +15,14 @@ German).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CONTEXT_PREF_LIMIT` from the `.env` reaches the container:** `docker-compose.yml`
+  forwarded only `DISCOVER_ROUTINES_LIMIT`, so the context limit silently stayed on the code
+  default 15 while the deployment set 26 — `/prefs` drew its cut-off line at 15 and
+  `memory_get_context` dropped six of 21 pinned preferences, per-prompt routines still got
+  all of them (#226).
+
 ## [1.15.0] – 2026-11-22
 
 ### Added
