@@ -9,7 +9,7 @@ numpy==2.5.5
 cryptography==50.0.2
 # JWT-Prüfung für den optionalen OAuth-Modus (kam bisher transitiv über mcp).
 pyjwt[crypto]==2.15.1
-pyyaml==6.0.3
+pyyaml==6.0.4
 # Zonendaten fuer AI_REM_TZ (Cleanup-Fenster) — das Slim-Image hat kein /usr/share/zoneinfo.
 tzdata==2026.6
 
